@@ -1,7 +1,7 @@
 import { motion, AnimatePresence } from "framer-motion";
 import {
   LayoutDashboard, Package, MapPin, MessageSquare, ClipboardList,
-  BarChart3, Truck, Users, ListTodo, Receipt, Wrench, LogOut, X, ChevronRight, Boxes
+  BarChart3, Truck, Users, ListTodo, Receipt, Wrench, LogOut, X, ChevronRight, Boxes, Calculator
 } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 
@@ -29,12 +29,14 @@ const navByRole: Record<string, NavItem[]> = {
     { id: "fleet", label: "Fleet Management", icon: Truck },
     { id: "drivers", label: "Driver Assignment", icon: Users },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
+    { id: "payout", label: "Payout Calculator", icon: Calculator },
   ],
   driver: [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "tasks", label: "My Tasks", icon: ListTodo },
     { id: "expenses", label: "Expense Report", icon: Receipt },
     { id: "maintenance", label: "Maintenance", icon: Wrench },
+    { id: "payout", label: "My Payout", icon: Calculator },
   ],
 };
 

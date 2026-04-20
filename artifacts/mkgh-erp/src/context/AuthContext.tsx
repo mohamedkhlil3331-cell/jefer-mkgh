@@ -1,19 +1,8 @@
 import React, { createContext, useContext, useState, ReactNode } from "react";
-import { users } from "../data.js";
-
-type Role = "customer" | "reviewer" | "supervisor" | "driver";
-
-interface User {
-  id: number;
-  email: string;
-  role: Role;
-  name: string;
-  avatar: string;
-  driverId?: string;
-}
+import { appUsers, type AppUser, type UserRole } from "../mockData";
 
 interface AuthContextType {
-  user: User | null;
+  user: AppUser | null;
   login: (email: string, password: string) => boolean;
   logout: () => void;
   isAuthenticated: boolean;
@@ -22,22 +11,15 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
 
   const login = (email: string, password: string): boolean => {
-    const found = users.find(
-      (u) => u.email === email && u.password === password
-    );
-    if (found) {
-      setUser(found as User);
-      return true;
-    }
+    const found = appUsers.find((u) => u.email === email && u.password === password);
+    if (found) { setUser(found); return true; }
     return false;
   };
 
-  const logout = () => {
-    setUser(null);
-  };
+  const logout = () => setUser(null);
 
   return (
     <AuthContext.Provider value={{ user, login, logout, isAuthenticated: !!user }}>

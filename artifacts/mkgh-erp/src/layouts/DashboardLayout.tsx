@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import Sidebar from "../components/Sidebar";
 import TopNav from "../components/TopNav";
+import BottomNav from "../components/BottomNav";
 import { useAuth } from "../context/AuthContext";
 
 // Customer pages
@@ -28,6 +29,7 @@ import Maintenance from "../pages/driver/Maintenance";
 
 // Shared
 import Analytics from "../pages/Analytics";
+import PayoutCalculator from "../pages/PayoutCalculator";
 
 const sectionTitles: Record<string, Record<string, string>> = {
   customer: {
@@ -47,12 +49,14 @@ const sectionTitles: Record<string, Record<string, string>> = {
     fleet: "Fleet Management",
     drivers: "Driver Assignment",
     analytics: "Analytics",
+    payout: "Payout Calculator",
   },
   driver: {
     dashboard: "Dashboard",
     tasks: "My Tasks",
     expenses: "Expense Reports",
     maintenance: "Maintenance Reports",
+    payout: "My Payout",
   },
 };
 
@@ -81,12 +85,14 @@ function renderSection(role: string, section: string) {
     if (section === "fleet") return <Fleet />;
     if (section === "drivers") return <Drivers />;
     if (section === "analytics") return <Analytics />;
+    if (section === "payout") return <PayoutCalculator />;
   }
   if (role === "driver") {
     if (section === "dashboard") return <DriverDashboard />;
     if (section === "tasks") return <Tasks />;
     if (section === "expenses") return <Expenses />;
     if (section === "maintenance") return <Maintenance />;
+    if (section === "payout") return <PayoutCalculator />;
   }
   return <div className="text-muted-foreground text-sm">Section not found.</div>;
 }
@@ -111,7 +117,7 @@ export default function DashboardLayout() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         <TopNav title={title} onMenuToggle={() => setMobileOpen(true)} />
 
-        <main className="flex-1 overflow-y-auto p-4 lg:p-6">
+        <main className="flex-1 overflow-y-auto p-4 lg:p-6 pb-24 lg:pb-6">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeSection}
@@ -125,6 +131,13 @@ export default function DashboardLayout() {
           </AnimatePresence>
         </main>
       </div>
+
+      {/* Mobile bottom navigation — replaces hamburger on small screens */}
+      <BottomNav
+        role={role}
+        activeSection={activeSection}
+        onNavigate={(id) => { setActiveSection(id); setMobileOpen(false); }}
+      />
     </div>
   );
 }
