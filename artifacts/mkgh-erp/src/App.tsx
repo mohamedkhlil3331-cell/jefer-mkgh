@@ -1,0 +1,21 @@
+import { AnimatePresence } from "framer-motion";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import Login from "./pages/Login";
+import DashboardLayout from "./layouts/DashboardLayout";
+
+function AppContent() {
+  const { isAuthenticated } = useAuth();
+  return (
+    <AnimatePresence mode="wait">
+      {isAuthenticated ? <DashboardLayout key="dashboard" /> : <Login key="login" />}
+    </AnimatePresence>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
+}
