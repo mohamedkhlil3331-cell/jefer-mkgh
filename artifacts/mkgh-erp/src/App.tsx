@@ -1,6 +1,7 @@
 import { AnimatePresence } from "framer-motion";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { AppDataProvider } from "./context/AppDataContext";
+import { LanguageProvider } from "./context/LanguageContext";
 import Login from "./pages/Login";
 import DashboardLayout from "./layouts/DashboardLayout";
 
@@ -15,10 +16,12 @@ function AppContent() {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <AppDataProvider>
-        <AppContent />
-      </AppDataProvider>
-    </AuthProvider>
+    <LanguageProvider>
+      <AuthProvider>
+        <AppDataProvider>
+          <AppContent />
+        </AppDataProvider>
+      </AuthProvider>
+    </LanguageProvider>
   );
 }

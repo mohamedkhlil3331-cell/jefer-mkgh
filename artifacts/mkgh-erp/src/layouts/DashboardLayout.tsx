@@ -4,6 +4,7 @@ import Sidebar from "../components/Sidebar";
 import TopNav from "../components/TopNav";
 import BottomNav from "../components/BottomNav";
 import { useAuth } from "../context/AuthContext";
+import { useLanguage } from "../context/LanguageContext";
 
 // Customer pages
 import CustomerDashboard from "../pages/customer/Dashboard";
@@ -31,32 +32,32 @@ import Maintenance from "../pages/driver/Maintenance";
 import Analytics from "../pages/Analytics";
 import PayoutCalculator from "../pages/PayoutCalculator";
 
-const sectionTitles: Record<string, Record<string, string>> = {
+const sectionTitleKeys: Record<string, Record<string, string>> = {
   customer: {
-    dashboard: "Dashboard",
-    "place-order": "Place New Order",
-    "track-order": "Track Orders",
-    "ai-chat": "AI Assistant",
+    dashboard: "dashboard",
+    "place-order": "placeOrderTitle",
+    "track-order": "trackTitle",
+    "ai-chat": "aiChatTitle",
   },
   reviewer: {
-    dashboard: "Dashboard",
-    "new-orders": "Orders Queue",
-    inventory: "Inventory Status",
-    analytics: "Analytics",
+    dashboard: "dashboard",
+    "new-orders": "ordersQueueTitle",
+    inventory: "inventoryTitle",
+    analytics: "analyticsTitle",
   },
   supervisor: {
-    dashboard: "Dashboard",
-    fleet: "Fleet Management",
-    drivers: "Driver Assignment",
-    analytics: "Analytics",
-    payout: "Payout Calculator",
+    dashboard: "dashboard",
+    fleet: "fleetTitle",
+    drivers: "driverAssignTitle",
+    analytics: "analyticsTitle",
+    payout: "payoutTitle",
   },
   driver: {
-    dashboard: "Dashboard",
-    tasks: "My Tasks",
-    expenses: "Expense Reports",
-    maintenance: "Maintenance Reports",
-    payout: "My Payout",
+    dashboard: "dashboard",
+    tasks: "tasksTitle",
+    expenses: "expenseTitle",
+    maintenance: "maintTitle",
+    payout: "myPayout",
   },
 };
 
@@ -99,11 +100,13 @@ function renderSection(role: string, section: string) {
 
 export default function DashboardLayout() {
   const { user } = useAuth();
+  const { t } = useLanguage();
   const role = user?.role ?? "customer";
   const [activeSection, setActiveSection] = useState(defaultSection[role] ?? "dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const title = sectionTitles[role]?.[activeSection] ?? "Dashboard";
+  const titleKey = sectionTitleKeys[role]?.[activeSection] ?? "dashboard";
+  const title = t(titleKey);
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
@@ -132,7 +135,6 @@ export default function DashboardLayout() {
         </main>
       </div>
 
-      {/* Mobile bottom navigation — replaces hamburger on small screens */}
       <BottomNav
         role={role}
         activeSection={activeSection}

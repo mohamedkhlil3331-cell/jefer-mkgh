@@ -278,3 +278,82 @@
 .glass-input::placeholder {
   color: hsl(var(--muted-foreground));
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RTL LANGUAGE SUPPORT
+   Applied when html[dir="rtl"] — Arabic, Urdu, Punjabi (Shahmukhi)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Logical margin/padding — these auto-flip in RTL */
+html[dir="rtl"] .ms-1  { margin-inline-start: 0.25rem; }
+html[dir="rtl"] .ps-2  { padding-inline-start: 0.5rem; }
+
+/* Sidebar slides in from the right in RTL */
+html[dir="rtl"] .mkgh-sidebar {
+  left: auto;
+  right: 0;
+  border-right: none;
+  border-left: 1px solid rgba(255,255,255,0.06);
+}
+
+/* Flip the flex layout so sidebar is on the right */
+html[dir="rtl"] .flex.h-screen {
+  flex-direction: row-reverse;
+}
+
+/* Sticky sidebar stays on the right in RTL */
+html[dir="rtl"] aside.mkgh-sidebar {
+  position: sticky;
+}
+
+/* Nav active chevron direction is already handled in JSX (rotate-180) */
+
+/* RTL font stacks — Arabic/Urdu script */
+html[lang="ar"],
+html[lang="ur"],
+html[lang="pa"] {
+  font-family:
+    "Noto Naskh Arabic",
+    "Segoe UI",
+    "Tahoma",
+    system-ui,
+    sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+/* Hindi/Nepali (Devanagari) */
+html[lang="hi"],
+html[lang="ne"] {
+  font-family:
+    "Noto Sans Devanagari",
+    "Mangal",
+    system-ui,
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+/* RTL text alignment for page headings and body text */
+html[dir="rtl"] h1,
+html[dir="rtl"] h2,
+html[dir="rtl"] h3,
+html[dir="rtl"] p {
+  text-align: start;
+}
+
+/* Flip progress bars in RTL (they read right-to-left naturally) */
+html[dir="rtl"] .rtl-flip {
+  transform: scaleX(-1);
+}
+
+/* Table columns keep their logical order — text aligns to start */
+html[dir="rtl"] td,
+html[dir="rtl"] th {
+  text-align: start;
+}
+
+/* Icon rotation — chevrons and arrows in RTL */
+html[dir="rtl"] .arrow-icon {
+  transform: rotate(180deg);
+}
