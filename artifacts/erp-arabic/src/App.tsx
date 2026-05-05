@@ -51,8 +51,9 @@ function RoleHome() {
   const { user } = useAuth();
   if (!user) return null;
   if (user.role === "customer") return <Catalog />;
-  if (user.role === "admin") return <MainHome />;
-  return <MainHome />;
+  if (user.role === "admin")    return <MainHome />;
+  // All other staff → Employee Portal (their dashboard)
+  return <EmployeePortal />;
 }
 
 function AppRoutes() {

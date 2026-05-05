@@ -18,25 +18,33 @@ const CUSTOMER_NAV: NavItem[] = [
   { href: "/my-orders", labelKey: "navMyOrders", icon: ShoppingCart },
   { href: "/account",   labelKey: "navAccount",  icon: Wallet },
 ];
+const PORTAL_LINK: NavItem = { href: "/employee-portal", labelKey: "navEmployeePortal", icon: Users };
+
 const REVIEWER_NAV: NavItem[] = [
-  { href: "/",         labelKey: "home",      icon: Home },
-  { href: "/reviewer", labelKey: "navReview", icon: ClipboardCheck },
+  { href: "/employee-portal", labelKey: "navEmployeePortal", icon: Users },
+  { href: "/reviewer",        labelKey: "navReview",         icon: ClipboardCheck },
+  { href: "/notifications",   labelKey: "navNotifications",  icon: Bell },
 ];
 const SUPERVISOR_NAV: NavItem[] = [
-  { href: "/",           labelKey: "home",         icon: Home },
-  { href: "/supervisor", labelKey: "navTransport",  icon: Truck },
+  { href: "/employee-portal", labelKey: "navEmployeePortal", icon: Users },
+  { href: "/supervisor",      labelKey: "navTransport",      icon: Truck },
+  { href: "/notifications",   labelKey: "navNotifications",  icon: Bell },
 ];
 const WAREHOUSE_NAV: NavItem[] = [
-  { href: "/",           labelKey: "home",          icon: Home },
-  { href: "/warehouse",  labelKey: "navInvoice",    icon: FileText },
-  { href: "/warehouses", labelKey: "navWarehouses", icon: Warehouse },
+  { href: "/employee-portal", labelKey: "navEmployeePortal", icon: Users },
+  { href: "/warehouse",       labelKey: "navInvoice",        icon: FileText },
+  { href: "/warehouses",      labelKey: "navWarehouses",     icon: Warehouse },
+  { href: "/notifications",   labelKey: "navNotifications",  icon: Bell },
 ];
 const DRIVER_NAV: NavItem[] = [
-  { href: "/driver", labelKey: "navMyOrders", icon: Truck },
+  { href: "/employee-portal", labelKey: "navEmployeePortal", icon: Users },
+  { href: "/driver",          labelKey: "navMyOrders",       icon: Truck },
+  { href: "/notifications",   labelKey: "navNotifications",  icon: Bell },
 ];
 const REP_NAV: NavItem[] = [
-  { href: "/",    labelKey: "home",      icon: Home },
-  { href: "/rep", labelKey: "navMyOrders", icon: Users },
+  { href: "/employee-portal", labelKey: "navEmployeePortal", icon: Users },
+  { href: "/rep",             labelKey: "navMyOrders",       icon: Users },
+  { href: "/notifications",   labelKey: "navNotifications",  icon: Bell },
 ];
 
 const ADMIN_GROUPS: NavGroup[] = [
