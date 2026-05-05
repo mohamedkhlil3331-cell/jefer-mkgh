@@ -3,7 +3,7 @@ import {
   LayoutDashboard, FileText, Truck, Wallet, Users, CalendarDays,
   ShoppingCart, Car, Wrench, ChevronDown, Menu, X, Package,
   ClipboardCheck, Bell, LogOut, Database, Home, Warehouse, Sheet, Tag, MapPin,
-  ChevronLeft, Globe,
+  ChevronLeft, Globe, Shield,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
@@ -78,9 +78,10 @@ const ADMIN_GROUPS: NavGroup[] = [
     ],
   },
   {
-    key: "hr", labelKey: "hrGroup", icon: Users,
+    key: "users", labelKey: "usersGroup", icon: Users,
     items: [
-      { href: "/employees",       labelKey: "navEmployees",     icon: Users },
+      { href: "/users",           labelKey: "navUsers",         icon: Users },
+      { href: "/employees",       labelKey: "navEmployees",     icon: Shield },
       { href: "/hr-requests",     labelKey: "navHRRequests",    icon: CalendarDays },
       { href: "/employee-portal", labelKey: "navEmployeePortal",icon: ChevronLeft },
     ],

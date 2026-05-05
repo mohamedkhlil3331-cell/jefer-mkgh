@@ -30,6 +30,7 @@ import TariffsPage from "@/pages/admin/TariffsPage";
 import DriversPage from "@/pages/admin/DriversPage";
 import HRRequestsPage from "@/pages/admin/HRRequestsPage";
 import AdminApprovalsPage from "@/pages/admin/AdminApprovalsPage";
+import UsersPage from "@/pages/admin/UsersPage";
 import EmployeePortal from "@/pages/employee/EmployeePortal";
 import AIChatWidget from "@/components/AIChatWidget";
 
@@ -80,6 +81,9 @@ function AppRoutes() {
       <Route path="/driver" component={DriverOrders} />
       <Route path="/rep" component={RepOrders} />
       <Route path="/admin" component={AdminDashboard} />
+
+      {/* Users management */}
+      <Route path="/users" component={UsersPage} />
 
       {/* New sections */}
       <Route path="/warehouses" component={WarehousesPage} />
