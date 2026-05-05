@@ -15,6 +15,7 @@ import warehousesRouter from "./warehouses.js";
 import tariffsRouter from "./tariffs.js";
 import driverExpensesRouter from "./driver-expenses.js";
 import driversRouter from "./drivers.js";
+import aiRouter from "./ai.js";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(erpInvoices);
 router.use(erpTrips);
 router.use(erpExpenses);
 router.use(erpOperations);
+router.use(aiRouter);
 
 export default router;

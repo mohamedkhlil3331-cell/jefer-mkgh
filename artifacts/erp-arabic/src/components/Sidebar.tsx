@@ -88,6 +88,14 @@ const ADMIN_GROUPS: NavGroup[] = [
     ],
   },
   {
+    key: "approvals",
+    label: "موافقات الحسابات",
+    icon: ClipboardCheck,
+    items: [
+      { href: "/approvals", label: "طلبات التسجيل", icon: ClipboardCheck },
+    ],
+  },
+  {
     key: "settings",
     label: "الإعدادات",
     icon: Database,

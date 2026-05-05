@@ -28,7 +28,9 @@ import EmployeesPage from "@/pages/admin/EmployeesPage";
 import TariffsPage from "@/pages/admin/TariffsPage";
 import DriversPage from "@/pages/admin/DriversPage";
 import HRRequestsPage from "@/pages/admin/HRRequestsPage";
+import AdminApprovalsPage from "@/pages/admin/AdminApprovalsPage";
 import EmployeePortal from "@/pages/employee/EmployeePortal";
+import AIChatWidget from "@/components/AIChatWidget";
 
 // Legacy ERP pages
 import ErpDashboard from "@/pages/Dashboard";
@@ -80,6 +82,7 @@ function AppRoutes() {
       <Route path="/products-admin" component={ProductsAdmin} />
       <Route path="/employees" component={EmployeesPage} />
       <Route path="/hr-requests" component={HRRequestsPage} />
+      <Route path="/approvals" component={AdminApprovalsPage} />
       <Route path="/tariffs" component={TariffsPage} />
       <Route path="/drivers-manage" component={DriversPage} />
 
@@ -147,6 +150,7 @@ function AuthGate() {
           </div>
         )}
       </main>
+      <AIChatWidget />
     </div>
   );
 }

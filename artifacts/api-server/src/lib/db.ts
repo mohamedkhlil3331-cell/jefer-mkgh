@@ -182,9 +182,23 @@ db.exec(`
   );
 `);
 
-// ─── Backward-compat: add price columns to existing DBs ──────────────────────
+// ─── Backward-compat: add columns to existing DBs ────────────────────────────
 try { db.exec("ALTER TABLE products ADD COLUMN price_delivered REAL DEFAULT 0"); } catch {}
 try { db.exec("ALTER TABLE products ADD COLUMN price_truck_buraydah REAL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN approval_status TEXT DEFAULT 'approved'"); } catch {}
+try { db.exec("ALTER TABLE users ADD COLUMN register_note TEXT"); } catch {}
+
+// ─── AI chat messages ─────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS ai_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER,
+    user_phone TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+`);
 
 // ─── Seed data ────────────────────────────────────────────────────────────────
 const userCount = (db.prepare("SELECT COUNT(*) as c FROM users").get() as {c:number}).c;
