@@ -9,6 +9,9 @@ import authRouter from "./auth.js";
 import productsRouter from "./products.js";
 import ordersWorkflow from "./orders-workflow.js";
 import customersPortal from "./customers-portal.js";
+import statsRouter from "./stats.js";
+import googleSheetsRouter from "./google-sheets.js";
+import warehousesRouter from "./warehouses.js";
 
 const router: IRouter = Router();
 
@@ -17,6 +20,9 @@ router.use(authRouter);
 router.use(productsRouter);
 router.use(ordersWorkflow);
 router.use(customersPortal);
+router.use(statsRouter);
+router.use(googleSheetsRouter);
+router.use(warehousesRouter);
 router.use(erpEmployees);
 router.use(erpInvoices);
 router.use(erpTrips);

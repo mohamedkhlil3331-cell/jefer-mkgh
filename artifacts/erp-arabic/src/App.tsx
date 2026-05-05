@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from "@/context/AuthContext";
 import Sidebar from "@/components/Sidebar";
 import Login from "@/pages/Login";
 import Notifications from "@/pages/Notifications";
+import MainHome from "@/pages/MainHome";
 
 // Customer pages
 import Catalog from "@/pages/customer/Catalog";
@@ -19,9 +20,12 @@ import WarehouseOrders from "@/pages/warehouse/WarehouseOrders";
 import DriverOrders from "@/pages/driver/DriverOrders";
 import RepOrders from "@/pages/rep/RepOrders";
 import AdminDashboard from "@/pages/admin/AdminDashboard";
+import MainDashboard from "@/pages/admin/MainDashboard";
+import WarehousesPage from "@/pages/admin/WarehousesPage";
+import GoogleSheetsPage from "@/pages/admin/GoogleSheetsPage";
 
 // Legacy ERP pages
-import Dashboard from "@/pages/Dashboard";
+import ErpDashboard from "@/pages/Dashboard";
 import Invoices from "@/pages/Invoices";
 import Trips from "@/pages/Trips";
 import FleetExpenses from "@/pages/FleetExpenses";
@@ -38,19 +42,17 @@ function RoleHome() {
   const { user } = useAuth();
   if (!user) return null;
   if (user.role === "customer") return <Catalog />;
-  if (user.role === "reviewer") return <ReviewerOrders />;
-  if (user.role === "supervisor") return <SupervisorOrders />;
-  if (user.role === "warehouse") return <WarehouseOrders />;
-  if (user.role === "driver") return <DriverOrders />;
-  if (user.role === "rep") return <RepOrders />;
-  if (user.role === "admin") return <AdminDashboard />;
-  return <Catalog />;
+  if (user.role === "admin") return <MainHome />;
+  return <MainHome />;
 }
 
 function AppRoutes() {
   return (
     <Switch>
       <Route path="/" component={RoleHome} />
+
+      {/* Dashboard */}
+      <Route path="/dashboard" component={MainDashboard} />
 
       {/* Customer */}
       <Route path="/order/:id" component={PlaceOrder} />
@@ -66,11 +68,15 @@ function AppRoutes() {
       <Route path="/rep" component={RepOrders} />
       <Route path="/admin" component={AdminDashboard} />
 
+      {/* New sections */}
+      <Route path="/warehouses" component={WarehousesPage} />
+      <Route path="/sheets" component={GoogleSheetsPage} />
+
       {/* Shared */}
       <Route path="/notifications" component={Notifications} />
 
       {/* Legacy ERP (admin only) */}
-      <Route path="/erp" component={Dashboard} />
+      <Route path="/erp" component={ErpDashboard} />
       <Route path="/erp/invoices" component={Invoices} />
       <Route path="/erp/trips" component={Trips} />
       <Route path="/erp/fleet-expenses" component={FleetExpenses} />
@@ -94,10 +100,10 @@ function AuthGate() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
-          <div className="w-12 h-12 border-3 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-muted-foreground text-sm">جاري التحميل...</p>
+          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-gray-400 text-sm">جاري التحميل...</p>
         </div>
       </div>
     );
@@ -105,7 +111,6 @@ function AuthGate() {
 
   if (!user) return <Login />;
 
-  // Full-screen for customer product/order pages (no sidebar chrome)
   const fullscreen = /^\/(order\/|my-orders\/)/.test(loc) && user.role === "customer";
 
   if (fullscreen) {

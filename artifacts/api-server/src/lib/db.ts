@@ -226,6 +226,56 @@ if (!existingOrder) {
     26.414103,43.874256,"1909","عبد الهادي","9","delivered","2026-04-25 00:14:17");
 }
 
+// ─── Warehouses ────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS warehouses (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT    NOT NULL,
+    location      TEXT,
+    manager_name  TEXT,
+    capacity      INTEGER DEFAULT 0,
+    notes         TEXT,
+    active        INTEGER DEFAULT 1,
+    created_at    TEXT    DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS warehouse_items (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    warehouse_id  INTEGER REFERENCES warehouses(id),
+    product_name  TEXT    NOT NULL,
+    product_id    INTEGER REFERENCES products(id),
+    quantity      REAL    DEFAULT 0,
+    unit          TEXT    DEFAULT 'وحدة',
+    min_stock     REAL    DEFAULT 0,
+    last_updated  TEXT    DEFAULT (datetime('now')),
+    notes         TEXT,
+    created_at    TEXT    DEFAULT (datetime('now'))
+  );
+`);
+
+// Seed warehouses
+const warehouseCount = (db.prepare("SELECT COUNT(*) as c FROM warehouses").get() as {c:number}).c;
+if (warehouseCount === 0) {
+  const iw = db.prepare("INSERT INTO warehouses (name,location,manager_name,capacity,notes) VALUES (?,?,?,?,?)");
+  const w1 = iw.run("مستودع الرياض الرئيسي", "حي الصناعية، الرياض", "محمد المستودع", 50000, "المستودع الرئيسي لتخزين الاسمنت والبلوك");
+  const w2 = iw.run("مستودع المدينة المنورة", "المدينة الصناعية، المدينة", "خالد العمري", 30000, "مستودع فرعي");
+  const w3 = iw.run("مصنع الإسمنت", "المنطقة الصناعية الثانية", "عبدالله الفهد", 100000, "موقع الإنتاج الرئيسي");
+
+  const ii = db.prepare("INSERT INTO warehouse_items (warehouse_id,product_name,quantity,unit,min_stock) VALUES (?,?,?,?,?)");
+  // W1
+  ii.run(w1.lastInsertRowid, "اسمنت عادي",          4500, "كيس 50 كجم", 500);
+  ii.run(w1.lastInsertRowid, "اسمنت سريع التصلب",   1800, "كيس 50 كجم", 200);
+  ii.run(w1.lastInsertRowid, "اسمنت أبيض",           950, "كيس 40 كجم", 100);
+  ii.run(w1.lastInsertRowid, "بلوك عادي",           18000, "حبة",        2000);
+  ii.run(w1.lastInsertRowid, "بلوك فراغي",          12000, "حبة",        1500);
+  // W2
+  ii.run(w2.lastInsertRowid, "اسمنت عادي",          2200, "كيس 50 كجم", 300);
+  ii.run(w2.lastInsertRowid, "رمل خشن",              400, "م³",           50);
+  // W3
+  ii.run(w3.lastInsertRowid, "اسمنت عادي",         80000, "كيس 50 كجم", 5000);
+  ii.run(w3.lastInsertRowid, "اسمنت سريع التصلب",  20000, "كيس 50 كجم", 2000);
+  ii.run(w3.lastInsertRowid, "اسمنت أبيض",         10000, "كيس 40 كجم", 1000);
+}
+
 export function generateOrderNumber(): string {
   const now = new Date();
   const pad = (n: number, len = 2) => String(n).padStart(len, "0");

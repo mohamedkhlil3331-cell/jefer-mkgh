@@ -2,7 +2,7 @@ import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, FileText, Truck, Wallet, Users, CalendarDays,
   ShoppingCart, Car, Wrench, ChevronLeft, Menu, X, Package,
-  ClipboardCheck, UserCheck, Bell, LogOut, BookOpen, CreditCard
+  ClipboardCheck, Bell, LogOut, Database, Home, Warehouse, Sheet
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
@@ -14,15 +14,19 @@ const CUSTOMER_NAV = [
 ];
 
 const REVIEWER_NAV = [
+  { href: "/", label: "الرئيسية", icon: Home },
   { href: "/reviewer", label: "الطلبات والتحويلات", icon: ClipboardCheck },
 ];
 
 const SUPERVISOR_NAV = [
+  { href: "/", label: "الرئيسية", icon: Home },
   { href: "/supervisor", label: "تخصيص السيارات", icon: Truck },
 ];
 
 const WAREHOUSE_NAV = [
+  { href: "/", label: "الرئيسية", icon: Home },
   { href: "/warehouse", label: "إصدار الفواتير", icon: FileText },
+  { href: "/warehouses", label: "المستودعات", icon: Warehouse },
 ];
 
 const DRIVER_NAV = [
@@ -30,14 +34,19 @@ const DRIVER_NAV = [
 ];
 
 const REP_NAV = [
+  { href: "/", label: "الرئيسية", icon: Home },
   { href: "/rep", label: "طلبات عملائي", icon: Users },
 ];
 
 const ADMIN_NAV = [
-  { href: "/admin", label: "لوحة المدير", icon: LayoutDashboard },
+  { href: "/dashboard", label: "لوحة التحكم", icon: LayoutDashboard },
+  { href: "/", label: "الرئيسية (تبويب)", icon: Home },
   { href: "/reviewer", label: "المراجعة", icon: ClipboardCheck },
   { href: "/supervisor", label: "النقليات", icon: Truck },
-  { href: "/warehouse", label: "المستودع", icon: Package },
+  { href: "/warehouse", label: "إصدار الفواتير", icon: FileText },
+  { href: "/warehouses", label: "المستودعات", icon: Warehouse },
+  { href: "/sheets", label: "جوجل شيت", icon: Sheet },
+  { href: "/admin", label: "إدارة النظام", icon: Database },
 ];
 
 const ERP_NAV = [
@@ -53,13 +62,8 @@ const ERP_NAV = [
 ];
 
 const ROLE_NAV: Record<string, typeof CUSTOMER_NAV> = {
-  customer: CUSTOMER_NAV,
-  reviewer: REVIEWER_NAV,
-  supervisor: SUPERVISOR_NAV,
-  warehouse: WAREHOUSE_NAV,
-  driver: DRIVER_NAV,
-  rep: REP_NAV,
-  admin: ADMIN_NAV,
+  customer: CUSTOMER_NAV, reviewer: REVIEWER_NAV, supervisor: SUPERVISOR_NAV,
+  warehouse: WAREHOUSE_NAV, driver: DRIVER_NAV, rep: REP_NAV, admin: ADMIN_NAV,
 };
 
 const ROLE_LABEL: Record<string, string> = {
@@ -95,21 +99,31 @@ export default function Sidebar() {
 
   const SidebarContent = () => (
     <nav className="flex flex-col h-full">
-      {/* Logo + user */}
+      {/* Brand header */}
       <div className="px-4 py-4 border-b border-border">
         <div className="flex items-center gap-3">
-          <div className={`w-9 h-9 rounded-xl ${user ? ROLE_COLOR[user.role] : "bg-primary"} flex items-center justify-center shadow`}>
-            <span className="text-white font-bold text-sm">M</span>
+          <div className={`w-9 h-9 rounded-xl ${user ? ROLE_COLOR[user.role] : "bg-blue-600"} flex items-center justify-center shadow-sm flex-shrink-0`}>
+            <span className="text-white font-black text-sm">M</span>
           </div>
           <div className="flex-1 min-w-0">
-            <div className="font-bold text-sm text-foreground truncate">{user?.name || "MKGH"}</div>
-            <div className="text-xs text-muted-foreground">{user ? ROLE_LABEL[user.role] : "النظام"}</div>
+            <div className="font-black text-sm text-foreground tracking-tight">MKGH</div>
+            <div className="text-xs text-muted-foreground truncate">نظام أتمتة بيانات الشركات</div>
           </div>
           <button onClick={() => setOpen(false)} className="md:hidden p-1 rounded hover:bg-muted">
             <X size={18} />
           </button>
         </div>
-        {user?.company_name && <div className="text-xs text-muted-foreground mt-1.5 truncate">{user.company_name}</div>}
+        {user && (
+          <div className="mt-3 pt-3 border-t border-border/60 flex items-center gap-2">
+            <div className={`w-7 h-7 rounded-lg ${ROLE_COLOR[user.role]} flex items-center justify-center flex-shrink-0`}>
+              <span className="text-white font-bold text-xs">{user.name[0]}</span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-xs font-semibold text-foreground truncate">{user.name}</div>
+              <div className="text-xs text-muted-foreground">{ROLE_LABEL[user.role]}</div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main nav */}
@@ -118,12 +132,14 @@ export default function Sidebar() {
           const active = href === "/" ? location === "/" : location.startsWith(href);
           return (
             <Link key={href} href={href} onClick={() => setOpen(false)}>
-              <div className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${
-                active ? "bg-primary text-white font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+              <div className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all ${
+                active
+                  ? "bg-blue-600 text-white font-semibold shadow-sm"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}>
-                <Icon size={18} />
-                <span className="text-sm">{label}</span>
-                {active && <ChevronLeft size={14} className="mr-auto opacity-70" />}
+                <Icon size={17} />
+                <span className="text-sm flex-1">{label}</span>
+                {active && <ChevronLeft size={13} className="opacity-60" />}
               </div>
             </Link>
           );
@@ -132,10 +148,10 @@ export default function Sidebar() {
         {/* Notifications */}
         {user && (
           <Link href="/notifications" onClick={() => setOpen(false)}>
-            <div className={`flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors ${location === "/notifications" ? "bg-primary text-white font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
-              <Bell size={18} />
-              <span className="text-sm">الإشعارات</span>
-              {unread > 0 && <span className="mr-auto bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">{unread > 9 ? "9+" : unread}</span>}
+            <div className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all ${location === "/notifications" ? "bg-blue-600 text-white font-semibold shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
+              <Bell size={17} />
+              <span className="text-sm flex-1">الإشعارات</span>
+              {unread > 0 && <span className="bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center font-bold">{unread > 9 ? "9+" : unread}</span>}
             </div>
           </Link>
         )}
@@ -143,18 +159,18 @@ export default function Sidebar() {
         {/* ERP legacy section */}
         {showErp && (
           <>
-            <div className="pt-3 pb-1 px-3">
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">نظام ERP</div>
+            <div className="pt-4 pb-1 px-3">
+              <div className="text-xs font-bold text-muted-foreground uppercase tracking-widest">نظام ERP القديم</div>
             </div>
             {ERP_NAV.map(({ href, label, icon: Icon }) => {
               const active = location.startsWith(href);
               return (
                 <Link key={href} href={href} onClick={() => setOpen(false)}>
-                  <div className={`flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+                  <div className={`flex items-center gap-3 px-3 py-2 rounded-xl cursor-pointer transition-all ${
                     active ? "bg-primary/10 text-primary font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground"
                   }`}>
-                    <Icon size={16} />
-                    <span className="text-sm">{label}</span>
+                    <Icon size={15} />
+                    <span className="text-xs">{label}</span>
                   </div>
                 </Link>
               );
@@ -169,7 +185,7 @@ export default function Sidebar() {
           {new Date().toLocaleDateString("ar-SA", { weekday: "short", year: "numeric", month: "short", day: "numeric" })}
         </div>
         {user && (
-          <button onClick={logout} className="w-full flex items-center justify-center gap-2 text-xs text-red-500 hover:text-red-700 py-1.5 rounded-lg hover:bg-red-50 transition-colors">
+          <button onClick={logout} className="w-full flex items-center justify-center gap-2 text-xs text-red-500 hover:text-red-700 py-1.5 rounded-xl hover:bg-red-50 transition-colors">
             <LogOut size={13} />تسجيل الخروج
           </button>
         )}
@@ -180,15 +196,13 @@ export default function Sidebar() {
   return (
     <>
       <button
-        className="md:hidden fixed top-3 right-3 z-50 p-2 bg-primary text-white rounded-lg shadow-lg"
+        className="md:hidden fixed top-3 right-3 z-50 p-2 bg-blue-600 text-white rounded-xl shadow-lg"
         onClick={() => setOpen(true)}
       >
         <Menu size={20} />
       </button>
 
-      {open && (
-        <div className="md:hidden fixed inset-0 z-40 bg-black/40" onClick={() => setOpen(false)} />
-      )}
+      {open && <div className="md:hidden fixed inset-0 z-40 bg-black/40 backdrop-blur-sm" onClick={() => setOpen(false)} />}
 
       <aside className={`fixed md:relative inset-y-0 right-0 z-40 w-60 bg-card border-l border-border shadow-sm flex-shrink-0
         flex flex-col transition-transform duration-200
