@@ -2,157 +2,238 @@ import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
+import crypto from "crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, "..", "..", "data");
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-const UPLOADS_DIR = path.join(__dirname, "..", "..", "uploads");
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+export const UPLOADS_PATH = path.join(__dirname, "..", "..", "uploads");
+if (!fs.existsSync(UPLOADS_PATH)) fs.mkdirSync(UPLOADS_PATH, { recursive: true });
 
 export const DB_PATH = path.join(DATA_DIR, "erp.db");
-export const UPLOADS_PATH = UPLOADS_DIR;
 
 const db = new Database(DB_PATH);
 db.pragma("journal_mode = WAL");
 db.pragma("foreign_keys = ON");
 
-// ─── Schema ───────────────────────────────────────────────────────────────────
-
+// ─── Existing ERP Tables ─────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS employees (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    name        TEXT    NOT NULL,
-    job_title   TEXT,
-    department  TEXT,
-    nationality TEXT,
-    phone       TEXT,
-    email       TEXT    UNIQUE,
-    password    TEXT,
-    role        TEXT    DEFAULT 'worker',  -- admin | supervisor | worker
-    status      TEXT    DEFAULT 'active',  -- active | suspended | terminated
-    salary      REAL    DEFAULT 0,
-    hire_date   TEXT,
-    iqama_no        TEXT,
-    iqama_start     TEXT,
-    iqama_end       TEXT,
-    work_permit_start TEXT,
-    work_permit_end   TEXT,
-    driver_license_no   TEXT,
-    driver_license_end  TEXT,
-    permissions TEXT    DEFAULT '{}',
-    created_at  TEXT    DEFAULT (datetime('now'))
+    id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, job_title TEXT, department TEXT,
+    nationality TEXT, phone TEXT, email TEXT UNIQUE, password TEXT, role TEXT DEFAULT 'worker',
+    status TEXT DEFAULT 'active', salary REAL DEFAULT 0, hire_date TEXT,
+    iqama_no TEXT, iqama_start TEXT, iqama_end TEXT,
+    work_permit_start TEXT, work_permit_end TEXT,
+    driver_license_no TEXT, driver_license_end TEXT,
+    permissions TEXT DEFAULT '{}', created_at TEXT DEFAULT (datetime('now'))
   );
-
   CREATE TABLE IF NOT EXISTS leave_requests (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    employee_id   INTEGER REFERENCES employees(id),
-    employee_name TEXT,
-    leave_type    TEXT,   -- annual | sick | emergency | unpaid
-    from_date     TEXT,
-    to_date       TEXT,
-    days          INTEGER,
-    reason        TEXT,
-    status        TEXT    DEFAULT 'pending', -- pending | approved | rejected
-    reviewed_by   TEXT,
-    created_at    TEXT    DEFAULT (datetime('now'))
+    id INTEGER PRIMARY KEY AUTOINCREMENT, employee_id INTEGER REFERENCES employees(id),
+    employee_name TEXT, leave_type TEXT, from_date TEXT, to_date TEXT, days INTEGER,
+    reason TEXT, status TEXT DEFAULT 'pending', reviewed_by TEXT, created_at TEXT DEFAULT (datetime('now'))
   );
-
   CREATE TABLE IF NOT EXISTS invoices (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    department  TEXT    NOT NULL,
-    details     TEXT,
-    amount      REAL,
-    image_url   TEXT,
-    created_at  TEXT    DEFAULT (datetime('now'))
+    id INTEGER PRIMARY KEY AUTOINCREMENT, department TEXT NOT NULL, details TEXT,
+    amount REAL, image_url TEXT, created_at TEXT DEFAULT (datetime('now'))
   );
-
   CREATE TABLE IF NOT EXISTS trips (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    date          TEXT    NOT NULL,
-    car_id        TEXT    NOT NULL,
-    driver_name   TEXT,
-    client_name   TEXT,
-    material_type TEXT,
-    destination   TEXT,
-    trips_count   INTEGER DEFAULT 1,
-    unit_price    REAL    DEFAULT 0,
-    total_amount  REAL    DEFAULT 0,
-    vat           REAL    DEFAULT 0,
-    net_amount    REAL    DEFAULT 0,
-    created_at    TEXT    DEFAULT (datetime('now'))
+    id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, car_id TEXT NOT NULL,
+    driver_name TEXT, client_name TEXT, material_type TEXT, destination TEXT,
+    trips_count INTEGER DEFAULT 1, unit_price REAL DEFAULT 0, total_amount REAL DEFAULT 0,
+    vat REAL DEFAULT 0, net_amount REAL DEFAULT 0, created_at TEXT DEFAULT (datetime('now'))
   );
-
   CREATE TABLE IF NOT EXISTS fleet_expenses (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    date             TEXT    NOT NULL,
-    car_id           TEXT,
-    expense_category TEXT,
-    description      TEXT,
-    amount           REAL    NOT NULL,
-    document_number  TEXT,
-    created_at       TEXT    DEFAULT (datetime('now'))
+    id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, car_id TEXT,
+    expense_category TEXT, description TEXT, amount REAL NOT NULL, document_number TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
   );
-
   CREATE TABLE IF NOT EXISTS petty_cash (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    date             TEXT    NOT NULL,
-    custodian_name   TEXT,
-    transaction_type TEXT,  -- in | out
-    description      TEXT,
-    amount_in        REAL    DEFAULT 0,
-    amount_out       REAL    DEFAULT 0,
-    receipt_number   TEXT,
-    created_at       TEXT    DEFAULT (datetime('now'))
+    id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, custodian_name TEXT,
+    transaction_type TEXT, description TEXT, amount_in REAL DEFAULT 0, amount_out REAL DEFAULT 0,
+    receipt_number TEXT, created_at TEXT DEFAULT (datetime('now'))
   );
-
-  CREATE TABLE IF NOT EXISTS vehicles (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    plate_number TEXT    UNIQUE NOT NULL,
-    vehicle_type TEXT,
-    status       TEXT    DEFAULT 'available', -- available | busy | maintenance | broken
-    driver_name  TEXT,
-    notes        TEXT,
-    created_at   TEXT    DEFAULT (datetime('now'))
+  CREATE TABLE IF NOT EXISTS fleet_vehicles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, plate_number TEXT UNIQUE NOT NULL, vehicle_type TEXT,
+    status TEXT DEFAULT 'available', driver_name TEXT, notes TEXT, created_at TEXT DEFAULT (datetime('now'))
   );
-
-  CREATE TABLE IF NOT EXISTS orders (
-    id           INTEGER PRIMARY KEY AUTOINCREMENT,
-    order_type   TEXT,
-    quantity     REAL,
-    unit         TEXT,
-    client_name  TEXT,
-    client_phone TEXT,
-    location     TEXT,
-    gps_lat      REAL,
-    gps_lng      REAL,
-    car_id       TEXT,
-    driver_name  TEXT,
-    status       TEXT    DEFAULT 'new', -- new | in_progress | delivered | cancelled
-    notes        TEXT,
-    created_at   TEXT    DEFAULT (datetime('now'))
-  );
-
   CREATE TABLE IF NOT EXISTS workshop (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    vehicle_id      TEXT,
-    issue_desc      TEXT,
-    technician      TEXT,
-    status          TEXT    DEFAULT 'open', -- open | in_progress | done
-    cost            REAL    DEFAULT 0,
-    start_date      TEXT,
-    end_date        TEXT,
-    created_at      TEXT    DEFAULT (datetime('now'))
+    id INTEGER PRIMARY KEY AUTOINCREMENT, vehicle_id TEXT, issue_desc TEXT, technician TEXT,
+    status TEXT DEFAULT 'open', cost REAL DEFAULT 0, start_date TEXT, end_date TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
   );
 `);
 
-// Seed sample vehicles if empty
-const vehicleCount = (db.prepare("SELECT COUNT(*) as c FROM vehicles").get() as { c: number }).c;
-if (vehicleCount === 0) {
-  const insert = db.prepare("INSERT INTO vehicles (plate_number, vehicle_type, status, driver_name) VALUES (?, ?, ?, ?)");
-  insert.run("ABC-1234", "شاحنة نقل", "available", "أحمد محمد");
-  insert.run("XYZ-5678", "قلاب", "busy", "محمد علي");
-  insert.run("DEF-9012", "بيك أب", "maintenance", "خالد سالم");
+// ─── New Platform Tables ──────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT    NOT NULL,
+    phone       TEXT    UNIQUE NOT NULL,
+    password    TEXT    NOT NULL,
+    role        TEXT    NOT NULL DEFAULT 'customer',
+    email       TEXT,
+    company_name TEXT,
+    vat_number  TEXT,
+    cr_number   TEXT,
+    active      INTEGER DEFAULT 1,
+    created_at  TEXT    DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    token       TEXT    PRIMARY KEY,
+    user_id     INTEGER REFERENCES users(id),
+    expires_at  TEXT    NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS products (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT    NOT NULL,
+    description   TEXT,
+    image_url     TEXT,
+    price_per_unit REAL   DEFAULT 0,
+    unit          TEXT    DEFAULT 'كيس',
+    category      TEXT,
+    stock         INTEGER DEFAULT 0,
+    active        INTEGER DEFAULT 1,
+    sort_order    INTEGER DEFAULT 0,
+    created_at    TEXT    DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS product_ratings (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_id    INTEGER REFERENCES products(id),
+    customer_phone TEXT,
+    customer_name  TEXT,
+    rating         INTEGER DEFAULT 5,
+    comment        TEXT,
+    created_at     TEXT   DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS workflow_orders (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_number        TEXT    UNIQUE NOT NULL,
+    customer_phone      TEXT    NOT NULL,
+    customer_name       TEXT,
+    rep_id              INTEGER REFERENCES users(id),
+    product_id          INTEGER REFERENCES products(id),
+    product_name        TEXT,
+    quantity            REAL    NOT NULL,
+    unit                TEXT,
+    unit_price          REAL    DEFAULT 0,
+    total_before_vat    REAL    DEFAULT 0,
+    vat_amount          REAL    DEFAULT 0,
+    total_with_vat      REAL    DEFAULT 0,
+    delivery_location   TEXT,
+    delivery_lat        REAL,
+    delivery_lng        REAL,
+    destination_type    TEXT    DEFAULT 'مستودع',
+    stage               TEXT    DEFAULT 'pending',
+    reviewer_id         INTEGER REFERENCES users(id),
+    reviewer_name       TEXT,
+    review_date         TEXT,
+    payment_transfer_ref TEXT,
+    payment_amount      REAL,
+    supervisor_id       INTEGER REFERENCES users(id),
+    vehicle_id          INTEGER REFERENCES fleet_vehicles(id),
+    vehicle_plate       TEXT,
+    vehicle_assign_date TEXT,
+    warehouse_id        INTEGER REFERENCES users(id),
+    invoice_number      TEXT,
+    invoice_image_url   TEXT,
+    invoice_date        TEXT,
+    driver_id           INTEGER REFERENCES users(id),
+    driver_name         TEXT,
+    driver_phone        TEXT,
+    loading_photo_url   TEXT,
+    loading_date        TEXT,
+    delivery_date       TEXT,
+    delivery_notes      TEXT,
+    cancel_reason       TEXT,
+    created_at          TEXT    DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS customer_transfers (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_phone  TEXT    NOT NULL,
+    customer_name   TEXT,
+    amount          REAL    NOT NULL,
+    transfer_date   TEXT    NOT NULL,
+    transfer_ref    TEXT,
+    bank_name       TEXT,
+    transfer_image  TEXT,
+    confirmed       INTEGER DEFAULT 0,
+    confirmed_by    TEXT,
+    confirmed_date  TEXT,
+    notes           TEXT,
+    created_at      TEXT    DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_phone  TEXT    NOT NULL,
+    title       TEXT    NOT NULL,
+    body        TEXT,
+    data        TEXT,
+    read        INTEGER DEFAULT 0,
+    created_at  TEXT    DEFAULT (datetime('now'))
+  );
+`);
+
+// ─── Seed data ────────────────────────────────────────────────────────────────
+const userCount = (db.prepare("SELECT COUNT(*) as c FROM users").get() as {c:number}).c;
+if (userCount === 0) {
+  const ins = db.prepare("INSERT INTO users (name,phone,password,role,company_name,vat_number) VALUES (?,?,?,?,?,?)");
+  ins.run("المدير العام",    "0500000000","admin123",  "admin",      "شركة MKGH", "310000000000003");
+  ins.run("أحمد المراجع",   "0500000001","123456",    "reviewer",   null, null);
+  ins.run("خالد مشرف النقليات","0500000002","123456", "supervisor", null, null);
+  ins.run("محمد المستودع",  "0500000003","123456",    "warehouse",  null, null);
+  ins.run("عبد الهادي السائق","0500000004","123456",  "driver",     null, null);
+  ins.run("سالم المندوب",   "0500000005","123456",    "rep",        null, null);
+  ins.run("عميل تجريبي",    "0555555555","123456",    "customer",   "مؤسسة البناء", "310000000000999");
+  ins.run("عميل ثاني",      "0555555556","123456",    "customer",   "شركة العمارة", null);
+}
+
+const productCount = (db.prepare("SELECT COUNT(*) as c FROM products").get() as {c:number}).c;
+if (productCount === 0) {
+  const ip = db.prepare("INSERT INTO products (name,description,image_url,price_per_unit,unit,category,stock,sort_order) VALUES (?,?,?,?,?,?,?,?)");
+  ip.run("اسمنت عادي", "اسمنت بورتلاندي عادي مناسب لجميع أعمال البناء والتشييد. مطابق للمواصفات السعودية.", "https://images.pexels.com/photos/1109541/pexels-photo-1109541.jpeg?auto=compress&cs=tinysrgb&w=400", 25, "كيس 50 كجم", "اسمنت", 5000, 1);
+  ip.run("اسمنت سريع التصلب", "اسمنت سريع الشك مثالي للأعمال العاجلة والإصلاحات السريعة والطقس البارد.", "https://images.pexels.com/photos/259588/pexels-photo-259588.jpeg?auto=compress&cs=tinysrgb&w=400", 35, "كيس 50 كجم", "اسمنت", 2000, 2);
+  ip.run("اسمنت أبيض", "اسمنت أبيض عالي الجودة للأعمال الزخرفية والتشطيبات الداخلية والخارجية.", "https://images.pexels.com/photos/1036657/pexels-photo-1036657.jpeg?auto=compress&cs=tinysrgb&w=400", 55, "كيس 40 كجم", "اسمنت", 1000, 3);
+  ip.run("بلوك عادي", "طوب خرساني صلب مقاسات قياسية 40×20×20 سم. يتميز بالمتانة والعزل الحراري.", "https://images.pexels.com/photos/1907785/pexels-photo-1907785.jpeg?auto=compress&cs=tinysrgb&w=400", 5, "حبة", "بلوك", 20000, 4);
+  ip.run("بلوك فراغي", "طوب خرساني مجوف لأعمال البناء الخفيف وعزل الصوت. مقاس 40×20×20 سم.", "https://images.pexels.com/photos/2219024/pexels-photo-2219024.jpeg?auto=compress&cs=tinysrgb&w=400", 4, "حبة", "بلوك", 15000, 5);
+  ip.run("رمل خشن", "رمل بناء خشن نظيف خالٍ من الشوائب. مناسب لجميع أعمال الخلط والخرسانة.", "https://images.pexels.com/photos/688633/pexels-photo-688633.jpeg?auto=compress&cs=tinysrgb&w=400", 150, "م³", "رمل وبحص", 500, 6);
+}
+
+// Seed vehicles if empty
+const vCount = (db.prepare("SELECT COUNT(*) as c FROM fleet_vehicles").get() as {c:number}).c;
+if (vCount === 0) {
+  const iv = db.prepare("INSERT INTO fleet_vehicles (plate_number,vehicle_type,status,driver_name) VALUES (?,?,?,?)");
+  iv.run("1909 أ ب ت", "شاحنة نقل", "available", "عبد الهادي");
+  iv.run("2345 ج د ه", "قلاب", "available", null);
+  iv.run("3678 و ز ح", "بيك أب", "maintenance", null);
+}
+
+// Import spreadsheet order if not exists
+const existingOrder = db.prepare("SELECT id FROM workflow_orders WHERE order_number = ?").get("MKGH20260425001417");
+if (!existingOrder) {
+  db.prepare(`
+    INSERT INTO workflow_orders
+      (order_number,customer_phone,customer_name,product_name,quantity,unit,delivery_location,
+       delivery_lat,delivery_lng,vehicle_plate,driver_name,driver_phone,stage,created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run("MKGH20260425001417","55","عميل قديم","اسمنت عادي مدينة",1,"كيس","المدينة",
+    26.414103,43.874256,"1909","عبد الهادي","9","delivered","2026-04-25 00:14:17");
+}
+
+export function generateOrderNumber(): string {
+  const now = new Date();
+  const pad = (n: number, len = 2) => String(n).padStart(len, "0");
+  return `MKGH${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
+export function generateToken(): string {
+  return crypto.randomBytes(32).toString("hex");
 }
 
 export default db;

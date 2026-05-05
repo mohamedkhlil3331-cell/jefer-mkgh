@@ -5,10 +5,18 @@ import erpInvoices from "./erp-invoices.js";
 import erpTrips from "./erp-trips.js";
 import erpExpenses from "./erp-expenses.js";
 import erpOperations from "./erp-operations.js";
+import authRouter from "./auth.js";
+import productsRouter from "./products.js";
+import ordersWorkflow from "./orders-workflow.js";
+import customersPortal from "./customers-portal.js";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(authRouter);
+router.use(productsRouter);
+router.use(ordersWorkflow);
+router.use(customersPortal);
 router.use(erpEmployees);
 router.use(erpInvoices);
 router.use(erpTrips);
