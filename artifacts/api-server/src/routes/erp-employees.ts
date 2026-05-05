@@ -183,11 +183,10 @@ router.post("/employees/import", (req, res) => {
   res.json({ imported, message: `تم استيراد ${imported} موظف` });
 });
 
-// ── Leave requests ──────────────────────────────────────────────────────────────
+// ── Leave requests (legacy) ─────────────────────────────────────────────────────
 router.get("/leave-requests", (_req, res) => {
   res.json(db.prepare("SELECT * FROM leave_requests ORDER BY created_at DESC").all());
 });
-
 router.post("/leave-requests", (req, res) => {
   const { employee_id, employee_name, leave_type, from_date, to_date, reason } = req.body;
   const d1 = new Date(from_date), d2 = new Date(to_date);
@@ -197,17 +196,82 @@ router.post("/leave-requests", (req, res) => {
   ).run(employee_id, employee_name, leave_type, from_date, to_date, days, reason);
   res.status(201).json({ id: result.lastInsertRowid, days, message: "تم تقديم طلب الإجازة" });
 });
-
 router.put("/leave-requests/:id/status", (req, res) => {
   const { status, reviewed_by } = req.body;
-  db.prepare("UPDATE leave_requests SET status=?,reviewed_by=? WHERE id=?")
-    .run(status, reviewed_by, req.params.id);
+  db.prepare("UPDATE leave_requests SET status=?,reviewed_by=? WHERE id=?").run(status, reviewed_by, req.params.id);
   res.json({ message: "تم تحديث الحالة" });
 });
-
 router.delete("/leave-requests/:id", (req, res) => {
   db.prepare("DELETE FROM leave_requests WHERE id=?").run(req.params.id);
   res.json({ message: "تم الحذف" });
+});
+
+// ── HR Requests (الطلبات الوظيفية) ─────────────────────────────────────────────
+
+router.get("/hr-requests", (req, res) => {
+  const { status, type, employee_id } = req.query;
+  let sql = "SELECT * FROM hr_requests WHERE 1=1";
+  const params: unknown[] = [];
+  if (status && status !== "الكل") { sql += " AND status=?"; params.push(status); }
+  if (type && type !== "الكل")     { sql += " AND request_type=?"; params.push(type); }
+  if (employee_id)                 { sql += " AND employee_id=?"; params.push(employee_id); }
+  sql += " ORDER BY created_at DESC";
+  res.json(db.prepare(sql).all(...params));
+});
+
+router.get("/hr-requests/stats", (_req, res) => {
+  const rows = db.prepare("SELECT status,request_type FROM hr_requests").all() as {status:string;request_type:string}[];
+  const pending  = rows.filter(r => r.status === "pending").length;
+  const approved = rows.filter(r => r.status === "approved").length;
+  const rejected = rows.filter(r => r.status === "rejected").length;
+  const vacation = rows.filter(r => r.request_type === "إجازة سنوية" || r.request_type === "إجازة طارئة").length;
+  const sick     = rows.filter(r => r.request_type === "إجازة مرضية").length;
+  const salary   = rows.filter(r => r.request_type === "زيادة راتب").length;
+  const resign   = rows.filter(r => r.request_type === "استقالة").length;
+  res.json({ total: rows.length, pending, approved, rejected, vacation, sick, salary, resign });
+});
+
+router.post("/hr-requests", (req, res) => {
+  const { employee_id, employee_name, employee_job, employee_dept,
+          request_type, details, from_date, to_date } = req.body;
+  if (!employee_name || !request_type)
+    return void res.status(400).json({ error: "الاسم ونوع الطلب مطلوبان" });
+  let days: number | null = null;
+  if (from_date && to_date) {
+    days = Math.max(1, Math.round((new Date(to_date).getTime() - new Date(from_date).getTime()) / 86400000) + 1);
+  }
+  const result = db.prepare(`
+    INSERT INTO hr_requests (employee_id,employee_name,employee_job,employee_dept,
+      request_type,details,from_date,to_date,days)
+    VALUES (?,?,?,?,?,?,?,?,?)
+  `).run(employee_id||null, employee_name, employee_job||null, employee_dept||null,
+         request_type, details||null, from_date||null, to_date||null, days);
+  res.status(201).json({ id: result.lastInsertRowid, days, message: "تم تقديم الطلب" });
+});
+
+router.put("/hr-requests/:id/status", (req, res) => {
+  const { status, reviewed_by, review_notes } = req.body;
+  db.prepare(`UPDATE hr_requests SET status=?,reviewed_by=?,review_notes=?,
+    updated_at=datetime('now') WHERE id=?`)
+    .run(status, reviewed_by||null, review_notes||null, req.params.id);
+  res.json({ message: "تم تحديث حالة الطلب" });
+});
+
+router.delete("/hr-requests/:id", (req, res) => {
+  db.prepare("DELETE FROM hr_requests WHERE id=?").run(req.params.id);
+  res.json({ message: "تم الحذف" });
+});
+
+// ── Employee portal login ────────────────────────────────────────────────────────
+router.post("/employee-portal/login", (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password)
+    return void res.status(400).json({ error: "الإيميل وكلمة المرور مطلوبان" });
+  const emp = db.prepare("SELECT * FROM employees WHERE email=? AND password=?")
+    .get(email.trim().toLowerCase(), password) as Record<string,unknown> | undefined;
+  if (!emp) return void res.status(401).json({ error: "الإيميل أو كلمة المرور غير صحيحة" });
+  const { password: _pw, ...safe } = emp;
+  res.json({ employee: safe });
 });
 
 export default router;

@@ -27,6 +27,8 @@ import ProductsAdmin from "@/pages/admin/ProductsAdmin";
 import EmployeesPage from "@/pages/admin/EmployeesPage";
 import TariffsPage from "@/pages/admin/TariffsPage";
 import DriversPage from "@/pages/admin/DriversPage";
+import HRRequestsPage from "@/pages/admin/HRRequestsPage";
+import EmployeePortal from "@/pages/employee/EmployeePortal";
 
 // Legacy ERP pages
 import ErpDashboard from "@/pages/Dashboard";
@@ -77,6 +79,7 @@ function AppRoutes() {
       <Route path="/sheets" component={GoogleSheetsPage} />
       <Route path="/products-admin" component={ProductsAdmin} />
       <Route path="/employees" component={EmployeesPage} />
+      <Route path="/hr-requests" component={HRRequestsPage} />
       <Route path="/tariffs" component={TariffsPage} />
       <Route path="/drivers-manage" component={DriversPage} />
 
@@ -117,7 +120,10 @@ function AuthGate() {
     );
   }
 
-  if (!user) return <Login />;
+  if (!user) {
+    if (loc === "/employee-portal") return <EmployeePortal />;
+    return <Login />;
+  }
 
   const fullscreen = /^\/(order\/|my-orders\/)/.test(loc) && user.role === "customer";
 
