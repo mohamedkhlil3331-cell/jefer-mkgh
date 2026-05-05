@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/erp/"
+title = "نظام ERP الإداري"
+version = "1.0.0"
+id = "artifacts/erp-arabic"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/erp/" ]
+localPort = 25982
+
+[services.development]
+run = "pnpm --filter @workspace/erp-arabic run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/erp-arabic", "run", "build" ]
+publicDir = "artifacts/erp-arabic/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "25982"
+BASE_PATH = "/erp/"

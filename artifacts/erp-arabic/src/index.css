@@ -1,0 +1,103 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@plugin "@tailwindcss/typography";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-success: hsl(var(--success));
+  --color-success-foreground: hsl(var(--success-foreground));
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+  --font-sans: var(--app-font-sans);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --background: 220 20% 97%;
+  --foreground: 220 25% 10%;
+  --border: 220 15% 88%;
+  --input: 220 15% 88%;
+  --ring: 221 83% 53%;
+  --card: 0 0% 100%;
+  --card-foreground: 220 25% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 220 25% 10%;
+  --primary: 221 83% 53%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 220 15% 93%;
+  --secondary-foreground: 220 25% 20%;
+  --muted: 220 15% 93%;
+  --muted-foreground: 220 10% 50%;
+  --accent: 221 83% 53%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 84% 60%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 142 71% 45%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 0 0% 100%;
+  --app-font-sans: 'Cairo', 'Noto Sans Arabic', sans-serif;
+  --radius: 0.625rem;
+}
+
+@layer base {
+  * { @apply border-border; }
+  html { direction: rtl; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--app-font-sans);
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: hsl(var(--muted)); }
+::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+
+/* Status badges */
+.status-available { @apply bg-green-100 text-green-800; }
+.status-busy { @apply bg-blue-100 text-blue-800; }
+.status-maintenance { @apply bg-yellow-100 text-yellow-800; }
+.status-broken { @apply bg-red-100 text-red-800; }
+.status-pending { @apply bg-yellow-100 text-yellow-800; }
+.status-approved { @apply bg-green-100 text-green-800; }
+.status-rejected { @apply bg-red-100 text-red-800; }
+.status-new { @apply bg-blue-100 text-blue-800; }
+.status-in_progress { @apply bg-purple-100 text-purple-800; }
+.status-delivered { @apply bg-green-100 text-green-800; }
+.status-cancelled { @apply bg-gray-100 text-gray-800; }
+.status-open { @apply bg-red-100 text-red-800; }
+.status-done { @apply bg-green-100 text-green-800; }
+.status-active { @apply bg-green-100 text-green-800; }
+.status-suspended { @apply bg-yellow-100 text-yellow-800; }
+.status-terminated { @apply bg-red-100 text-red-800; }
+
+/* Print styles */
+@media print {
+  .no-print { display: none !important; }
+  body { background: white; }
+}
