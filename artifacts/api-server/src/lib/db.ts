@@ -257,6 +257,40 @@ if (vCount === 0) {
   }
 }
 
+// ─── Backward-compat: add new employee columns to existing DBs ───────────────
+const empNewCols: [string, string][] = [
+  ["entity",       "TEXT"],
+  ["iqama_amount", "REAL DEFAULT 0"],
+  ["passport_end", "TEXT"],
+  ["vehicle_plate","TEXT"],
+  ["efficiency",   "TEXT DEFAULT 'جيد'"],
+  ["penalties",    "REAL DEFAULT 0"],
+  ["allowances",   "REAL DEFAULT 0"],
+  ["bonus",        "REAL DEFAULT 0"],
+  ["rewards",      "REAL DEFAULT 0"],
+];
+for (const [col, type] of empNewCols) {
+  try { db.exec(`ALTER TABLE employees ADD COLUMN ${col} ${type}`); } catch {}
+}
+
+// ─── Seed employees ───────────────────────────────────────────────────────────
+const empCount = (db.prepare("SELECT COUNT(*) as c FROM employees").get() as {c:number}).c;
+if (empCount === 0) {
+  db.prepare(`
+    INSERT INTO employees
+      (name,job_title,entity,department,salary,allowances,bonus,rewards,penalties,
+       status,hire_date,iqama_amount,iqama_end,driver_license_end,passport_end,
+       vehicle_plate,efficiency)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    "محمد غزاله","مطور الشركة","الشركة","التقنية",
+    25000,16000,2000,50000,0,
+    "يعمل","2024-02-08",100,
+    "2027-12-08","2027-12-08","2026-07-08",
+    "5930","ممتاز"
+  );
+}
+
 // Import spreadsheet order if not exists
 const existingOrder = db.prepare("SELECT id FROM workflow_orders WHERE order_number = ?").get("MKGH20260425001417");
 if (!existingOrder) {
