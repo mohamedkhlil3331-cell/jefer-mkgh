@@ -175,11 +175,12 @@ export default function Login() {
   /* ══════════════ EMPLOYEE PORTAL LOGIN ══════════════════════════════════════ */
   if (portal === "employee") {
     const EMP_DEMOS = [
-      { label: t("roleReviewer"),   phone: "0500000001", pass: "0500000001", color: "bg-indigo-600",  icon: "🔍" },
-      { label: t("roleSupervisor"), phone: "0500000002", pass: "0500000002", color: "bg-orange-500",  icon: "🚛" },
-      { label: t("roleWarehouse"),  phone: "0500000003", pass: "0500000003", color: "bg-green-600",   icon: "🏭" },
-      { label: t("roleDriver"),     phone: "0500000004", pass: "0500000004", color: "bg-yellow-500",  icon: "🚗" },
-      { label: t("roleRep"),        phone: "0500000005", pass: "0500000005", color: "bg-pink-500",    icon: "👔" },
+      { label: "مشرف نقليات",      phone: "0555100001", pass: "0555100001", color: "bg-orange-500",  icon: "🚛" },
+      { label: "مشرف مستودع",      phone: "0555100002", pass: "0555100002", color: "bg-green-600",   icon: "🏭" },
+      { label: "سائق قلاب",        phone: "0555100006", pass: "0555100006", color: "bg-yellow-500",  icon: "🚗" },
+      { label: "محاسب",            phone: "0555100005", pass: "0555100005", color: "bg-blue-600",    icon: "📊" },
+      { label: "مشرف عمليات",      phone: "0555100003", pass: "0555100003", color: "bg-indigo-600",  icon: "⚙️" },
+      { label: "ميكانيكي مشرف",    phone: "0555100004", pass: "0555100004", color: "bg-red-600",     icon: "🔧" },
     ];
     return (
       <div className="min-h-screen bg-gradient-to-br from-[#0a2e1a] via-[#0d4a26] to-[#16a34a] flex items-center justify-center p-4" dir={dir}>

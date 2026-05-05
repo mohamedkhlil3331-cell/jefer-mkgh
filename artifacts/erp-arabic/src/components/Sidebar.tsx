@@ -112,14 +112,20 @@ const ERP_NAV = [
   { href: "/erp/leaves",         labelKey: "",              icon: CalendarDays, label: "طلبات الإجازة" },
 ];
 
+const EMPLOYEE_NAV: NavItem[] = [
+  { href: "/employee-portal", labelKey: "navEmployeePortal", icon: Users },
+  { href: "/notifications",   labelKey: "navNotifications",  icon: Bell },
+];
+
 const ROLE_NAV: Record<string, NavItem[]> = {
   customer: CUSTOMER_NAV, reviewer: REVIEWER_NAV, supervisor: SUPERVISOR_NAV,
-  warehouse: WAREHOUSE_NAV, driver: DRIVER_NAV, rep: REP_NAV,
+  warehouse: WAREHOUSE_NAV, driver: DRIVER_NAV, rep: REP_NAV, employee: EMPLOYEE_NAV,
 };
 
 const ROLE_COLOR: Record<string, string> = {
   customer: "bg-blue-600", reviewer: "bg-indigo-600", supervisor: "bg-orange-600",
-  warehouse: "bg-green-600", driver: "bg-yellow-600", rep: "bg-pink-600", admin: "bg-purple-600",
+  warehouse: "bg-green-600", driver: "bg-yellow-600", rep: "bg-pink-600",
+  admin: "bg-purple-600", employee: "bg-teal-600",
 };
 
 /* ─── NavLink ─────────────────────────────────────────────────────────────── */

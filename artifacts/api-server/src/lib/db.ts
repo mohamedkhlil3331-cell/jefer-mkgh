@@ -193,6 +193,28 @@ try {
   db.exec("UPDATE users SET password = phone WHERE role NOT IN ('customer') AND role != 'admin'");
 } catch {}
 
+// ─── Sync employees table → users (role='employee') ───────────────────────────
+// Employees with a phone number
+try {
+  db.exec(`
+    INSERT OR IGNORE INTO users (name, phone, password, role, approval_status)
+    SELECT name, phone, phone, 'employee', 'approved'
+    FROM employees
+    WHERE phone IS NOT NULL AND TRIM(phone) != ''
+      AND phone NOT IN (SELECT phone FROM users WHERE phone IS NOT NULL)
+  `);
+} catch {}
+// Employees with no phone → use 'EMP' || id as identifier
+try {
+  db.exec(`
+    INSERT OR IGNORE INTO users (name, phone, password, role, approval_status)
+    SELECT name, 'EMP' || id, 'EMP' || id, 'employee', 'approved'
+    FROM employees
+    WHERE (phone IS NULL OR TRIM(phone) = '')
+      AND ('EMP' || id) NOT IN (SELECT phone FROM users WHERE phone IS NOT NULL)
+  `);
+} catch {}
+
 // ─── AI chat messages ─────────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS ai_messages (

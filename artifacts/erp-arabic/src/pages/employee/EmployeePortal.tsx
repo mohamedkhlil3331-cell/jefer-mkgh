@@ -38,11 +38,12 @@ const STATUS_CLS: Record<string, string> = {
 };
 
 const ROLE_INFO: Record<string, { label: string; icon: React.ElementType; color: string; href: string; pageLabel: string }> = {
-  reviewer:   { label: "مراجع الطلبات",     icon: ClipboardCheck, color: "bg-indigo-600",  href: "/reviewer",   pageLabel: "مراجعة الطلبات"     },
-  supervisor: { label: "مشرف النقليات",     icon: Truck,          color: "bg-orange-500",  href: "/supervisor", pageLabel: "صفحة النقليات"      },
-  warehouse:  { label: "مسؤول المستودع",    icon: Warehouse,      color: "bg-green-600",   href: "/warehouse",  pageLabel: "صفحة المستودع"      },
-  driver:     { label: "سائق",              icon: Car,            color: "bg-yellow-500",  href: "/driver",     pageLabel: "رحلاتي"             },
-  rep:        { label: "مندوب مبيعات",      icon: Users2,         color: "bg-pink-500",    href: "/rep",        pageLabel: "طلبات المندوب"      },
+  reviewer:   { label: "مراجع الطلبات",     icon: ClipboardCheck, color: "bg-indigo-600",  href: "/reviewer",        pageLabel: "مراجعة الطلبات"     },
+  supervisor: { label: "مشرف النقليات",     icon: Truck,          color: "bg-orange-500",  href: "/supervisor",      pageLabel: "صفحة النقليات"      },
+  warehouse:  { label: "مسؤول المستودع",    icon: Warehouse,      color: "bg-green-600",   href: "/warehouse",       pageLabel: "صفحة المستودع"      },
+  driver:     { label: "سائق",              icon: Car,            color: "bg-yellow-500",  href: "/driver",          pageLabel: "رحلاتي"             },
+  rep:        { label: "مندوب مبيعات",      icon: Users2,         color: "bg-pink-500",    href: "/rep",             pageLabel: "طلبات المندوب"      },
+  employee:   { label: "موظف",              icon: User,           color: "bg-teal-600",    href: "/employee-portal", pageLabel: "بوابة الموظف"       },
 };
 
 const EMPTY_REQ = { request_type: "إجازة سنوية", details: "", from_date: "", to_date: "" };
