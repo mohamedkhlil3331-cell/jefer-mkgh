@@ -2,7 +2,7 @@ import { Link, useLocation } from "wouter";
 import {
   LayoutDashboard, FileText, Truck, Wallet, Users, CalendarDays,
   ShoppingCart, Car, Wrench, ChevronLeft, Menu, X, Package,
-  ClipboardCheck, Bell, LogOut, Database, Home, Warehouse, Sheet, Tag
+  ClipboardCheck, Bell, LogOut, Database, Home, Warehouse, Sheet, Tag, MapPin
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
@@ -47,6 +47,7 @@ const ADMIN_NAV = [
   { href: "/warehouse", label: "إصدار الفواتير", icon: FileText },
   { href: "/warehouses", label: "المستودعات", icon: Warehouse },
   { href: "/employees", label: "الموظفون", icon: Users },
+  { href: "/tariffs", label: "التعريفة", icon: MapPin },
   { href: "/sheets", label: "جوجل شيت", icon: Sheet },
   { href: "/admin", label: "إدارة النظام", icon: Database },
 ];

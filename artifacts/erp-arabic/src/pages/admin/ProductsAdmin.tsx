@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from "react";
 import { Plus, Pencil, Trash2, Download, Upload, Save, X, Package, Tag, Check } from "lucide-react";
 
 interface Product {
-  id: number; name: string; description?: string; category?: string;
+  id: number; name: string; description?: string; category?: string; image_url?: string;
   price_per_unit: number; price_delivered: number; price_truck_buraydah: number;
   unit: string; stock: number; active: number; sort_order: number;
 }
@@ -250,7 +250,18 @@ export default function ProductsAdmin() {
                           const isSaved = saved.has(p.id);
                           return (
                             <tr key={p.id} className={`border-b border-gray-50 transition-colors ${isDirty ? "bg-yellow-50/40" : "hover:bg-gray-50/60"} ${!p.active ? "opacity-50" : ""}`}>
-                              <td className="px-5 py-3 font-semibold text-gray-800">{p.name}</td>
+                              <td className="px-5 py-3">
+                                <div className="flex items-center gap-3">
+                                  {p.image_url ? (
+                                    <img src={p.image_url} alt={p.name} className="w-9 h-9 rounded-lg object-cover border border-gray-200 flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                                  ) : (
+                                    <div className="w-9 h-9 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center flex-shrink-0">
+                                      <Package size={16} className="text-gray-300" />
+                                    </div>
+                                  )}
+                                  <span className="font-semibold text-gray-800">{p.name}</span>
+                                </div>
+                              </td>
                               <td className="px-3 py-3">
                                 <span className={`text-xs px-2 py-0.5 rounded-full border ${colorClass}`}>{p.category}</span>
                               </td>
@@ -324,7 +335,18 @@ export default function ProductsAdmin() {
                   const isSaved = saved.has(p.id);
                   return (
                     <tr key={p.id} className={`border-b border-gray-50 ${isDirty ? "bg-yellow-50/40" : "hover:bg-gray-50/60"} ${!p.active ? "opacity-50" : ""}`}>
-                      <td className="px-5 py-3 font-semibold text-gray-800">{p.name}</td>
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-3">
+                          {p.image_url ? (
+                            <img src={p.image_url} alt={p.name} className="w-9 h-9 rounded-lg object-cover border border-gray-200 flex-shrink-0" onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+                          ) : (
+                            <div className="w-9 h-9 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center flex-shrink-0">
+                              <Package size={16} className="text-gray-300" />
+                            </div>
+                          )}
+                          <span className="font-semibold text-gray-800">{p.name}</span>
+                        </div>
+                      </td>
                       <td className="px-3 py-3 text-gray-400 text-xs">—</td>
                       <td className="px-3 py-3 text-center"><PriceCell value={getVal(p, "price_per_unit")} onChange={v => setEdit(p.id, "price_per_unit", v)} saved={isSaved} /></td>
                       <td className="px-3 py-3 text-center"><PriceCell value={getVal(p, "price_delivered")} onChange={v => setEdit(p.id, "price_delivered", v)} saved={isSaved} /></td>
@@ -374,6 +396,7 @@ function ProductModal({ product, onClose, onSave }: { product?: Product; onClose
   const [form, setForm] = useState({
     name: product?.name || "", description: product?.description || "",
     category: product?.category || "", unit: product?.unit || "كيس",
+    image_url: product?.image_url || "",
     price_per_unit: product?.price_per_unit || 0,
     price_delivered: product?.price_delivered || 0,
     price_truck_buraydah: product?.price_truck_buraydah || 0,
@@ -395,7 +418,7 @@ function ProductModal({ product, onClose, onSave }: { product?: Product; onClose
 
   return (
     <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-5">
           <h3 className="font-bold text-gray-800 text-lg">{product ? "تعديل منتج" : "إضافة منتج جديد"}</h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-xl"><X size={18} /></button>
@@ -419,6 +442,31 @@ function ProductModal({ product, onClose, onSave }: { product?: Product; onClose
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
               {["كيس","حبة","م³","طن","لتر"].map(u => <option key={u} value={u}>{u}</option>)}
             </select>
+          </div>
+
+          {/* Product image */}
+          <div className="col-span-2">
+            <label className="text-sm font-medium text-gray-600 block mb-1">صورة المنتج (رابط URL)</label>
+            <div className="flex gap-3 items-start">
+              <div className="flex-1">
+                <input
+                  type="url" value={form.image_url}
+                  onChange={e => setForm(f => ({ ...f, image_url: e.target.value }))}
+                  placeholder="https://example.com/image.jpg"
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+                <p className="text-xs text-gray-400 mt-1">الصق رابط صورة المنتج هنا</p>
+              </div>
+              {form.image_url && (
+                <div className="flex-shrink-0">
+                  <img
+                    src={form.image_url} alt="معاينة"
+                    className="w-16 h-16 rounded-xl object-cover border border-gray-200"
+                    onError={e => { (e.target as HTMLImageElement).src = ""; (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Pricing — 3 columns */}

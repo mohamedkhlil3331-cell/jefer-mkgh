@@ -12,6 +12,8 @@ import customersPortal from "./customers-portal.js";
 import statsRouter from "./stats.js";
 import googleSheetsRouter from "./google-sheets.js";
 import warehousesRouter from "./warehouses.js";
+import tariffsRouter from "./tariffs.js";
+import driverExpensesRouter from "./driver-expenses.js";
 
 const router: IRouter = Router();
 
@@ -23,6 +25,8 @@ router.use(customersPortal);
 router.use(statsRouter);
 router.use(googleSheetsRouter);
 router.use(warehousesRouter);
+router.use(tariffsRouter);
+router.use(driverExpensesRouter);
 router.use(erpEmployees);
 router.use(erpInvoices);
 router.use(erpTrips);

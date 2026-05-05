@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "wouter";
 import {
   Users, Plus, Edit2, Trash2, Download, Upload, Search,
-  AlertTriangle, CheckCircle, Clock, DollarSign, Car, X, Save,
+  AlertTriangle, CheckCircle, Clock, DollarSign, Car, X, Save, Sheet, RefreshCw,
 } from "lucide-react";
 
 interface Employee {
@@ -92,6 +92,13 @@ export default function EmployeesPage() {
   const [modal, setModal] = useState<{ open: boolean; emp: Partial<Employee> }>({ open: false, emp: {} });
   const [saving, setSaving] = useState(false);
   const [delId, setDelId] = useState<number | null>(null);
+  const [sheetModal, setSheetModal] = useState(false);
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [sheetRows, setSheetRows] = useState<Record<string, string>[] | null>(null);
+  const [sheetHeaders, setSheetHeaders] = useState<string[]>([]);
+  const [sheetFetching, setSheetFetching] = useState(false);
+  const [sheetImporting, setSheetImporting] = useState(false);
+  const [sheetMsg, setSheetMsg] = useState("");
 
   const load = () => {
     setLoading(true);
@@ -143,6 +150,73 @@ export default function EmployeesPage() {
     load();
   };
 
+  // ── Google Sheet import helpers ──────────────────────────────────────────────
+  const extractGid = (urlOrGid: string): string => {
+    const m = urlOrGid.match(/[?&#]gid=(\d+)/);
+    if (m) return m[1];
+    if (/^\d+$/.test(urlOrGid.trim())) return urlOrGid.trim();
+    return "0";
+  };
+
+  const fetchSheet = async () => {
+    const gid = extractGid(sheetUrl);
+    setSheetFetching(true); setSheetMsg(""); setSheetRows(null);
+    try {
+      const r = await fetch(`/api/sheets/${gid}`);
+      const d = await r.json();
+      if (d.error) { setSheetMsg(`خطأ: ${d.error}`); return; }
+      setSheetRows(d.rows || []);
+      setSheetHeaders(d.headers || []);
+      setSheetMsg(`تم جلب ${d.count} سطر — اختر الأعمدة المناسبة ثم استورد`);
+    } catch { setSheetMsg("فشل الاتصال"); }
+    finally { setSheetFetching(false); }
+  };
+
+  const importFromSheet = async () => {
+    if (!sheetRows || sheetRows.length === 0) return;
+    setSheetImporting(true);
+    let imported = 0;
+    const FIELD_MAP: Record<string, keyof Employee> = {
+      "الاسم": "name", "name": "name",
+      "الوظيفة": "job_title", "job_title": "job_title",
+      "الجهة": "entity", "entity": "entity",
+      "الراتب": "salary", "salary": "salary",
+      "العلاوات": "allowances", "allowances": "allowances",
+      "البونص": "bonus", "bonus": "bonus",
+      "المكافآت": "rewards", "rewards": "rewards",
+      "الجزاءات": "penalties", "penalties": "penalties",
+      "الحالة": "status", "status": "status",
+      "الجنسية": "nationality", "nationality": "nationality",
+      "الجوال": "phone", "phone": "phone",
+      "تاريخ المباشرة": "hire_date", "hire_date": "hire_date",
+      "مبلغ الإقامة": "iqama_amount", "iqama_amount": "iqama_amount",
+      "انتهاء الإقامة": "iqama_end", "iqama_end": "iqama_end",
+      "انتهاء الرخصة": "driver_license_end", "driver_license_end": "driver_license_end",
+      "انتهاء الجواز": "passport_end", "passport_end": "passport_end",
+      "السيارة": "vehicle_plate", "vehicle_plate": "vehicle_plate",
+      "الكفاءة": "efficiency", "efficiency": "efficiency",
+      "القسم": "department", "department": "department",
+    };
+    for (const row of sheetRows) {
+      const emp: Partial<Employee> = { status: "يعمل" };
+      for (const [col, val] of Object.entries(row)) {
+        const field = FIELD_MAP[col.trim()];
+        if (field) (emp as Record<string, unknown>)[field] = val;
+      }
+      if (!emp.name) continue;
+      await fetch("/api/employees", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(emp),
+      });
+      imported++;
+    }
+    setSheetMsg(`✅ تم استيراد ${imported} موظف`);
+    setSheetImporting(false);
+    setTimeout(() => { setSheetModal(false); setSheetRows(null); setSheetUrl(""); load(); }, 1500);
+  };
+  // ─────────────────────────────────────────────────────────────────────────────
+
   const exportCSV = () => {
     const headers = ["ID","الاسم","الوظيفة","الجهة","الراتب","العلاوات","البونص","المكافآت","الجزاءات","الحالة","تاريخ المباشرة","مبلغ الإقامة","انتهاء الإقامة","انتهاء الرخصة","انتهاء الجواز","السيارة","الكفاءة"];
     const rows = employees.map(e => [
@@ -190,9 +264,13 @@ export default function EmployeesPage() {
           <h1 className="text-2xl font-bold text-gray-900">إدارة الموظفين</h1>
           <p className="text-sm text-gray-500 mt-0.5">{employees.length} موظف مسجّل</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap justify-end">
+          <button onClick={() => { setSheetModal(true); setSheetMsg(""); setSheetRows(null); setSheetUrl(""); }}
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium hover:bg-gray-50 shadow-sm">
+            <Sheet size={15} />استيراد من شيت
+          </button>
           <button onClick={exportCSV} className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-200 rounded-xl text-sm font-medium hover:bg-gray-50 shadow-sm">
-            <Download size={15} />تصدير
+            <Download size={15} />تصدير CSV
           </button>
           <button onClick={openAdd} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 shadow-sm">
             <Plus size={15} />إضافة موظف
@@ -412,6 +490,113 @@ export default function EmployeesPage() {
             <div className="flex gap-3 justify-end">
               <button onClick={() => setDelId(null)} className="px-4 py-2 border rounded-xl text-sm">إلغاء</button>
               <button onClick={() => del(delId)} className="px-4 py-2 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700">حذف</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Google Sheet import modal */}
+      {sheetModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => setSheetModal(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b">
+              <div className="flex items-center gap-2">
+                <Sheet size={20} className="text-green-600" />
+                <h2 className="font-bold text-gray-900 text-lg">استيراد الموظفين من جوجل شيت</h2>
+              </div>
+              <button onClick={() => setSheetModal(false)} className="p-2 hover:bg-gray-100 rounded-xl"><X size={18} /></button>
+            </div>
+
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              {/* Instructions */}
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-700">
+                <p className="font-semibold mb-1">كيفية الاستخدام:</p>
+                <ol className="list-decimal list-inside space-y-0.5 text-xs">
+                  <li>الصق رابط جوجل شيت أو رقم الـ GID فقط</li>
+                  <li>اضغط "جلب الشيت" لمعاينة البيانات</li>
+                  <li>تأكد من وجود عمود "الاسم" أو "name"</li>
+                  <li>اضغط "استيراد" — النظام يربط الأعمدة تلقائياً</li>
+                </ol>
+              </div>
+
+              {/* URL input */}
+              <div>
+                <label className="text-sm font-medium text-gray-700 block mb-1.5">رابط الشيت أو رقم GID</label>
+                <div className="flex gap-2">
+                  <input
+                    value={sheetUrl}
+                    onChange={e => setSheetUrl(e.target.value)}
+                    placeholder="https://docs.google.com/spreadsheets/d/... أو رقم GID مثل 1234567890"
+                    className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    onClick={fetchSheet}
+                    disabled={sheetFetching || !sheetUrl.trim()}
+                    className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-xl text-sm font-medium hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <RefreshCw size={14} className={sheetFetching ? "animate-spin" : ""} />
+                    {sheetFetching ? "جاري الجلب..." : "جلب الشيت"}
+                  </button>
+                </div>
+              </div>
+
+              {/* Status message */}
+              {sheetMsg && (
+                <div className={`text-sm px-4 py-2.5 rounded-xl border ${sheetMsg.startsWith("✅") ? "bg-green-50 text-green-700 border-green-200" : sheetMsg.startsWith("خطأ") ? "bg-red-50 text-red-700 border-red-200" : "bg-gray-50 text-gray-700 border-gray-200"}`}>
+                  {sheetMsg}
+                </div>
+              )}
+
+              {/* Preview */}
+              {sheetRows && sheetRows.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-semibold text-gray-700">معاينة ({sheetRows.length} سطر)</div>
+                    <div className="text-xs text-gray-400">{sheetHeaders.length} عمود</div>
+                  </div>
+                  <div className="overflow-x-auto border border-gray-200 rounded-xl">
+                    <table className="w-full text-xs">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          {sheetHeaders.slice(0, 8).map(h => (
+                            <th key={h} className="px-3 py-2 text-right font-semibold text-gray-600 whitespace-nowrap border-b border-gray-200">{h}</th>
+                          ))}
+                          {sheetHeaders.length > 8 && <th className="px-3 py-2 text-gray-400 border-b border-gray-200">+{sheetHeaders.length - 8}</th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sheetRows.slice(0, 5).map((row, i) => (
+                          <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                            {sheetHeaders.slice(0, 8).map(h => (
+                              <td key={h} className="px-3 py-1.5 text-gray-700 whitespace-nowrap max-w-32 truncate">{row[h] || "—"}</td>
+                            ))}
+                            {sheetHeaders.length > 8 && <td className="px-3 py-1.5 text-gray-400">...</td>}
+                          </tr>
+                        ))}
+                        {sheetRows.length > 5 && (
+                          <tr><td colSpan={9} className="px-3 py-1.5 text-center text-gray-400 text-xs">... و {sheetRows.length - 5} سطر آخر</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    الأعمدة المعروفة تلقائياً: الاسم، الوظيفة، الجهة، الراتب، العلاوات، الحالة، انتهاء الإقامة، انتهاء الرخصة، انتهاء الجواز، السيارة...
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 border-t border-gray-100 flex justify-end gap-3">
+              <button onClick={() => setSheetModal(false)} className="px-5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600 hover:bg-gray-50">إلغاء</button>
+              <button
+                onClick={importFromSheet}
+                disabled={sheetImporting || !sheetRows || sheetRows.length === 0}
+                className="flex items-center gap-2 px-6 py-2.5 bg-green-600 text-white rounded-xl text-sm font-semibold hover:bg-green-700 disabled:opacity-50"
+              >
+                <Upload size={15} />{sheetImporting ? "جاري الاستيراد..." : `استيراد ${sheetRows?.length || 0} موظف`}
+              </button>
             </div>
           </div>
         </div>

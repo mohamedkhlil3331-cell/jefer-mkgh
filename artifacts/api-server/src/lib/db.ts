@@ -353,6 +353,43 @@ if (warehouseCount === 0) {
   ii.run(w3.lastInsertRowid, "اسمنت أبيض",         10000, "كيس 40 كجم", 1000);
 }
 
+// ─── Tariffs ──────────────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS tariffs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    row_id          INTEGER,
+    loading_place   TEXT NOT NULL,
+    unloading_place TEXT NOT NULL,
+    driver_expense  REAL DEFAULT 0,
+    rental          REAL DEFAULT 0,
+    notes           TEXT,
+    synced_at       TEXT DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS driver_expenses (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    driver_phone TEXT NOT NULL,
+    driver_name  TEXT,
+    order_id     INTEGER,
+    order_number TEXT,
+    expense_type TEXT DEFAULT 'ديزل',
+    amount       REAL NOT NULL,
+    liters       REAL DEFAULT 0,
+    description  TEXT,
+    expense_date TEXT DEFAULT (date('now')),
+    created_at   TEXT DEFAULT (datetime('now'))
+  );
+  CREATE TABLE IF NOT EXISTS driver_settlements (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    driver_phone     TEXT NOT NULL,
+    driver_name      TEXT,
+    allocated_amount REAL NOT NULL,
+    settlement_date  TEXT DEFAULT (date('now')),
+    settled_by       TEXT,
+    notes            TEXT,
+    created_at       TEXT DEFAULT (datetime('now'))
+  );
+`);
+
 export function generateOrderNumber(): string {
   const now = new Date();
   const pad = (n: number, len = 2) => String(n).padStart(len, "0");
