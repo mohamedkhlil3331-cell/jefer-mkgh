@@ -4,7 +4,7 @@ export interface User {
   id: number;
   name: string;
   phone: string;
-  role: "customer" | "rep" | "reviewer" | "supervisor" | "warehouse" | "driver" | "admin";
+  role: "customer" | "rep" | "reviewer" | "supervisor" | "warehouse" | "driver" | "admin" | "employee";
   company_name?: string;
   vat_number?: string;
   cr_number?: string;

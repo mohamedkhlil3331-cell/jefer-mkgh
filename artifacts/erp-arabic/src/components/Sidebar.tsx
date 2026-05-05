@@ -3,7 +3,7 @@ import {
   LayoutDashboard, FileText, Truck, Wallet, Users, CalendarDays,
   ShoppingCart, Car, Wrench, ChevronDown, Menu, X, Package,
   ClipboardCheck, Bell, LogOut, Database, Home, Warehouse, Sheet, Tag, MapPin,
-  ChevronLeft, Globe, Shield,
+  ChevronLeft, Globe, Shield, BarChart3,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useAuth } from "@/context/AuthContext";
@@ -90,6 +90,12 @@ const ADMIN_GROUPS: NavGroup[] = [
     key: "approvals", labelKey: "approvalsGroup", icon: ClipboardCheck,
     items: [
       { href: "/approvals", labelKey: "navApprovals", icon: ClipboardCheck },
+    ],
+  },
+  {
+    key: "reports", labelKey: "reportsGroup", icon: BarChart3,
+    items: [
+      { href: "/reports", labelKey: "navReports", icon: BarChart3 },
     ],
   },
   {
