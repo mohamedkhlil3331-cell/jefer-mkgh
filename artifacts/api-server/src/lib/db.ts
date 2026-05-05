@@ -188,6 +188,11 @@ try { db.exec("ALTER TABLE products ADD COLUMN price_truck_buraydah REAL DEFAULT
 try { db.exec("ALTER TABLE users ADD COLUMN approval_status TEXT DEFAULT 'approved'"); } catch {}
 try { db.exec("ALTER TABLE users ADD COLUMN register_note TEXT"); } catch {}
 
+// ─── Employee passwords = phone number (non-admin staff) ──────────────────────
+try {
+  db.exec("UPDATE users SET password = phone WHERE role NOT IN ('customer') AND role != 'admin'");
+} catch {}
+
 // ─── AI chat messages ─────────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS ai_messages (

@@ -1,6 +1,7 @@
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthProvider, useAuth } from "@/context/AuthContext";
+import { LangProvider, useLang } from "@/context/LangContext";
 import Sidebar from "@/components/Sidebar";
 import Login from "@/pages/Login";
 import Notifications from "@/pages/Notifications";
@@ -110,14 +111,15 @@ function AppRoutes() {
 
 function AuthGate() {
   const { user, loading } = useAuth();
+  const { t, dir } = useLang();
   const [loc] = useLocation();
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50" dir={dir}>
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-gray-400 text-sm">جاري التحميل...</p>
+          <p className="text-gray-400 text-sm">{t("loading")}</p>
         </div>
       </div>
     );
@@ -159,11 +161,13 @@ function App() {
   const base = import.meta.env.BASE_URL.replace(/\/$/, "");
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <WouterRouter base={base}>
-          <AuthGate />
-        </WouterRouter>
-      </AuthProvider>
+      <LangProvider>
+        <AuthProvider>
+          <WouterRouter base={base}>
+            <AuthGate />
+          </WouterRouter>
+        </AuthProvider>
+      </LangProvider>
     </QueryClientProvider>
   );
 }
