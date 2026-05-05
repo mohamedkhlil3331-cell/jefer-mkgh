@@ -122,6 +122,67 @@ router.delete("/employees/:id", (req, res) => {
   res.json({ message: "تم الحذف" });
 });
 
+// ── Bulk import ─────────────────────────────────────────────────────────────────
+router.post("/employees/import", (req, res) => {
+  const rows: Record<string, unknown>[] = req.body?.rows ?? [];
+  if (!Array.isArray(rows) || rows.length === 0)
+    return void res.status(400).json({ error: "لا توجد بيانات" });
+
+  const COL: Record<string, string> = {
+    "الاسم":"name","اسم الموظف":"name","name":"name",
+    "الوظيفة":"job_title","العمل":"job_title","job_title":"job_title","المسمى الوظيفي":"job_title",
+    "الجهة":"entity","entity":"entity","الشركة":"entity",
+    "القسم":"department","department":"department","الإدارة":"department",
+    "الجنسية":"nationality","nationality":"nationality",
+    "الجوال":"phone","رقم الجوال":"phone","phone":"phone","الهاتف":"phone",
+    "الحالة":"status","status":"status",
+    "الراتب":"salary","salary":"salary","الراتب الأساسي":"salary",
+    "العلاوات":"allowances","allowances":"allowances","علاوة":"allowances",
+    "البونص":"bonus","bonus":"bonus",
+    "المكافآت":"rewards","rewards":"rewards",
+    "الجزاءات":"penalties","penalties":"penalties",
+    "تاريخ المباشرة":"hire_date","hire_date":"hire_date","تاريخ التعيين":"hire_date",
+    "رقم الإقامة":"iqama_no","iqama_no":"iqama_no",
+    "مبلغ الإقامة":"iqama_amount","iqama_amount":"iqama_amount",
+    "انتهاء الإقامة":"iqama_end","iqama_end":"iqama_end","تاريخ انتهاء الإقامة":"iqama_end",
+    "رقم الرخصة":"driver_license_no","driver_license_no":"driver_license_no",
+    "انتهاء الرخصة":"driver_license_end","driver_license_end":"driver_license_end","تاريخ انتهاء الرخصة":"driver_license_end",
+    "انتهاء الجواز":"passport_end","passport_end":"passport_end","تاريخ انتهاء الجواز":"passport_end",
+    "السيارة":"vehicle_plate","vehicle_plate":"vehicle_plate","رقم اللوحة":"vehicle_plate",
+    "الكفاءة":"efficiency","efficiency":"efficiency",
+  };
+
+  const ins = db.prepare(`
+    INSERT INTO employees
+      (name,job_title,department,entity,nationality,phone,status,salary,allowances,
+       bonus,rewards,penalties,hire_date,iqama_no,iqama_amount,iqama_end,
+       driver_license_no,driver_license_end,passport_end,vehicle_plate,efficiency)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `);
+
+  let imported = 0;
+  for (const raw of rows) {
+    const m: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const field = COL[k.trim()] ?? COL[k.trim().toLowerCase()];
+      if (field) m[field] = v;
+    }
+    if (!m.name) continue;
+    ins.run(
+      m.name, m.job_title||null, m.department||null, m.entity||null,
+      m.nationality||null, m.phone||null, m.status||"يعمل",
+      parseFloat(String(m.salary||0))||0, parseFloat(String(m.allowances||0))||0,
+      parseFloat(String(m.bonus||0))||0, parseFloat(String(m.rewards||0))||0,
+      parseFloat(String(m.penalties||0))||0,
+      m.hire_date||null, m.iqama_no||null, parseFloat(String(m.iqama_amount||0))||0,
+      m.iqama_end||null, m.driver_license_no||null, m.driver_license_end||null,
+      m.passport_end||null, m.vehicle_plate||null, m.efficiency||"جيد",
+    );
+    imported++;
+  }
+  res.json({ imported, message: `تم استيراد ${imported} موظف` });
+});
+
 // ── Leave requests ──────────────────────────────────────────────────────────────
 router.get("/leave-requests", (_req, res) => {
   res.json(db.prepare("SELECT * FROM leave_requests ORDER BY created_at DESC").all());
