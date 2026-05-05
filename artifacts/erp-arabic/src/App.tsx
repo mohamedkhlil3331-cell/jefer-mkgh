@@ -26,6 +26,7 @@ import GoogleSheetsPage from "@/pages/admin/GoogleSheetsPage";
 import ProductsAdmin from "@/pages/admin/ProductsAdmin";
 import EmployeesPage from "@/pages/admin/EmployeesPage";
 import TariffsPage from "@/pages/admin/TariffsPage";
+import DriversPage from "@/pages/admin/DriversPage";
 
 // Legacy ERP pages
 import ErpDashboard from "@/pages/Dashboard";
@@ -77,6 +78,7 @@ function AppRoutes() {
       <Route path="/products-admin" component={ProductsAdmin} />
       <Route path="/employees" component={EmployeesPage} />
       <Route path="/tariffs" component={TariffsPage} />
+      <Route path="/drivers-manage" component={DriversPage} />
 
       {/* Shared */}
       <Route path="/notifications" component={Notifications} />

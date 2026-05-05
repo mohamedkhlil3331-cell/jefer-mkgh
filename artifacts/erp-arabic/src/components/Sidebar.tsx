@@ -48,6 +48,7 @@ const ADMIN_NAV = [
   { href: "/warehouses", label: "المستودعات", icon: Warehouse },
   { href: "/employees", label: "الموظفون", icon: Users },
   { href: "/tariffs", label: "التعريفة", icon: MapPin },
+  { href: "/drivers-manage", label: "إدارة السائقين", icon: Truck },
   { href: "/sheets", label: "جوجل شيت", icon: Sheet },
   { href: "/admin", label: "إدارة النظام", icon: Database },
 ];

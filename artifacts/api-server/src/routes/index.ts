@@ -14,6 +14,7 @@ import googleSheetsRouter from "./google-sheets.js";
 import warehousesRouter from "./warehouses.js";
 import tariffsRouter from "./tariffs.js";
 import driverExpensesRouter from "./driver-expenses.js";
+import driversRouter from "./drivers.js";
 
 const router: IRouter = Router();
 
@@ -27,6 +28,7 @@ router.use(googleSheetsRouter);
 router.use(warehousesRouter);
 router.use(tariffsRouter);
 router.use(driverExpensesRouter);
+router.use(driversRouter);
 router.use(erpEmployees);
 router.use(erpInvoices);
 router.use(erpTrips);

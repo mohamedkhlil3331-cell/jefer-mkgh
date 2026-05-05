@@ -353,6 +353,26 @@ if (warehouseCount === 0) {
   ii.run(w3.lastInsertRowid, "اسمنت أبيض",         10000, "كيس 40 كجم", 1000);
 }
 
+// ─── Driver Profiles ───────────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS driver_profiles (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    vehicle_plate       TEXT,
+    driver_name         TEXT NOT NULL,
+    phone               TEXT,
+    branch              TEXT DEFAULT 'النقليات',
+    email               TEXT,
+    license_url         TEXT,
+    operation_card_url  TEXT,
+    driver_card_url     TEXT,
+    insurance_url       TEXT,
+    status              TEXT DEFAULT 'نشط',
+    notes               TEXT,
+    synced_at           TEXT DEFAULT (datetime('now')),
+    created_at          TEXT DEFAULT (datetime('now'))
+  );
+`);
+
 // ─── Tariffs ──────────────────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS tariffs (
