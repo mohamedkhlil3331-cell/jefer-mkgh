@@ -87,17 +87,19 @@ db.exec(`
   );
 
   CREATE TABLE IF NOT EXISTS products (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    name          TEXT    NOT NULL,
-    description   TEXT,
-    image_url     TEXT,
-    price_per_unit REAL   DEFAULT 0,
-    unit          TEXT    DEFAULT 'كيس',
-    category      TEXT,
-    stock         INTEGER DEFAULT 0,
-    active        INTEGER DEFAULT 1,
-    sort_order    INTEGER DEFAULT 0,
-    created_at    TEXT    DEFAULT (datetime('now'))
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    name                  TEXT    NOT NULL,
+    description           TEXT,
+    image_url             TEXT,
+    price_per_unit        REAL    DEFAULT 0,
+    price_delivered       REAL    DEFAULT 0,
+    price_truck_buraydah  REAL    DEFAULT 0,
+    unit                  TEXT    DEFAULT 'كيس',
+    category              TEXT,
+    stock                 INTEGER DEFAULT 0,
+    active                INTEGER DEFAULT 1,
+    sort_order            INTEGER DEFAULT 0,
+    created_at            TEXT    DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS product_ratings (
@@ -180,6 +182,10 @@ db.exec(`
   );
 `);
 
+// ─── Backward-compat: add price columns to existing DBs ──────────────────────
+try { db.exec("ALTER TABLE products ADD COLUMN price_delivered REAL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE products ADD COLUMN price_truck_buraydah REAL DEFAULT 0"); } catch {}
+
 // ─── Seed data ────────────────────────────────────────────────────────────────
 const userCount = (db.prepare("SELECT COUNT(*) as c FROM users").get() as {c:number}).c;
 if (userCount === 0) {
@@ -196,13 +202,26 @@ if (userCount === 0) {
 
 const productCount = (db.prepare("SELECT COUNT(*) as c FROM products").get() as {c:number}).c;
 if (productCount === 0) {
-  const ip = db.prepare("INSERT INTO products (name,description,image_url,price_per_unit,unit,category,stock,sort_order) VALUES (?,?,?,?,?,?,?,?)");
-  ip.run("اسمنت عادي", "اسمنت بورتلاندي عادي مناسب لجميع أعمال البناء والتشييد. مطابق للمواصفات السعودية.", "https://images.pexels.com/photos/1109541/pexels-photo-1109541.jpeg?auto=compress&cs=tinysrgb&w=400", 25, "كيس 50 كجم", "اسمنت", 5000, 1);
-  ip.run("اسمنت سريع التصلب", "اسمنت سريع الشك مثالي للأعمال العاجلة والإصلاحات السريعة والطقس البارد.", "https://images.pexels.com/photos/259588/pexels-photo-259588.jpeg?auto=compress&cs=tinysrgb&w=400", 35, "كيس 50 كجم", "اسمنت", 2000, 2);
-  ip.run("اسمنت أبيض", "اسمنت أبيض عالي الجودة للأعمال الزخرفية والتشطيبات الداخلية والخارجية.", "https://images.pexels.com/photos/1036657/pexels-photo-1036657.jpeg?auto=compress&cs=tinysrgb&w=400", 55, "كيس 40 كجم", "اسمنت", 1000, 3);
-  ip.run("بلوك عادي", "طوب خرساني صلب مقاسات قياسية 40×20×20 سم. يتميز بالمتانة والعزل الحراري.", "https://images.pexels.com/photos/1907785/pexels-photo-1907785.jpeg?auto=compress&cs=tinysrgb&w=400", 5, "حبة", "بلوك", 20000, 4);
-  ip.run("بلوك فراغي", "طوب خرساني مجوف لأعمال البناء الخفيف وعزل الصوت. مقاس 40×20×20 سم.", "https://images.pexels.com/photos/2219024/pexels-photo-2219024.jpeg?auto=compress&cs=tinysrgb&w=400", 4, "حبة", "بلوك", 15000, 5);
-  ip.run("رمل خشن", "رمل بناء خشن نظيف خالٍ من الشوائب. مناسب لجميع أعمال الخلط والخرسانة.", "https://images.pexels.com/photos/688633/pexels-photo-688633.jpeg?auto=compress&cs=tinysrgb&w=400", 150, "م³", "رمل وبحص", 500, 6);
+  const ip = db.prepare("INSERT INTO products (name,description,price_per_unit,price_delivered,price_truck_buraydah,unit,category,stock,sort_order) VALUES (?,?,?,?,?,?,?,?,?)");
+  // ─── أسمنت المدينة ─────────────────────────────────────────────────────────
+  ip.run("عادي المدينة",    "اسمنت بورتلاندي عادي - مصانع المدينة المنورة",   13, 18, 8000, "كيس", "اسمنت المدينة",  5000, 1);
+  ip.run("تشطيب المدينة",  "اسمنت تشطيب عالي الجودة - مصانع المدينة المنورة", 13, 18, 8000, "كيس", "اسمنت المدينة",  3000, 2);
+  ip.run("مقاوم المدينة",  "اسمنت مقاوم للكبريتات - مصانع المدينة المنورة",   13, 18, 8000, "كيس", "اسمنت المدينة",  2000, 3);
+  // ─── أسمنت القصيم ──────────────────────────────────────────────────────────
+  ip.run("عادي قصيم",      "اسمنت بورتلاندي عادي - مصانع القصيم",             13, 18, 8000, "كيس", "اسمنت القصيم",   5000, 4);
+  ip.run("تشطيب قصيم",    "اسمنت تشطيب عالي الجودة - مصانع القصيم",           13, 18, 8000, "كيس", "اسمنت القصيم",   3000, 5);
+  ip.run("مقاوم قصيم",    "اسمنت مقاوم للكبريتات - مصانع القصيم",             14, 19, 8600, "كيس", "اسمنت القصيم",   2000, 6);
+  // ─── أسمنت مكس ─────────────────────────────────────────────────────────────
+  ip.run("سمنت مكس",       "خلطة اسمنت جاهزة متعددة الاستخدامات",              15, 20, 9200, "كيس", "اسمنت مكس",      2000, 7);
+  // ─── جيفر ──────────────────────────────────────────────────────────────────
+  ip.run("جيفر 3 فتحة",   "بلوك جيفر 3 فتحات للبناء الخفيف",                  3,  8, 1500, "حبة", "جيفر",          20000, 8);
+  ip.run("جيفر 8 فتحة",   "بلوك جيفر 8 فتحات للعزل والبناء",                  3,  8, 1500, "حبة", "جيفر",          20000, 9);
+  ip.run("جيفر 20",        "بلوك جيفر مقاس 20 سم",                             3,  8, 1500, "حبة", "جيفر",          15000, 10);
+  // ─── بركاني / بلوك ─────────────────────────────────────────────────────────
+  ip.run("بركاني ازرق ابني","بلوك بركاني لون أبيض أو أزرق للأعمال الإنشائية", 3,  8, 1500, "حبة", "بركاني",        10000, 11);
+  ip.run("3 فتحة ابني",    "بلوك 3 فتحات لون أبني للبناء العام",               3,  8, 1500, "حبة", "بلوك",          15000, 12);
+  ip.run("8 فتحة ابني",    "بلوك 8 فتحات لون أبني للبناء العام",               3,  8, 1500, "حبة", "بلوك",          15000, 13);
+  ip.run("3 فتحة زراعة",  "بلوك 3 فتحات للاستخدامات الزراعية وتصريف المياه",  3,  8, 1500, "حبة", "بلوك",          10000, 14);
 }
 
 // Seed vehicles if empty
@@ -212,6 +231,30 @@ if (vCount === 0) {
   iv.run("1909 أ ب ت", "شاحنة نقل", "available", "عبد الهادي");
   iv.run("2345 ج د ه", "قلاب", "available", null);
   iv.run("3678 و ز ح", "بيك أب", "maintenance", null);
+}
+
+// ─── Migrate existing demo products to real MKGH products ─────────────────────
+{
+  const existing = db.prepare("SELECT id FROM products WHERE name = 'عادي المدينة'").get();
+  if (!existing) {
+    // deactivate old demo products
+    db.prepare("UPDATE products SET active=0").run();
+    const ip = db.prepare("INSERT INTO products (name,description,price_per_unit,price_delivered,price_truck_buraydah,unit,category,stock,sort_order) VALUES (?,?,?,?,?,?,?,?,?)");
+    ip.run("عادي المدينة",    "اسمنت بورتلاندي عادي - مصانع المدينة المنورة",   13, 18, 8000, "كيس", "اسمنت المدينة",  5000, 1);
+    ip.run("تشطيب المدينة",  "اسمنت تشطيب عالي الجودة - مصانع المدينة المنورة", 13, 18, 8000, "كيس", "اسمنت المدينة",  3000, 2);
+    ip.run("مقاوم المدينة",  "اسمنت مقاوم للكبريتات - مصانع المدينة المنورة",   13, 18, 8000, "كيس", "اسمنت المدينة",  2000, 3);
+    ip.run("عادي قصيم",      "اسمنت بورتلاندي عادي - مصانع القصيم",             13, 18, 8000, "كيس", "اسمنت القصيم",   5000, 4);
+    ip.run("تشطيب قصيم",    "اسمنت تشطيب عالي الجودة - مصانع القصيم",           13, 18, 8000, "كيس", "اسمنت القصيم",   3000, 5);
+    ip.run("مقاوم قصيم",    "اسمنت مقاوم للكبريتات - مصانع القصيم",             14, 19, 8600, "كيس", "اسمنت القصيم",   2000, 6);
+    ip.run("سمنت مكس",       "خلطة اسمنت جاهزة متعددة الاستخدامات",              15, 20, 9200, "كيس", "اسمنت مكس",      2000, 7);
+    ip.run("جيفر 3 فتحة",   "بلوك جيفر 3 فتحات للبناء الخفيف",                  3,  8, 1500, "حبة", "جيفر",          20000, 8);
+    ip.run("جيفر 8 فتحة",   "بلوك جيفر 8 فتحات للعزل والبناء",                  3,  8, 1500, "حبة", "جيفر",          20000, 9);
+    ip.run("جيفر 20",        "بلوك جيفر مقاس 20 سم",                             3,  8, 1500, "حبة", "جيفر",          15000, 10);
+    ip.run("بركاني ازرق ابني","بلوك بركاني لون أبيض أو أزرق للأعمال الإنشائية", 3,  8, 1500, "حبة", "بركاني",        10000, 11);
+    ip.run("3 فتحة ابني",    "بلوك 3 فتحات لون أبني للبناء العام",               3,  8, 1500, "حبة", "بلوك",          15000, 12);
+    ip.run("8 فتحة ابني",    "بلوك 8 فتحات لون أبني للبناء العام",               3,  8, 1500, "حبة", "بلوك",          15000, 13);
+    ip.run("3 فتحة زراعة",  "بلوك 3 فتحات للاستخدامات الزراعية وتصريف المياه",  3,  8, 1500, "حبة", "بلوك",          10000, 14);
+  }
 }
 
 // Import spreadsheet order if not exists

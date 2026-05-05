@@ -10,6 +10,14 @@ router.get("/products", (_req, res) => {
   res.json(products);
 });
 
+// All products including inactive (admin use)
+router.get("/products/all", (_req, res) => {
+  const products = db.prepare(
+    "SELECT p.*, AVG(r.rating) as avg_rating, COUNT(r.id) as review_count FROM products p LEFT JOIN product_ratings r ON r.product_id = p.id GROUP BY p.id ORDER BY p.sort_order, p.name"
+  ).all();
+  res.json(products);
+});
+
 router.get("/products/:id", (req, res) => {
   const product = db.prepare(
     "SELECT p.*, AVG(r.rating) as avg_rating, COUNT(r.id) as review_count FROM products p LEFT JOIN product_ratings r ON r.product_id = p.id WHERE p.id = ? GROUP BY p.id"
@@ -21,19 +29,39 @@ router.get("/products/:id", (req, res) => {
 });
 
 router.post("/products", (req, res) => {
-  const { name, description, image_url, price_per_unit, unit, category, stock, sort_order } = req.body;
+  const { name, description, image_url, price_per_unit, price_delivered, price_truck_buraydah, unit, category, stock, sort_order } = req.body;
   const result = db.prepare(
-    "INSERT INTO products (name,description,image_url,price_per_unit,unit,category,stock,sort_order) VALUES (?,?,?,?,?,?,?,?)"
-  ).run(name, description||null, image_url||null, parseFloat(price_per_unit)||0, unit||"كيس", category||null, parseInt(stock)||0, parseInt(sort_order)||0);
+    "INSERT INTO products (name,description,image_url,price_per_unit,price_delivered,price_truck_buraydah,unit,category,stock,sort_order) VALUES (?,?,?,?,?,?,?,?,?,?)"
+  ).run(name, description||null, image_url||null,
+    parseFloat(price_per_unit)||0, parseFloat(price_delivered)||0, parseFloat(price_truck_buraydah)||0,
+    unit||"كيس", category||null, parseInt(stock)||0, parseInt(sort_order)||0);
   res.status(201).json({ id: result.lastInsertRowid, message: "تم إضافة المنتج" });
 });
 
 router.put("/products/:id", (req, res) => {
-  const { name, description, image_url, price_per_unit, unit, category, stock, active, sort_order } = req.body;
+  const { name, description, image_url, price_per_unit, price_delivered, price_truck_buraydah, unit, category, stock, active, sort_order } = req.body;
   db.prepare(
-    "UPDATE products SET name=?,description=?,image_url=?,price_per_unit=?,unit=?,category=?,stock=?,active=?,sort_order=? WHERE id=?"
-  ).run(name,description||null,image_url||null,parseFloat(price_per_unit)||0,unit,category||null,parseInt(stock)||0,active??1,parseInt(sort_order)||0,req.params.id);
+    "UPDATE products SET name=?,description=?,image_url=?,price_per_unit=?,price_delivered=?,price_truck_buraydah=?,unit=?,category=?,stock=?,active=?,sort_order=? WHERE id=?"
+  ).run(
+    name, description||null, image_url||null,
+    parseFloat(price_per_unit)||0, parseFloat(price_delivered)||0, parseFloat(price_truck_buraydah)||0,
+    unit, category||null, parseInt(stock)||0, active??1, parseInt(sort_order)||0, req.params.id
+  );
   res.json({ message: "تم التحديث" });
+});
+
+// Quick price update only
+router.patch("/products/:id/prices", (req, res) => {
+  const { price_per_unit, price_delivered, price_truck_buraydah } = req.body;
+  db.prepare(
+    "UPDATE products SET price_per_unit=?, price_delivered=?, price_truck_buraydah=? WHERE id=?"
+  ).run(
+    parseFloat(price_per_unit)||0,
+    parseFloat(price_delivered)||0,
+    parseFloat(price_truck_buraydah)||0,
+    req.params.id
+  );
+  res.json({ message: "تم تحديث الأسعار" });
 });
 
 router.delete("/products/:id", (req, res) => {

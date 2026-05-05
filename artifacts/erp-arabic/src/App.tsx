@@ -23,6 +23,7 @@ import AdminDashboard from "@/pages/admin/AdminDashboard";
 import MainDashboard from "@/pages/admin/MainDashboard";
 import WarehousesPage from "@/pages/admin/WarehousesPage";
 import GoogleSheetsPage from "@/pages/admin/GoogleSheetsPage";
+import ProductsAdmin from "@/pages/admin/ProductsAdmin";
 
 // Legacy ERP pages
 import ErpDashboard from "@/pages/Dashboard";
@@ -71,6 +72,7 @@ function AppRoutes() {
       {/* New sections */}
       <Route path="/warehouses" component={WarehousesPage} />
       <Route path="/sheets" component={GoogleSheetsPage} />
+      <Route path="/products-admin" component={ProductsAdmin} />
 
       {/* Shared */}
       <Route path="/notifications" component={Notifications} />
