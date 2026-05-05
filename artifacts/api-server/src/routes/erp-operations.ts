@@ -29,6 +29,42 @@ router.delete("/vehicles/:id", (req, res) => {
   res.json({ message: "تم الحذف" });
 });
 
+// ── Vehicles bulk import ───────────────────────────────────────────────────────
+router.post("/vehicles/import", (req, res) => {
+  const rows: Record<string, string>[] = req.body?.rows ?? [];
+  if (!Array.isArray(rows) || rows.length === 0)
+    return void res.status(400).json({ error: "لا توجد بيانات" });
+
+  const keyMap: Record<string, string> = {
+    "رقم اللوحة": "plate_number", "plate_number": "plate_number",
+    "رقم السيارة": "plate_number", "اللوحة": "plate_number",
+    "نوع المركبة": "vehicle_type", "vehicle_type": "vehicle_type", "النوع": "vehicle_type",
+    "الحالة": "status", "status": "status",
+    "السائق": "driver_name", "driver_name": "driver_name", "اسم السائق": "driver_name",
+    "ملاحظات": "notes", "notes": "notes",
+  };
+  const statusMap: Record<string, string> = {
+    "متاح": "available", "مشغول": "busy", "صيانة": "maintenance", "معطل": "broken",
+    available: "available", busy: "busy", maintenance: "maintenance", broken: "broken",
+  };
+  const ins = db.prepare(
+    "INSERT OR IGNORE INTO vehicles (plate_number, vehicle_type, status, driver_name, notes) VALUES (?,?,?,?,?)"
+  );
+  let imported = 0;
+  for (const raw of rows) {
+    const mapped: Record<string, string> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      const norm = keyMap[k.trim()] ?? keyMap[k.trim().toLowerCase()];
+      if (norm) mapped[norm] = String(v).trim();
+    }
+    if (!mapped.plate_number) continue;
+    const st = statusMap[mapped.status ?? ""] ?? "available";
+    ins.run(mapped.plate_number, mapped.vehicle_type || "شاحنة", st, mapped.driver_name || null, mapped.notes || null);
+    imported++;
+  }
+  res.json({ imported, message: `تم استيراد ${imported} مركبة` });
+});
+
 // ── Orders ────────────────────────────────────────────────────────────────────
 router.get("/orders", (req, res) => {
   const { status } = req.query as Record<string, string>;
