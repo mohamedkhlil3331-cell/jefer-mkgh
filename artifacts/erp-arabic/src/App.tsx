@@ -70,6 +70,9 @@ function AppRoutes() {
       <Route path="/my-orders" component={MyOrders} />
       <Route path="/account" component={Account} />
 
+      {/* Employee portal */}
+      <Route path="/employee-portal" component={EmployeePortal} />
+
       {/* Role dashboards */}
       <Route path="/reviewer" component={ReviewerOrders} />
       <Route path="/supervisor" component={SupervisorOrders} />
