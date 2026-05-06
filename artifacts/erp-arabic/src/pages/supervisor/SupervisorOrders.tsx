@@ -5,7 +5,7 @@ import {
   Clock, Truck, Package, X, BarChart3, MapPin, ArrowRight,
   Users, Search, ChevronDown, Map,
 } from "lucide-react";
-import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -22,6 +22,16 @@ const STAGE_ICON_COLOR: Record<string, string> = {
   invoiced: "#a855f7",
   loaded: "#06b6d4",
 };
+
+function FitBounds({ orders }: { orders: Order[] }) {
+  const map = useMap();
+  useEffect(() => {
+    if (orders.length === 0) return;
+    const bounds = L.latLngBounds(orders.map(o => [o.delivery_lat!, o.delivery_lng!]));
+    map.fitBounds(bounds, { padding: [48, 48], maxZoom: 14 });
+  }, [map, orders]);
+  return null;
+}
 
 function makeIcon(color: string) {
   return L.divIcon({
@@ -436,7 +446,10 @@ export default function SupervisorOrders() {
           ) : (
             <div className="rounded-2xl overflow-hidden border border-gray-200 shadow-sm" style={{ height: "520px" }}>
               <MapContainer
-                center={[activeOrdersWithLocation[0].delivery_lat!, activeOrdersWithLocation[0].delivery_lng!]}
+                center={[
+                  activeOrdersWithLocation.reduce((s, o) => s + o.delivery_lat!, 0) / activeOrdersWithLocation.length,
+                  activeOrdersWithLocation.reduce((s, o) => s + o.delivery_lng!, 0) / activeOrdersWithLocation.length,
+                ]}
                 zoom={10}
                 style={{ height: "100%", width: "100%" }}
               >
@@ -444,6 +457,7 @@ export default function SupervisorOrders() {
                   url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                 />
+                <FitBounds orders={activeOrdersWithLocation} />
                 {activeOrdersWithLocation.map(o => {
                   const color = STAGE_ICON_COLOR[o.stage] ?? "#64748b";
                   return (
