@@ -88,10 +88,11 @@ export default function ReviewerOrders() {
   const cancelOrder = async (id: number) => {
     const reason = prompt("سبب الإلغاء:");
     if (reason === null) return;
-    await fetch(`/api/workflow/orders/${id}/cancel`, {
+    const res = await fetch(`/api/workflow/orders/${id}/cancel`, {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reason }),
+      body: JSON.stringify({ reason, caller_phone: user?.phone }),
     });
+    if (!res.ok) { const e = await res.json(); alert(e.error || "خطأ"); return; }
     load();
   };
 

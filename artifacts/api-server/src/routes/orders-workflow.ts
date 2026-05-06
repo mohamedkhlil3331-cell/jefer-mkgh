@@ -295,9 +295,16 @@ router.put("/workflow/breakdown-reports/:id/resolve", (req, res) => {
   res.json({ message: "تم تسجيل الحل" });
 });
 
-// ── Cancel order ─────────────────────────────────────────────────────────────
+// ── Cancel order — reviewer or admin only ─────────────────────────────────────
 router.put("/workflow/orders/:id/cancel", (req, res) => {
-  const { reason } = req.body;
+  const { reason, caller_phone } = req.body;
+  // Only reviewer or admin may cancel
+  if (caller_phone) {
+    const caller = db.prepare("SELECT role FROM users WHERE phone = ? AND active = 1").get(caller_phone) as { role: string } | undefined;
+    if (!caller || !["reviewer", "admin"].includes(caller.role)) {
+      return void res.status(403).json({ error: "غير مصرح لك بإلغاء الطلبات" });
+    }
+  }
   const order = db.prepare("SELECT * FROM workflow_orders WHERE id = ?").get(req.params.id) as Record<string, unknown> | undefined;
   if (!order) return void res.status(404).json({ error: "الطلب غير موجود" });
 
@@ -324,7 +331,7 @@ router.put("/notifications/read-all", (req, res) => {
 // ── Available drivers — from users table (real login accounts) ──────────────
 router.get("/workflow/drivers", (_req, res) => {
   const drivers = db.prepare(
-    "SELECT id, name, phone FROM users WHERE role = 'driver' AND active = 1 ORDER BY name"
+    "SELECT id, name, phone FROM users WHERE role = 'driver' AND active = 1 AND phone GLOB '[0-9]*' ORDER BY name"
   ).all();
   res.json(drivers);
 });

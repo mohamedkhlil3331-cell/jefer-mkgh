@@ -471,6 +471,17 @@ export default function SupervisorOrders() {
                 )}
               </div>
 
+              {/* Helper hint showing what's still missing */}
+              {(!selectedVehicle || !selectedDriver) && availableVehicles.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs text-amber-700 text-center">
+                  {!selectedVehicle && !selectedDriver
+                    ? "يرجى اختيار سيارة وسائق أولاً"
+                    : !selectedVehicle
+                    ? "يرجى اختيار سيارة"
+                    : "يرجى اختيار سائق"}
+                </div>
+              )}
+
               <div className="flex gap-2 pt-1">
                 <button onClick={() => { setSelectedOrder(null); setSelectedVehicle(""); setSelectedDriver(""); }}
                   className="flex-1 py-3 border border-gray-200 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">
@@ -478,7 +489,7 @@ export default function SupervisorOrders() {
                 </button>
                 <button onClick={assignVehicle}
                   disabled={submitting || !selectedVehicle || !selectedDriver || availableVehicles.length === 0}
-                  className="flex-1 py-3 bg-[#103c68] hover:bg-[#0d3158] text-white rounded-xl font-black text-sm disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
+                  className="flex-1 py-3 bg-[#103c68] hover:bg-[#0d3158] text-white rounded-xl font-black text-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2">
                   {submitting
                     ? <><RefreshCw size={14} className="animate-spin" />جاري...</>
                     : <><Car size={14} />تخصيص السيارة</>}
