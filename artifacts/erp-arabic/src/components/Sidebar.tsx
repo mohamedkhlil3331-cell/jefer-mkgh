@@ -28,6 +28,7 @@ const REVIEWER_NAV: NavItem[] = [
 const SUPERVISOR_NAV: NavItem[] = [
   { href: "/employee-portal", labelKey: "navEmployeePortal", icon: Users },
   { href: "/supervisor",      labelKey: "navTransport",      icon: Truck },
+  { href: "/drivers-manage",  labelKey: "navDriversMgmt",    icon: Car },
   { href: "/notifications",   labelKey: "navNotifications",  icon: Bell },
 ];
 const WAREHOUSE_NAV: NavItem[] = [
