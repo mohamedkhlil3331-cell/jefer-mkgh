@@ -132,34 +132,40 @@ router.put("/workflow/orders/:id/confirm-payment", (req, res) => {
 
 // ── Supervisor: assign vehicle ───────────────────────────────────────────────
 router.put("/workflow/orders/:id/assign-vehicle", (req, res) => {
-  const { supervisor_phone, vehicle_id, driver_phone } = req.body;
+  const { supervisor_phone, vehicle_id, driver_phone, driver_name_override } = req.body;
   const order = db.prepare("SELECT * FROM workflow_orders WHERE id = ?").get(req.params.id) as Record<string, unknown> | undefined;
   if (!order) return void res.status(404).json({ error: "الطلب غير موجود" });
+  if (!driver_phone) return void res.status(400).json({ error: "يجب اختيار سائق" });
 
-  // Look up in driver_profiles (primary source of 19 vehicles)
+  // Look up vehicle in driver_profiles
   const vehicle = db.prepare("SELECT * FROM driver_profiles WHERE id = ?").get(vehicle_id) as Record<string, unknown> | undefined;
   if (!vehicle) return void res.status(400).json({ error: "السيارة غير موجودة" });
 
+  // Look up driver from users table (login account) — this ensures phone matches login
+  const driver = db.prepare("SELECT * FROM users WHERE phone = ? AND role = 'driver'").get(driver_phone) as Record<string, unknown> | undefined;
   const supervisor = db.prepare("SELECT id FROM users WHERE phone = ?").get(supervisor_phone) as Record<string, unknown> | undefined;
-  const driver = db.prepare("SELECT * FROM users WHERE phone = ? AND role = 'driver'").get(driver_phone || vehicle.phone) as Record<string, unknown> | undefined;
 
+  const finalDriverName = driver?.name as string || driver_name_override || null;
+
+  // NOTE: vehicle_id column has FK to fleet_vehicles — do NOT store driver_profiles ID there.
+  // We store vehicle_plate (text) for display and use it to track the vehicle in driver_profiles.
   db.prepare(`
     UPDATE workflow_orders SET
       stage = 'vehicle_assigned', supervisor_id = ?,
-      vehicle_id = ?, vehicle_plate = ?,
+      vehicle_id = NULL, vehicle_plate = ?,
       driver_id = ?, driver_name = ?, driver_phone = ?,
       vehicle_assign_date = datetime('now')
     WHERE id = ?
-  `).run(supervisor?.id||null, vehicle_id, vehicle.vehicle_plate,
-         driver?.id||null, driver?.name||vehicle.driver_name||null, driver_phone||(vehicle.phone as string)||null, req.params.id);
+  `).run(supervisor?.id||null, vehicle.vehicle_plate,
+         driver?.id||null, finalDriverName, driver_phone, req.params.id);
 
-  // Mark vehicle as busy in driver_profiles
-  db.prepare("UPDATE driver_profiles SET status = 'في رحلة' WHERE id = ?").run(vehicle_id);
+  // Mark vehicle as busy in driver_profiles (by plate, not by ID)
+  db.prepare("UPDATE driver_profiles SET status = 'في رحلة' WHERE vehicle_plate = ?").run(vehicle.vehicle_plate);
 
-  // Notify warehouse
+  // Notify warehouse + driver
   const warehouse = db.prepare("SELECT phone FROM users WHERE role = 'warehouse' AND active = 1").all() as {phone: string}[];
   warehouse.forEach(w => notify(w.phone, "طلب جاهز للفاتورة", `تم تخصيص سيارة لطلب ${order.order_number}`));
-  if (driver_phone) notify(driver_phone, "طلب جديد لك", `لديك طلب توصيل رقم ${order.order_number}`);
+  notify(driver_phone, "طلب جديد لك", `لديك طلب توصيل رقم ${order.order_number}، تفضل بالتحقق من بوابتك`);
 
   res.json({ message: "تم تخصيص السيارة" });
 });
@@ -214,8 +220,8 @@ router.put("/workflow/orders/:id/deliver", (req, res) => {
   db.prepare("UPDATE workflow_orders SET stage='delivered', delivery_date=datetime('now'), delivery_notes=? WHERE id=?")
     .run(notes||null, req.params.id);
 
-  // Free the vehicle in driver_profiles
-  if (order.vehicle_id) db.prepare("UPDATE driver_profiles SET status='نشط' WHERE id=?").run(order.vehicle_id);
+  // Free the vehicle in driver_profiles (by plate since vehicle_id FK is to fleet_vehicles)
+  if (order.vehicle_plate) db.prepare("UPDATE driver_profiles SET status='نشط' WHERE vehicle_plate=?").run(order.vehicle_plate);
 
   notify(order.customer_phone as string, "تم التسليم", `تم تسليم طلبك رقم ${order.order_number} بنجاح.`);
 
@@ -276,9 +282,9 @@ router.put("/workflow/breakdown-reports/:id/resolve", (req, res) => {
     UPDATE breakdown_reports SET status='resolved', resolved_by=?, resolve_notes=?, resolved_at=datetime('now') WHERE id=?
   `).run(resolved_by||null, resolve_notes||null, req.params.id);
 
-  // Free vehicle if it was broken
-  if (report.vehicle_id) {
-    db.prepare("UPDATE driver_profiles SET status='نشط' WHERE id=? AND status='موقوف'").run(report.vehicle_id);
+  // Free vehicle if it was broken (use plate since vehicle_id FK points to fleet_vehicles)
+  if (report.vehicle_plate) {
+    db.prepare("UPDATE driver_profiles SET status='نشط' WHERE vehicle_plate=? AND status='موقوف'").run(report.vehicle_plate);
   }
 
   // Notify the driver
@@ -296,7 +302,7 @@ router.put("/workflow/orders/:id/cancel", (req, res) => {
   if (!order) return void res.status(404).json({ error: "الطلب غير موجود" });
 
   db.prepare("UPDATE workflow_orders SET stage='cancelled', cancel_reason=? WHERE id=?").run(reason||null, req.params.id);
-  if (order.vehicle_id) db.prepare("UPDATE driver_profiles SET status='نشط' WHERE id=?").run(order.vehicle_id);
+  if (order.vehicle_plate) db.prepare("UPDATE driver_profiles SET status='نشط' WHERE vehicle_plate=?").run(order.vehicle_plate);
   notify(order.customer_phone as string, "تم إلغاء الطلب", `تم إلغاء طلبك رقم ${order.order_number}. ${reason||""}`);
 
   res.json({ message: "تم الإلغاء" });
@@ -313,6 +319,14 @@ router.put("/notifications/read-all", (req, res) => {
   const { phone } = req.body;
   db.prepare("UPDATE notifications SET read = 1 WHERE user_phone = ?").run(phone);
   res.json({ message: "تم" });
+});
+
+// ── Available drivers — from users table (real login accounts) ──────────────
+router.get("/workflow/drivers", (_req, res) => {
+  const drivers = db.prepare(
+    "SELECT id, name, phone FROM users WHERE role = 'driver' AND active = 1 ORDER BY name"
+  ).all();
+  res.json(drivers);
 });
 
 // ── Available vehicles — sourced from driver_profiles (19 vehicles from Google Sheets) ──

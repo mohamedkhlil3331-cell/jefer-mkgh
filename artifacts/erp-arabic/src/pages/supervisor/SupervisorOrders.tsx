@@ -18,6 +18,9 @@ interface Vehicle {
   status: string; driver_name: string; driver_phone: string;
   capacity?: number; notes?: string;
 }
+interface Driver {
+  id: number; name: string; phone: string;
+}
 
 const STATUS_AR:    Record<string, string> = { available: "متاح", busy: "مشغول", maintenance: "صيانة", broken: "معطل" };
 const STATUS_COLOR: Record<string, string> = {
@@ -34,12 +37,13 @@ export default function SupervisorOrders() {
   const { user } = useAuth();
   const [orders,   setOrders]   = useState<Order[]>([]);
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+  const [drivers,  setDrivers]  = useState<Driver[]>([]);
   const [loading,  setLoading]  = useState(true);
   const [tab,      setTab]      = useState<"dashboard" | "pending" | "fleet" | "active">("dashboard");
 
   const [selectedOrder,   setSelectedOrder]   = useState<Order | null>(null);
   const [selectedVehicle, setSelectedVehicle] = useState("");
-  const [driverPhone,     setDriverPhone]     = useState("");
+  const [selectedDriver,  setSelectedDriver]  = useState("");
   const [submitting,      setSubmitting]      = useState(false);
   const [vehicleSearch,   setVehicleSearch]   = useState("");
 
@@ -48,28 +52,32 @@ export default function SupervisorOrders() {
     Promise.all([
       fetch("/api/workflow/orders?role=supervisor").then(r => r.json()),
       fetch("/api/workflow/vehicles").then(r => r.json()),
-    ]).then(([o, v]) => {
+      fetch("/api/workflow/drivers").then(r => r.json()),
+    ]).then(([o, v, d]) => {
       setOrders(Array.isArray(o) ? o : []);
       setVehicles(Array.isArray(v) ? v : []);
+      setDrivers(Array.isArray(d) ? d : []);
     }).finally(() => setLoading(false));
   };
   useEffect(load, []);
 
   const assignVehicle = async () => {
-    if (!selectedOrder || !selectedVehicle || !user) return;
+    if (!selectedOrder || !selectedVehicle || !selectedDriver || !user) return;
     setSubmitting(true);
     try {
+      const driver = drivers.find(d => d.phone === selectedDriver);
       const res = await fetch(`/api/workflow/orders/${selectedOrder.id}/assign-vehicle`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           supervisor_phone: user.phone,
           vehicle_id: parseInt(selectedVehicle),
-          driver_phone: driverPhone,
+          driver_phone: selectedDriver,
+          driver_name_override: driver?.name,
         }),
       });
       if (!res.ok) throw new Error((await res.json()).error);
-      setSelectedOrder(null); setSelectedVehicle(""); setDriverPhone("");
+      setSelectedOrder(null); setSelectedVehicle(""); setSelectedDriver("");
       load();
     } catch (err) { alert((err as Error).message); }
     finally { setSubmitting(false); }
@@ -430,21 +438,46 @@ export default function SupervisorOrders() {
                 )}
               </div>
 
-              {/* Driver phone */}
+              {/* Driver selection */}
               <div>
-                <label className="text-xs font-bold text-gray-700 block mb-1.5">جوال السائق</label>
-                <input value={driverPhone} onChange={e => setDriverPhone(e.target.value)}
-                  placeholder="05xxxxxxxx"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20" />
+                <label className="text-xs font-bold text-gray-700 block mb-2">اختر السائق *</label>
+                {drivers.length === 0 ? (
+                  <div className="bg-amber-50 border border-amber-200 text-amber-700 text-sm rounded-xl p-3 text-center">
+                    لا يوجد سائقون مسجلون في النظام
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {drivers.map(d => (
+                      <button key={d.phone} type="button"
+                        onClick={() => setSelectedDriver(d.phone)}
+                        className={`w-full flex items-center gap-3 p-3 rounded-2xl border text-right transition-all ${
+                          selectedDriver === d.phone
+                            ? "border-[#103c68] bg-[#103c68]/5 shadow-sm"
+                            : "border-gray-200 hover:border-gray-300"
+                        }`}>
+                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 ${selectedDriver === d.phone ? "bg-[#103c68]" : "bg-gray-100"}`}>
+                          <span className={`text-sm font-black ${selectedDriver === d.phone ? "text-white" : "text-gray-500"}`}>{d.name[0]}</span>
+                        </div>
+                        <div className="flex-1">
+                          <div className="font-bold text-gray-900 text-sm">{d.name}</div>
+                          <div className="text-xs text-gray-400">{d.phone}</div>
+                        </div>
+                        {selectedDriver === d.phone && (
+                          <CheckCircle size={16} className="text-[#103c68] flex-shrink-0" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="flex gap-2 pt-1">
-                <button onClick={() => setSelectedOrder(null)}
+                <button onClick={() => { setSelectedOrder(null); setSelectedVehicle(""); setSelectedDriver(""); }}
                   className="flex-1 py-3 border border-gray-200 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">
                   إلغاء
                 </button>
                 <button onClick={assignVehicle}
-                  disabled={submitting || !selectedVehicle || availableVehicles.length === 0}
+                  disabled={submitting || !selectedVehicle || !selectedDriver || availableVehicles.length === 0}
                   className="flex-1 py-3 bg-[#103c68] hover:bg-[#0d3158] text-white rounded-xl font-black text-sm disabled:opacity-50 transition-colors flex items-center justify-center gap-2">
                   {submitting
                     ? <><RefreshCw size={14} className="animate-spin" />جاري...</>
