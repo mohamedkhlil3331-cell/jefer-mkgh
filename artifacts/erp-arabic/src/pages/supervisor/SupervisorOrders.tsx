@@ -3,8 +3,34 @@ import { useAuth } from "@/context/AuthContext";
 import {
   Car, Wrench, RefreshCw, AlertTriangle, CheckCircle,
   Clock, Truck, Package, X, BarChart3, MapPin, ArrowRight,
-  Users, Search, ChevronDown,
+  Users, Search, ChevronDown, Map,
 } from "lucide-react";
+import { MapContainer, TileLayer, Marker, Popup } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+// Fix leaflet default icon paths broken by bundlers
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
+
+const STAGE_ICON_COLOR: Record<string, string> = {
+  vehicle_assigned: "#3b82f6",
+  invoiced: "#a855f7",
+  loaded: "#06b6d4",
+};
+
+function makeIcon(color: string) {
+  return L.divIcon({
+    className: "",
+    html: `<div style="background:${color};width:22px;height:22px;border-radius:50%;border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.35)"></div>`,
+    iconSize: [22, 22],
+    iconAnchor: [11, 11],
+  });
+}
 
 interface Order {
   id: number; order_number: string; customer_name: string; customer_phone: string;
@@ -12,6 +38,7 @@ interface Order {
   delivery_location: string; destination_type: string; stage: string;
   vehicle_plate: string; driver_name: string; driver_phone: string;
   vehicle_assign_date: string; created_at: string;
+  delivery_lat: number | null; delivery_lng: number | null;
 }
 interface Vehicle {
   id: number; plate_number: string; vehicle_type: string;
@@ -39,7 +66,7 @@ export default function SupervisorOrders() {
   const [vehicles, setVehicles] = useState<Vehicle[]>([]);
   const [drivers,  setDrivers]  = useState<Driver[]>([]);
   const [loading,  setLoading]  = useState(true);
-  const [tab,      setTab]      = useState<"dashboard" | "pending" | "fleet" | "active">("dashboard");
+  const [tab,      setTab]      = useState<"dashboard" | "pending" | "fleet" | "active" | "map">("dashboard");
 
   const [selectedOrder,   setSelectedOrder]   = useState<Order | null>(null);
   const [selectedVehicle, setSelectedVehicle] = useState("");
@@ -95,6 +122,7 @@ export default function SupervisorOrders() {
 
   const pendingOrders  = useMemo(() => orders.filter(o => o.stage === "payment_confirmed"), [orders]);
   const activeOrders   = useMemo(() => orders.filter(o => ["vehicle_assigned", "invoiced", "loaded"].includes(o.stage)), [orders]);
+  const activeOrdersWithLocation = useMemo(() => activeOrders.filter(o => o.delivery_lat != null && o.delivery_lng != null), [activeOrders]);
   const availableVehicles = useMemo(() => vehicles.filter(v => v.status === "available"), [vehicles]);
 
   const filteredVehicles = useMemo(() => {
@@ -143,6 +171,7 @@ export default function SupervisorOrders() {
           { id: "pending",   label: "تحتاج تخصيص", icon: Clock,  count: pendingOrders.length },
           { id: "active",    label: "في التنفيذ",   icon: Package, count: activeOrders.length },
           { id: "fleet",     label: "الأسطول",      icon: Car,    count: vehicles.length },
+          { id: "map",       label: "الخريطة",      icon: Map,    count: activeOrdersWithLocation.length },
         ] as const).map(t => {
           const Icon = t.icon;
           return (
@@ -376,6 +405,103 @@ export default function SupervisorOrders() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* ══ MAP VIEW ══ */}
+      {tab === "map" && (
+        <div className="space-y-4">
+          {/* Legend */}
+          <div className="flex flex-wrap gap-3 items-center">
+            {[
+              { color: "#3b82f6", label: "سيارة معيّنة" },
+              { color: "#a855f7", label: "تم الفوترة" },
+              { color: "#06b6d4", label: "محمّل / في الطريق" },
+            ].map(({ color, label }) => (
+              <div key={label} className="flex items-center gap-1.5 text-xs text-gray-600">
+                <div className="w-3.5 h-3.5 rounded-full border-2 border-white shadow" style={{ background: color }} />
+                {label}
+              </div>
+            ))}
+          </div>
+
+          {activeOrdersWithLocation.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col items-center justify-center py-20 text-center gap-3">
+              <Map size={40} className="text-gray-300" />
+              <div>
+                <p className="font-semibold text-gray-500">لا توجد طلبات جارية بإحداثيات تسليم</p>
+                <p className="text-xs text-gray-400 mt-1">سيتم عرض الطلبات هنا فور تحديد موقع التسليم</p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl overflow-hidden border border-gray-200 shadow-sm" style={{ height: "520px" }}>
+              <MapContainer
+                center={[activeOrdersWithLocation[0].delivery_lat!, activeOrdersWithLocation[0].delivery_lng!]}
+                zoom={10}
+                style={{ height: "100%", width: "100%" }}
+              >
+                <TileLayer
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                />
+                {activeOrdersWithLocation.map(o => {
+                  const color = STAGE_ICON_COLOR[o.stage] ?? "#64748b";
+                  return (
+                    <Marker
+                      key={o.id}
+                      position={[o.delivery_lat!, o.delivery_lng!]}
+                      icon={makeIcon(color)}
+                    >
+                      <Popup>
+                        <div dir="rtl" className="text-sm min-w-[180px]">
+                          <div className="font-bold text-[#103c68] mb-1">{o.order_number}</div>
+                          <div className="font-semibold text-gray-800">{o.customer_name}</div>
+                          <div className="text-gray-500 text-xs mt-0.5">{o.product_name} × {o.quantity} {o.unit}</div>
+                          <div className="text-gray-500 text-xs mt-0.5 flex items-center gap-1">
+                            <span>📍</span>{o.delivery_location}
+                          </div>
+                          {o.vehicle_plate && (
+                            <div className="text-gray-500 text-xs mt-0.5 flex items-center gap-1">
+                              <span>🚛</span>{o.vehicle_plate} {o.driver_name ? `· ${o.driver_name}` : ""}
+                            </div>
+                          )}
+                        </div>
+                      </Popup>
+                    </Marker>
+                  );
+                })}
+              </MapContainer>
+            </div>
+          )}
+
+          {/* Orders list below map */}
+          {activeOrdersWithLocation.length > 0 && (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="px-5 py-3 border-b border-gray-50 text-sm font-bold text-gray-700">
+                الطلبات المعروضة على الخريطة ({activeOrdersWithLocation.length})
+              </div>
+              <div className="divide-y divide-gray-50">
+                {activeOrdersWithLocation.map(o => (
+                  <div key={o.id} className="px-5 py-3 flex items-center justify-between gap-3 text-sm">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-3 h-3 rounded-full border-2 border-white shadow flex-shrink-0"
+                        style={{ background: STAGE_ICON_COLOR[o.stage] ?? "#64748b" }} />
+                      <div>
+                        <div className="font-mono text-xs text-[#103c68] font-bold">{o.order_number}</div>
+                        <div className="font-semibold text-gray-800">{o.customer_name}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <StagePill stage={o.stage} />
+                      {o.vehicle_plate && (
+                        <span className="text-xs text-gray-500 flex items-center gap-1"><Car size={11} />{o.vehicle_plate}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

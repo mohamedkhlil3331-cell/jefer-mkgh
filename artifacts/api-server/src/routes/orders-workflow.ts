@@ -30,7 +30,7 @@ router.get("/workflow/orders", (req, res) => {
   } else if (role === "reviewer") {
     sql += " AND stage IN ('pending','payment_confirmed')";
   } else if (role === "supervisor") {
-    sql += " AND stage IN ('payment_confirmed','vehicle_assigned')";
+    sql += " AND stage IN ('payment_confirmed','vehicle_assigned','invoiced','loaded')";
   } else if (role === "warehouse") {
     sql += " AND stage IN ('vehicle_assigned','invoiced')";
   } else if (role === "driver") {
