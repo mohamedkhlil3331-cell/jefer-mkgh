@@ -215,6 +215,25 @@ try {
   `);
 } catch {}
 
+// ─── Breakdown reports table ─────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS breakdown_reports (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    driver_phone   TEXT    NOT NULL,
+    driver_name    TEXT,
+    vehicle_id     INTEGER,
+    vehicle_plate  TEXT,
+    breakdown_type TEXT    NOT NULL,
+    description    TEXT,
+    photo_url      TEXT,
+    status         TEXT    DEFAULT 'open',
+    resolved_by    TEXT,
+    resolve_notes  TEXT,
+    resolved_at    TEXT,
+    created_at     TEXT    DEFAULT (datetime('now'))
+  );
+`);
+
 // ─── AI chat messages ─────────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS ai_messages (
@@ -230,16 +249,28 @@ db.exec(`
 // ─── Seed data ────────────────────────────────────────────────────────────────
 const userCount = (db.prepare("SELECT COUNT(*) as c FROM users").get() as {c:number}).c;
 if (userCount === 0) {
-  const ins = db.prepare("INSERT INTO users (name,phone,password,role,company_name,vat_number) VALUES (?,?,?,?,?,?)");
-  ins.run("المدير العام",    "0500000000","admin123",  "admin",      "شركة MKGH", "310000000000003");
-  ins.run("أحمد المراجع",   "0500000001","123456",    "reviewer",   null, null);
-  ins.run("خالد مشرف النقليات","0500000002","123456", "supervisor", null, null);
-  ins.run("محمد المستودع",  "0500000003","123456",    "warehouse",  null, null);
-  ins.run("عبد الهادي السائق","0500000004","123456",  "driver",     null, null);
-  ins.run("سالم المندوب",   "0500000005","123456",    "rep",        null, null);
-  ins.run("عميل تجريبي",    "0555555555","123456",    "customer",   "مؤسسة البناء", "310000000000999");
-  ins.run("عميل ثاني",      "0555555556","123456",    "customer",   "شركة العمارة", null);
+  const ins = db.prepare("INSERT INTO users (name,phone,password,role,company_name,vat_number,approval_status) VALUES (?,?,?,?,?,?,?)");
+  ins.run("المدير العام",          "0500000000","admin123","admin",           "شركة MKGH","310000000000003","approved");
+  ins.run("أحمد المراجع",         "0500000001","123456",  "reviewer",        null,null,"approved");
+  ins.run("خالد مشرف النقليات",   "0500000002","123456",  "supervisor",      null,null,"approved");
+  ins.run("محمد المستودع",        "0500000003","123456",  "warehouse",       null,null,"approved");
+  ins.run("عبد الهادي السائق",    "0500000004","123456",  "driver",          null,null,"approved");
+  ins.run("سالم المندوب",         "0500000005","123456",  "rep",             null,null,"approved");
+  ins.run("فهد مدير الورشة",      "0500000006","123456",  "workshop_manager",null,null,"approved");
+  ins.run("ناصر مسئول المشتريات", "0500000007","123456",  "purchasing",      null,null,"approved");
+  ins.run("عميل تجريبي",          "0555555555","123456",  "customer",        "مؤسسة البناء","310000000000999","approved");
+  ins.run("عميل ثاني",            "0555555556","123456",  "customer",        "شركة العمارة",null,"approved");
 }
+
+// ─── Add workshop_manager + purchasing seed users if missing ─────────────────
+try {
+  if (!db.prepare("SELECT id FROM users WHERE phone='0500000006'").get()) {
+    db.prepare("INSERT INTO users (name,phone,password,role,approval_status,active) VALUES (?,?,?,?,?,?)").run("فهد مدير الورشة","0500000006","123456","workshop_manager","approved",1);
+  }
+  if (!db.prepare("SELECT id FROM users WHERE phone='0500000007'").get()) {
+    db.prepare("INSERT INTO users (name,phone,password,role,approval_status,active) VALUES (?,?,?,?,?,?)").run("ناصر مسئول المشتريات","0500000007","123456","purchasing","approved",1);
+  }
+} catch { /* ignore */ }
 
 const productCount = (db.prepare("SELECT COUNT(*) as c FROM products").get() as {c:number}).c;
 if (productCount === 0) {

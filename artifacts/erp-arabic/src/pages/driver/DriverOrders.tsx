@@ -26,17 +26,30 @@ export default function DriverOrders() {
   const [orders,       setOrders]       = useState<Order[]>([]);
   const [loading,      setLoading]      = useState(true);
   const [balance,      setBalance]      = useState<Balance | null>(null);
-  const [loadingOrder, setLoadingOrder] = useState<Order | null>(null);
-  const [dieselModal,  setDieselModal]  = useState<{ open: boolean; order?: Order }>({ open: false });
-  const [dieselForm,   setDieselForm]   = useState({ amount: "", liters: "", description: "" });
-  const [submitting,   setSubmitting]   = useState(false);
-  const photoRef = useRef<HTMLInputElement>(null);
+  const [loadingOrder,   setLoadingOrder]   = useState<Order | null>(null);
+  const [dieselModal,    setDieselModal]    = useState<{ open: boolean; order?: Order }>({ open: false });
+  const [dieselForm,     setDieselForm]     = useState({ amount: "", liters: "", description: "" });
+  const [submitting,     setSubmitting]     = useState(false);
+  const [breakdownModal, setBreakdownModal] = useState(false);
+  const [bdForm,         setBdForm]         = useState({ type: "", description: "" });
+  const [bdVehicle,      setBdVehicle]      = useState<{ id: number; plate: string } | null>(null);
+  const photoRef    = useRef<HTMLInputElement>(null);
+  const bdPhotoRef  = useRef<HTMLInputElement>(null);
 
   const loadOrders = () => {
     if (!user) return;
     setLoading(true);
     fetch(`/api/workflow/orders?role=driver&phone=${user.phone}`)
-      .then(r => r.json()).then(setOrders).finally(() => setLoading(false));
+      .then(r => r.json())
+      .then(data => {
+        setOrders(Array.isArray(data) ? data : []);
+        // Try to detect vehicle from orders
+        const assigned = Array.isArray(data) ? data.find((o: Order) => ["vehicle_assigned","invoiced","loaded"].includes(o.stage)) : null;
+        if (assigned?.vehicle_plate) {
+          setBdVehicle({ id: 0, plate: assigned.vehicle_plate });
+        }
+      })
+      .finally(() => setLoading(false));
   };
   const loadBalance = () => {
     if (!user) return;
@@ -69,6 +82,29 @@ export default function DriverOrders() {
         body: JSON.stringify({ notes }),
       });
       loadOrders();
+    } catch (err) { alert((err as Error).message); }
+    finally { setSubmitting(false); }
+  };
+
+  const submitBreakdown = async () => {
+    if (!user || !bdForm.type) return;
+    setSubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append("driver_phone", user.phone);
+      fd.append("driver_name",  user.name);
+      fd.append("breakdown_type", bdForm.type);
+      fd.append("description",   bdForm.description);
+      if (bdVehicle) {
+        fd.append("vehicle_id",    String(bdVehicle.id));
+        fd.append("vehicle_plate", bdVehicle.plate);
+      }
+      if (bdPhotoRef.current?.files?.[0]) fd.append("photo", bdPhotoRef.current.files[0]);
+      const res = await fetch("/api/workflow/breakdown-reports", { method: "POST", body: fd });
+      if (!res.ok) throw new Error((await res.json()).error);
+      setBreakdownModal(false);
+      setBdForm({ type: "", description: "" });
+      alert("تم إرسال بلاغ العطل للمشرف ومدير الورشة");
     } catch (err) { alert((err as Error).message); }
     finally { setSubmitting(false); }
   };
@@ -114,7 +150,7 @@ export default function DriverOrders() {
             className="p-2.5 border border-gray-200 rounded-xl hover:bg-gray-50 transition-colors">
             <RefreshCw size={15} className={loading ? "animate-spin text-gray-400" : "text-gray-400"} />
           </button>
-          <button onClick={() => alert("تم تسجيل بلاغ العطل. تواصل مع المشرف.")}
+          <button onClick={() => setBreakdownModal(true)}
             className="flex items-center gap-2 bg-red-100 text-red-600 hover:bg-red-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors">
             <AlertTriangle size={15} />الإبلاغ عن عطل
           </button>
@@ -421,6 +457,68 @@ export default function DriverOrders() {
               <button onClick={addDiesel} disabled={submitting || !dieselForm.amount}
                 className="flex-1 flex items-center justify-center gap-2 py-3 bg-orange-500 hover:bg-orange-600 text-white rounded-xl text-sm font-bold disabled:opacity-50 transition-colors">
                 <Save size={15} />{submitting ? "جاري الحفظ..." : "تسجيل المصروف"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* ── Breakdown modal ── */}
+      {breakdownModal && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md" dir="rtl">
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-gray-100">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={20} className="text-red-500" />
+                <h2 className="font-black text-lg">الإبلاغ عن عطل</h2>
+              </div>
+              <button onClick={() => setBreakdownModal(false)} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
+                <X size={18} className="text-gray-500" />
+              </button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              {bdVehicle && (
+                <div className="bg-red-50 rounded-xl px-4 py-3 text-sm text-red-700 border border-red-200 flex items-center gap-2">
+                  <AlertTriangle size={13} />
+                  <span>السيارة: <strong>{bdVehicle.plate}</strong></span>
+                </div>
+              )}
+              <div>
+                <label className="text-sm font-bold text-gray-700 block mb-2">نوع العطل *</label>
+                <div className="grid grid-cols-2 gap-2">
+                  {["ميكانيكي","كهربائي","حادث","إطارات","أخرى"].map(t => (
+                    <button key={t} type="button"
+                      onClick={() => setBdForm(f => ({ ...f, type: t }))}
+                      className={`py-2.5 rounded-xl text-sm font-semibold border transition-all ${
+                        bdForm.type === t
+                          ? "bg-red-600 text-white border-red-600 shadow-sm"
+                          : "bg-gray-50 text-gray-700 border-gray-200 hover:border-gray-300"
+                      }`}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-bold text-gray-700 block mb-1.5">وصف العطل</label>
+                <textarea value={bdForm.description}
+                  onChange={e => setBdForm(f => ({ ...f, description: e.target.value }))}
+                  rows={3} placeholder="صف المشكلة بالتفصيل..."
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-400 resize-none" />
+              </div>
+              <div>
+                <label className="text-sm font-bold text-gray-700 block mb-1.5">صورة العطل</label>
+                <input ref={bdPhotoRef} type="file" accept="image/*" capture="environment"
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-red-600 file:text-white" />
+              </div>
+            </div>
+            <div className="flex gap-3 px-6 pb-6">
+              <button onClick={() => setBreakdownModal(false)}
+                className="flex-1 py-3 border border-gray-200 rounded-xl text-sm font-medium text-gray-600">
+                إلغاء
+              </button>
+              <button onClick={submitBreakdown} disabled={submitting || !bdForm.type}
+                className="flex-1 flex items-center justify-center gap-2 py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-bold disabled:opacity-50 transition-colors">
+                <AlertTriangle size={14} />{submitting ? "جاري الإرسال..." : "إرسال البلاغ"}
               </button>
             </div>
           </div>

@@ -25,12 +25,14 @@ pnpm workspace monorepo. Full multi-role logistics platform for MKGH cement/cons
 
 | Role | Phone | Password | Access |
 |---|---|---|---|
-| admin (مدير) | 0500000000 | admin123 | All pages + ERP |
+| admin (مدير) | 0500000000 | admin123 | All pages |
 | reviewer (مراجع) | 0500000001 | 123456 | Order review + payment confirm |
 | supervisor (مشرف نقليات) | 0500000002 | 123456 | Vehicle assignment |
 | warehouse (مستودع) | 0500000003 | 123456 | Invoice issuance |
-| driver (سائق) | 0500000004 | 123456 | Loading + delivery |
+| driver (سائق) | 0500000004 | 123456 | Loading + delivery + breakdown report |
 | rep (مندوب) | 0500000005 | 123456 | Customer orders tracking |
+| workshop_manager (مدير الورشة) | 0500000006 | 123456 | Breakdown reports + resolve |
+| purchasing (مسئول المشتريات) | 0500000007 | 123456 | Employee portal |
 | customer (عميل) | 0555555555 | 123456 | Product catalog + orders + account |
 
 ## Order Workflow

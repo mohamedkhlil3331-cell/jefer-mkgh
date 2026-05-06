@@ -33,19 +33,8 @@ import AdminApprovalsPage from "@/pages/admin/AdminApprovalsPage";
 import UsersPage from "@/pages/admin/UsersPage";
 import ReportsPage from "@/pages/admin/ReportsPage";
 import EmployeePortal from "@/pages/employee/EmployeePortal";
+import WorkshopManagerPage from "@/pages/workshop/WorkshopManagerPage";
 import AIChatWidget from "@/components/AIChatWidget";
-
-// Legacy ERP pages
-import ErpDashboard from "@/pages/Dashboard";
-import Invoices from "@/pages/Invoices";
-import Trips from "@/pages/Trips";
-import FleetExpenses from "@/pages/FleetExpenses";
-import PettyCash from "@/pages/PettyCash";
-import Orders from "@/pages/Orders";
-import Vehicles from "@/pages/Vehicles";
-import Workshop from "@/pages/Workshop";
-import Employees from "@/pages/Employees";
-import Leaves from "@/pages/Leaves";
 
 const queryClient = new QueryClient();
 
@@ -96,21 +85,10 @@ function AppRoutes() {
       <Route path="/approvals" component={AdminApprovalsPage} />
       <Route path="/tariffs" component={TariffsPage} />
       <Route path="/drivers-manage" component={DriversPage} />
+      <Route path="/workshop-manager" component={WorkshopManagerPage} />
 
       {/* Shared */}
       <Route path="/notifications" component={Notifications} />
-
-      {/* Legacy ERP (admin only) */}
-      <Route path="/erp" component={ErpDashboard} />
-      <Route path="/erp/invoices" component={Invoices} />
-      <Route path="/erp/trips" component={Trips} />
-      <Route path="/erp/fleet-expenses" component={FleetExpenses} />
-      <Route path="/erp/petty-cash" component={PettyCash} />
-      <Route path="/erp/orders" component={Orders} />
-      <Route path="/erp/vehicles" component={Vehicles} />
-      <Route path="/erp/workshop" component={Workshop} />
-      <Route path="/erp/employees" component={Employees} />
-      <Route path="/erp/leaves" component={Leaves} />
 
       <Route>
         <div className="flex items-center justify-center h-64 text-muted-foreground">الصفحة غير موجودة</div>

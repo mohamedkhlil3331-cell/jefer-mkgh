@@ -217,13 +217,71 @@ router.put("/workflow/orders/:id/deliver", (req, res) => {
   res.json({ message: "تم تسجيل التسليم" });
 });
 
-// ── Driver: report vehicle breakdown ────────────────────────────────────────
+// ── Driver: report vehicle breakdown (legacy simple) ────────────────────────
 router.put("/workflow/vehicles/:vehicleId/break", (req, res) => {
   const { notes } = req.body;
   db.prepare("UPDATE driver_profiles SET status='موقوف', notes=? WHERE id=?").run(notes||"عطل مُبلَّغ عنه من السائق", req.params.vehicleId);
   const supervisors = db.prepare("SELECT phone FROM users WHERE role = 'supervisor'").all() as {phone: string}[];
   supervisors.forEach(s => notify(s.phone, "عطل في سيارة", `تم الإبلاغ عن عطل في السيارة رقم ${req.params.vehicleId}`));
   res.json({ message: "تم الإبلاغ عن العطل" });
+});
+
+// ── Driver: submit breakdown report with photo + type ────────────────────────
+router.post("/workflow/breakdown-reports", upload.single("photo"), (req, res) => {
+  const { driver_phone, driver_name, vehicle_id, vehicle_plate, breakdown_type, description } = req.body;
+  if (!driver_phone || !breakdown_type) return void res.status(400).json({ error: "البيانات غير مكتملة" });
+
+  const photo_url = req.file ? `/api/uploads/${req.file.filename}` : null;
+
+  // Mark vehicle as broken in driver_profiles
+  if (vehicle_id) {
+    db.prepare("UPDATE driver_profiles SET status='موقوف' WHERE id=?").run(vehicle_id);
+  }
+
+  const result = db.prepare(`
+    INSERT INTO breakdown_reports (driver_phone, driver_name, vehicle_id, vehicle_plate, breakdown_type, description, photo_url)
+    VALUES (?,?,?,?,?,?,?)
+  `).run(driver_phone, driver_name||null, vehicle_id||null, vehicle_plate||null, breakdown_type, description||null, photo_url);
+
+  // Notify supervisors and workshop managers
+  const toNotify = db.prepare("SELECT phone FROM users WHERE role IN ('supervisor','workshop_manager') AND active=1").all() as {phone: string}[];
+  const msg = `بلاغ عطل من ${driver_name||driver_phone} — السيارة: ${vehicle_plate||"غير محدد"} — النوع: ${breakdown_type}`;
+  toNotify.forEach(u => notify(u.phone, "بلاغ عطل جديد", msg));
+
+  res.status(201).json({ id: result.lastInsertRowid, message: "تم إرسال بلاغ العطل" });
+});
+
+// ── GET breakdown reports (supervisor + workshop_manager) ────────────────────
+router.get("/workflow/breakdown-reports", (req, res) => {
+  const { status } = req.query as Record<string, string>;
+  let sql = "SELECT * FROM breakdown_reports WHERE 1=1";
+  const params: string[] = [];
+  if (status) { sql += " AND status=?"; params.push(status); }
+  sql += " ORDER BY created_at DESC";
+  res.json(db.prepare(sql).all(...params));
+});
+
+// ── PUT breakdown report: resolve ────────────────────────────────────────────
+router.put("/workflow/breakdown-reports/:id/resolve", (req, res) => {
+  const { resolved_by, resolve_notes } = req.body;
+  const report = db.prepare("SELECT * FROM breakdown_reports WHERE id=?").get(req.params.id) as Record<string, unknown> | undefined;
+  if (!report) return void res.status(404).json({ error: "البلاغ غير موجود" });
+
+  db.prepare(`
+    UPDATE breakdown_reports SET status='resolved', resolved_by=?, resolve_notes=?, resolved_at=datetime('now') WHERE id=?
+  `).run(resolved_by||null, resolve_notes||null, req.params.id);
+
+  // Free vehicle if it was broken
+  if (report.vehicle_id) {
+    db.prepare("UPDATE driver_profiles SET status='نشط' WHERE id=? AND status='موقوف'").run(report.vehicle_id);
+  }
+
+  // Notify the driver
+  if (report.driver_phone) {
+    notify(report.driver_phone as string, "تم حل العطل", `تم إصلاح عطل السيارة ${report.vehicle_plate||""} وهي جاهزة للعمل`);
+  }
+
+  res.json({ message: "تم تسجيل الحل" });
 });
 
 // ── Cancel order ─────────────────────────────────────────────────────────────

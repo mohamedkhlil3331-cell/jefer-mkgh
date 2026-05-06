@@ -15,8 +15,8 @@ interface Summary {
   total_gross: number; total_vat: number; total_net: number;
 }
 
-function fmt(n: number) { return n.toLocaleString("ar-SA", { minimumFractionDigits: 0 }); }
-function fmtSAR(n: number) { return `${fmt(n)} ر.س`; }
+function fmt(n: number | null | undefined) { return (n ?? 0).toLocaleString("ar-SA", { minimumFractionDigits: 0 }); }
+function fmtSAR(n: number | null | undefined) { return `${fmt(n)} ر.س`; }
 
 const MATERIALS = ["اسمنت", "رمل", "حصى", "حجر", "حديد", "خشب", "أخرى"];
 

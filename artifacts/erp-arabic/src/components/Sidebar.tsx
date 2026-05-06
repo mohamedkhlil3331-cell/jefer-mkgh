@@ -108,19 +108,18 @@ const ADMIN_GROUPS: NavGroup[] = [
   },
 ];
 
-const ERP_NAV = [
-  { href: "/erp/invoices",       labelKey: "navLegacyErp", icon: FileText,     label: "الفواتير" },
-  { href: "/erp/trips",          labelKey: "",              icon: Truck,        label: "الردود" },
-  { href: "/erp/fleet-expenses", labelKey: "",              icon: Wallet,       label: "مصاريف الأسطول" },
-  { href: "/erp/petty-cash",     labelKey: "",              icon: Wallet,       label: "العهدة" },
-  { href: "/erp/orders",         labelKey: "",              icon: ShoppingCart, label: "الطلبات (ERP)" },
-  { href: "/erp/vehicles",       labelKey: "",              icon: Car,          label: "المركبات" },
-  { href: "/erp/workshop",       labelKey: "",              icon: Wrench,       label: "الورشة" },
-  { href: "/erp/employees",      labelKey: "",              icon: Users,        label: "الموظفون" },
-  { href: "/erp/leaves",         labelKey: "",              icon: CalendarDays, label: "طلبات الإجازة" },
-];
 
 const EMPLOYEE_NAV: NavItem[] = [
+  { href: "/employee-portal", labelKey: "navEmployeePortal", icon: Users },
+  { href: "/notifications",   labelKey: "navNotifications",  icon: Bell },
+];
+
+const WORKSHOP_MANAGER_NAV: NavItem[] = [
+  { href: "/employee-portal",   labelKey: "navEmployeePortal", icon: Users },
+  { href: "/workshop-manager",  labelKey: "navWorkshopMgr",    icon: Wrench },
+  { href: "/notifications",     labelKey: "navNotifications",  icon: Bell },
+];
+const PURCHASING_NAV: NavItem[] = [
   { href: "/employee-portal", labelKey: "navEmployeePortal", icon: Users },
   { href: "/notifications",   labelKey: "navNotifications",  icon: Bell },
 ];
@@ -128,12 +127,14 @@ const EMPLOYEE_NAV: NavItem[] = [
 const ROLE_NAV: Record<string, NavItem[]> = {
   customer: CUSTOMER_NAV, reviewer: REVIEWER_NAV, supervisor: SUPERVISOR_NAV,
   warehouse: WAREHOUSE_NAV, driver: DRIVER_NAV, rep: REP_NAV, employee: EMPLOYEE_NAV,
+  workshop_manager: WORKSHOP_MANAGER_NAV, purchasing: PURCHASING_NAV,
 };
 
 const ROLE_COLOR: Record<string, string> = {
   customer: "bg-blue-600", reviewer: "bg-indigo-600", supervisor: "bg-orange-600",
   warehouse: "bg-green-600", driver: "bg-yellow-600", rep: "bg-pink-600",
   admin: "bg-purple-600", employee: "bg-teal-600",
+  workshop_manager: "bg-red-700", purchasing: "bg-cyan-600",
 };
 
 /* ─── NavLink ─────────────────────────────────────────────────────────────── */
@@ -273,11 +274,11 @@ export default function Sidebar() {
         {isAdmin ? (
           ADMIN_GROUPS.map(group => <CollapsibleGroup key={group.key} group={group} onClose={close} />)
         ) : (
-          flatNav.map(item => <NavLink key={item.href} {...item} onClose={close} />)
+          flatNav.filter(item => item.href !== "/notifications").map(item => <NavLink key={item.href} {...item} onClose={close} />)
         )}
 
-        {/* Notifications */}
-        {user && (
+        {/* Notifications — always shown with unread badge */}
+        {user && user.role !== "customer" && (
           <Link href="/notifications" onClick={close}>
             <div className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer transition-all
               ${location === "/notifications" ? "bg-blue-600 text-white font-semibold shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
@@ -288,26 +289,6 @@ export default function Sidebar() {
           </Link>
         )}
 
-        {/* ERP legacy */}
-        {isAdmin && (
-          <>
-            <div className="pt-4 pb-1 px-3">
-              <div className="text-xs font-bold text-muted-foreground uppercase tracking-widest">{t("navLegacyErp")}</div>
-            </div>
-            {ERP_NAV.map(({ href, icon: Icon, label }) => {
-              const active = location.startsWith(href);
-              return (
-                <Link key={href} href={href} onClick={close}>
-                  <div className={`flex items-center gap-3 px-3 py-2 rounded-xl cursor-pointer transition-all
-                    ${active ? "bg-primary/10 text-primary font-medium" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}>
-                    <Icon size={15} />
-                    <span className="text-xs">{label}</span>
-                  </div>
-                </Link>
-              );
-            })}
-          </>
-        )}
       </div>
 
       {/* Footer */}
