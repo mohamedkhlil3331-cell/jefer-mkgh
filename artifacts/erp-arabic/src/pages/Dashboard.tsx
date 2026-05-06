@@ -55,7 +55,7 @@ export default function Dashboard() {
   return (
     <div dir="rtl" className="space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-black text-gray-900 flex items-center gap-2">
             <BarChart3 size={22} className="text-[#103c68]" />لوحة التحكم
@@ -68,7 +68,7 @@ export default function Dashboard() {
       </div>
 
       {/* KPI grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         {[
           { label: "إجمالي المركبات", val: fmt(totalVehicles),   icon: Car,       color: "bg-[#103c68] text-white", href: "/vehicles"  },
           { label: "مركبات متاحة",    val: fmt(vMap.available),  icon: Car,       color: "bg-green-600 text-white", href: "/vehicles"  },
@@ -94,7 +94,7 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
         {/* Vehicle status bars */}
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
           <div className="flex items-center justify-between mb-4">
@@ -137,7 +137,7 @@ export default function Dashboard() {
               </span>
             </Link>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {[
               { key: "new",         label: "جديد",        color: "bg-blue-100 text-blue-800 border-blue-200"       },
               { key: "in_progress", label: "جاري",        color: "bg-amber-100 text-amber-800 border-amber-200"   },

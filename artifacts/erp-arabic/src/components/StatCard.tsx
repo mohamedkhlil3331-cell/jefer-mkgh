@@ -19,7 +19,7 @@ const COLORS = {
 export default function StatCard({ label, value, icon: Icon, color = "blue", sub }: Props) {
   const c = COLORS[color];
   return (
-    <div className={`${c.bg} rounded-xl p-4 flex items-center gap-4`}>
+    <div className={`${c.bg} rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4`}>
       <div className={`${c.icon} rounded-lg p-3 flex-shrink-0`}>
         <Icon size={22} />
       </div>

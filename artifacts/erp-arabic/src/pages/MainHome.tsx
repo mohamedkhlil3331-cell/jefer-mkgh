@@ -24,7 +24,7 @@ function AdminSummaryCards({ stats }: { stats: Stats }) {
     { label: "إشعارات جديدة",     val: stats.notifications,      icon: Bell,          color: "bg-red-500 text-white",   href: "/notifications"},
   ];
   return (
-    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
       {cards.map(({ label, val, icon: Icon, color, href }) => (
         <Link key={label} href={href}>
           <div className={`${color} rounded-2xl p-4 flex items-center gap-3 cursor-pointer hover:opacity-90 transition-opacity shadow-sm`}>
@@ -77,7 +77,7 @@ function AdminInternalHome() {
         <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
           <Star size={16} className="text-amber-500" />وصول سريع للإدارة
         </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
           {quickLinks.map(({ href, icon: Icon, label, color }) => (
             <Link key={href} href={href}>
               <button className="w-full flex items-center gap-2.5 p-3.5 rounded-xl hover:bg-gray-50 border border-gray-100 hover:border-[#103c68]/20 transition-all group text-start">
@@ -115,7 +115,7 @@ export default function MainHome() {
 
   return (
     <div className="space-y-5" dir="rtl">
-      <div className="flex gap-1.5 bg-gray-100 p-1.5 rounded-2xl w-fit">
+      <div className="flex gap-1.5 bg-gray-100 p-1.5 rounded-2xl w-full sm:w-fit overflow-x-auto">
         <button onClick={() => setTab("customer")}
           className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
             tab === "customer" ? "bg-white text-[#103c68] shadow-sm" : "text-gray-500 hover:text-gray-700"
