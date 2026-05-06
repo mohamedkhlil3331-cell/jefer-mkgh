@@ -1,16 +1,42 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useLocation, useParams } from "wouter";
 import { useAuth } from "@/context/AuthContext";
+import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import {
   MapPin, Locate, ChevronRight, Package, Star, CheckCircle,
-  Hash, Truck, Users, Calculator,
+  Hash, Truck, Users, Calculator, Search, X,
 } from "lucide-react";
+
+// Fix leaflet default icon paths broken by bundlers
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl:       "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl:     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
 
 interface Product {
   id: number; name: string; price_per_unit: number; unit: string;
   description: string; image_url: string; avg_rating: number; review_count: number;
 }
 interface Rep { id: number; name: string; phone: string; }
+
+// ── Inner: handle map clicks to place/move pin ────────────────────────────
+function MapClickHandler({ onPick }: { onPick: (lat: number, lng: number) => void }) {
+  useMapEvents({ click(e) { onPick(e.latlng.lat, e.latlng.lng); } });
+  return null;
+}
+
+// ── Inner: fly to a position when lat/lng change ──────────────────────────
+function MapFlyTo({ lat, lng }: { lat: number; lng: number }) {
+  const map = useMap();
+  useEffect(() => { map.flyTo([lat, lng], Math.max(map.getZoom(), 13), { duration: 0.8 }); }, [lat, lng, map]);
+  return null;
+}
+
+// Default center: Riyadh
+const DEFAULT_CENTER: [number, number] = [24.7136, 46.6753];
 
 export default function PlaceOrder() {
   const { id: productId } = useParams<{ id: string }>();
@@ -23,6 +49,12 @@ export default function PlaceOrder() {
   const [success,    setSuccess]    = useState<string | null>(null);
   const [locating,   setLocating]   = useState(false);
 
+  // Address search
+  const [searchQuery,    setSearchQuery]    = useState("");
+  const [searching,      setSearching]      = useState(false);
+  const [searchResults,  setSearchResults]  = useState<{ display_name: string; lat: string; lon: string }[]>([]);
+  const searchRef = useRef<HTMLDivElement>(null);
+
   const [form, setForm] = useState({
     quantity: "1",
     rep_id: "",
@@ -32,6 +64,11 @@ export default function PlaceOrder() {
     destination_type: "مستودع",
   });
 
+  // Derived: current pin position
+  const pinLat = form.delivery_lat ? parseFloat(form.delivery_lat) : null;
+  const pinLng = form.delivery_lng ? parseFloat(form.delivery_lng) : null;
+  const pinPos: [number, number] | null = (pinLat !== null && pinLng !== null) ? [pinLat, pinLng] : null;
+
   useEffect(() => {
     Promise.all([
       fetch(`/api/products/${productId}`).then(r => r.json()),
@@ -39,21 +76,86 @@ export default function PlaceOrder() {
     ]).then(([p, r]) => { setProduct(p); setReps(r); }).finally(() => setLoading(false));
   }, [productId]);
 
+  // Close search dropdown on outside click
+  useEffect(() => {
+    function handle(e: MouseEvent) {
+      if (searchRef.current && !searchRef.current.contains(e.target as Node)) {
+        setSearchResults([]);
+      }
+    }
+    document.addEventListener("mousedown", handle);
+    return () => document.removeEventListener("mousedown", handle);
+  }, []);
+
+  // Reverse geocode to get address label from lat/lng
+  const reverseGeocode = useCallback(async (lat: number, lng: number) => {
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&accept-language=ar`,
+        { headers: { "Accept-Language": "ar" } }
+      );
+      const data = await res.json();
+      if (data.display_name) {
+        setForm(f => ({ ...f, delivery_location: data.display_name }));
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  // Handle map click: place/move pin
+  const handleMapPick = useCallback((lat: number, lng: number) => {
+    setForm(f => ({
+      ...f,
+      delivery_lat: String(lat),
+      delivery_lng: String(lng),
+    }));
+    reverseGeocode(lat, lng);
+  }, [reverseGeocode]);
+
+  // Handle GPS button
   const getLocation = () => {
     if (!navigator.geolocation) return alert("المتصفح لا يدعم تحديد الموقع");
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       pos => {
-        setForm(f => ({
-          ...f,
-          delivery_lat: String(pos.coords.latitude),
-          delivery_lng: String(pos.coords.longitude),
-          delivery_location: f.delivery_location || `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`,
-        }));
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        setForm(f => ({ ...f, delivery_lat: String(lat), delivery_lng: String(lng) }));
+        reverseGeocode(lat, lng);
         setLocating(false);
       },
       () => { alert("تعذر تحديد الموقع"); setLocating(false); }
     );
+  };
+
+  // Nominatim forward geocoding search
+  const handleSearch = async () => {
+    if (!searchQuery.trim()) return;
+    setSearching(true);
+    setSearchResults([]);
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5&accept-language=ar`,
+        { headers: { "Accept-Language": "ar" } }
+      );
+      const data = await res.json();
+      setSearchResults(data);
+    } catch { /* ignore */ }
+    finally { setSearching(false); }
+  };
+
+  const selectSearchResult = (r: { display_name: string; lat: string; lon: string }) => {
+    setForm(f => ({
+      ...f,
+      delivery_lat: r.lat,
+      delivery_lng: r.lon,
+      delivery_location: r.display_name,
+    }));
+    setSearchResults([]);
+    setSearchQuery("");
+  };
+
+  const clearPin = () => {
+    setForm(f => ({ ...f, delivery_lat: "", delivery_lng: "", delivery_location: "" }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -66,18 +168,18 @@ export default function PlaceOrder() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          customer_phone:   user.phone,
-          customer_name:    user.name,
-          rep_id:           form.rep_id || null,
-          product_id:       product.id,
-          product_name:     product.name,
-          quantity:         qty,
-          unit:             product.unit,
-          unit_price:       product.price_per_unit,
-          delivery_location:form.delivery_location,
-          delivery_lat:     form.delivery_lat || null,
-          delivery_lng:     form.delivery_lng || null,
-          destination_type: form.destination_type,
+          customer_phone:    user.phone,
+          customer_name:     user.name,
+          rep_id:            form.rep_id || null,
+          product_id:        product.id,
+          product_name:      product.name,
+          quantity:          qty,
+          unit:              product.unit,
+          unit_price:        product.price_per_unit,
+          delivery_location: form.delivery_location,
+          delivery_lat:      form.delivery_lat || null,
+          delivery_lng:      form.delivery_lng || null,
+          destination_type:  form.destination_type,
         }),
       });
       const data = await res.json();
@@ -223,6 +325,8 @@ export default function PlaceOrder() {
               <MapPin size={16} className="text-red-500" />
               <h3 className="font-bold text-gray-900">موقع التسليم</h3>
             </div>
+
+            {/* Destination type pills */}
             <div className="mb-4">
               <label className="block text-sm font-semibold text-gray-700 mb-2">التسليم إلى</label>
               <div className="flex gap-2">
@@ -240,22 +344,86 @@ export default function PlaceOrder() {
               </div>
             </div>
 
+            {/* Address search */}
+            <div className="mb-3" ref={searchRef}>
+              <label className="block text-sm font-semibold text-gray-700 mb-1.5">ابحث عن الموقع بالعنوان</label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && (e.preventDefault(), handleSearch())}
+                  placeholder="مثال: الرياض، حي النخيل..."
+                  className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/30"
+                />
+                <button type="button" onClick={handleSearch} disabled={searching || !searchQuery.trim()}
+                  className="px-4 py-2.5 bg-[#103c68] text-white rounded-xl hover:bg-[#0d2e50] disabled:opacity-50 transition-colors flex items-center gap-1.5 text-sm font-semibold">
+                  <Search size={14} />{searching ? "..." : "بحث"}
+                </button>
+              </div>
+              {/* Search results dropdown */}
+              {searchResults.length > 0 && (
+                <div className="mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden z-50 relative">
+                  {searchResults.map((r, i) => (
+                    <button key={i} type="button" onClick={() => selectSearchResult(r)}
+                      className="w-full text-right px-4 py-3 text-sm text-gray-700 hover:bg-[#103c68]/5 border-b border-gray-100 last:border-0 transition-colors line-clamp-2">
+                      {r.display_name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Map */}
+            <div className="mb-3 rounded-xl overflow-hidden border border-gray-200" style={{ height: 240, zIndex: 0 }}>
+              <MapContainer
+                center={pinPos ?? DEFAULT_CENTER}
+                zoom={pinPos ? 14 : 6}
+                style={{ height: "100%", width: "100%" }}
+                scrollWheelZoom={false}
+              >
+                <TileLayer
+                  attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                  url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                />
+                <MapClickHandler onPick={handleMapPick} />
+                {pinPos && (
+                  <>
+                    <MapFlyTo lat={pinPos[0]} lng={pinPos[1]} />
+                    <Marker position={pinPos} />
+                  </>
+                )}
+              </MapContainer>
+            </div>
+            <p className="text-xs text-gray-400 mb-3 text-center">اضغط على الخريطة لتحديد موقع التسليم</p>
+
+            {/* GPS button */}
+            <button type="button" onClick={getLocation} disabled={locating}
+              className="flex items-center gap-2 text-sm text-[#103c68] hover:text-[#0d2e50] font-semibold disabled:opacity-60 transition-colors mb-3">
+              <Locate size={15} />{locating ? "جاري تحديد الموقع..." : "استخدام موقعي الحالي تلقائياً"}
+            </button>
+
+            {/* Pin confirmed badge */}
+            {pinPos && (
+              <div className="flex items-center justify-between bg-green-50 border border-green-200 px-3 py-2 rounded-xl mb-3">
+                <div className="flex items-center gap-1.5 text-xs text-green-700">
+                  <CheckCircle size={12} />
+                  <span>تم تثبيت الدبوس: {pinPos[0].toFixed(5)}, {pinPos[1].toFixed(5)}</span>
+                </div>
+                <button type="button" onClick={clearPin} className="text-gray-400 hover:text-red-500 transition-colors">
+                  <X size={14} />
+                </button>
+              </div>
+            )}
+
+            {/* Address text field */}
             <div>
-              <label className="block text-sm font-semibold text-gray-700 mb-1.5">عنوان التسليم *</label>
+              <label className="block text-sm font-semibold text-gray-700 mb-1.5">عنوان التسليم التفصيلي *</label>
               <textarea required rows={2}
                 value={form.delivery_location}
                 onChange={e => setForm(f => ({ ...f, delivery_location: e.target.value }))}
-                placeholder="اكتب العنوان التفصيلي أو اضغط تحديد الموقع..."
+                placeholder="يُملأ تلقائياً عند تحديد الموقع، أو اكتبه يدوياً..."
                 className="w-full border border-gray-200 rounded-xl px-4 py-3 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/30 resize-none" />
-              <button type="button" onClick={getLocation} disabled={locating}
-                className="mt-2 flex items-center gap-2 text-sm text-[#103c68] hover:text-[#0d2e50] font-semibold disabled:opacity-60 transition-colors">
-                <Locate size={15} />{locating ? "جاري تحديد الموقع..." : "تحديد موقعي الحالي تلقائياً"}
-              </button>
-              {form.delivery_lat && (
-                <div className="mt-2 flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-200 px-3 py-2 rounded-xl">
-                  <CheckCircle size={12} />تم تحديد الموقع: {parseFloat(form.delivery_lat).toFixed(5)}, {parseFloat(form.delivery_lng).toFixed(5)}
-                </div>
-              )}
             </div>
           </div>
 
