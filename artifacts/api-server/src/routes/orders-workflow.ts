@@ -42,8 +42,13 @@ router.get("/workflow/orders", (req, res) => {
 });
 
 router.get("/workflow/orders/:id", (req, res) => {
-  const order = db.prepare("SELECT * FROM workflow_orders WHERE id = ?").get(req.params.id);
+  const order = db.prepare("SELECT * FROM workflow_orders WHERE id = ?").get(req.params.id) as Record<string, unknown> | undefined;
   if (!order) return void res.status(404).json({ error: "الطلب غير موجود" });
+  // If caller identifies as customer, verify ownership
+  const { customer_phone } = req.query as Record<string, string>;
+  if (customer_phone && order.customer_phone !== customer_phone) {
+    return void res.status(403).json({ error: "غير مصرح" });
+  }
   res.json(order);
 });
 

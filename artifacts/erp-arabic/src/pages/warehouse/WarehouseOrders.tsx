@@ -3,7 +3,7 @@ import { useAuth } from "@/context/AuthContext";
 import {
   FileText, Package, Truck, CheckCircle, Clock, AlertTriangle,
   RefreshCw, X, Upload, BarChart3, Warehouse, ArrowUpDown,
-  TrendingDown, Search, Eye, ChevronDown,
+  TrendingDown, Search, Eye, ChevronDown, Edit2, Save, XCircle,
 } from "lucide-react";
 
 interface Order {
@@ -41,19 +41,31 @@ const STAGE_COLOR: Record<string, string> = {
   delivered:        "bg-green-50 text-green-700 border-green-200",
 };
 
+interface Product {
+  id: number; name: string; unit: string; category: string | null;
+  stock: number; price_per_unit: number; active: number;
+}
+
 export default function WarehouseOrders() {
   const { user } = useAuth();
-  const [orders,     setOrders]     = useState<Order[]>([]);
-  const [warehouses, setWarehouses] = useState<WarehouseInfo[]>([]);
-  const [items,      setItems]      = useState<WarehouseItem[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [tab,        setTab]        = useState<"dashboard"|"pending"|"history"|"inventory">("dashboard");
+  const [orders,      setOrders]      = useState<Order[]>([]);
+  const [warehouses,  setWarehouses]  = useState<WarehouseInfo[]>([]);
+  const [items,       setItems]       = useState<WarehouseItem[]>([]);
+  const [products,    setProducts]    = useState<Product[]>([]);
+  const [loading,     setLoading]     = useState(true);
+  const [tab,         setTab]         = useState<"dashboard"|"pending"|"history"|"inventory">("dashboard");
 
   const [selectedOrder, setSelectedOrder]   = useState<Order | null>(null);
   const [invoiceNum,    setInvoiceNum]       = useState("");
   const [submitting,    setSubmitting]       = useState(false);
   const [searchHistory, setSearchHistory]   = useState("");
   const [expandedWh,    setExpandedWh]       = useState<number | null>(null);
+
+  // Stock editing state: productId → draft value
+  const [editingStock, setEditingStock] = useState<Record<number, string>>({});
+  const [savingStock,  setSavingStock]  = useState<number | null>(null);
+  const [stockSearch,  setStockSearch]  = useState("");
+
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
@@ -61,12 +73,44 @@ export default function WarehouseOrders() {
     Promise.all([
       fetch("/api/workflow/orders?role=warehouse").then(r => r.json()),
       fetch("/api/warehouses").then(r => r.json()),
-    ]).then(([o, w]) => {
+      fetch("/api/products/all").then(r => r.json()),
+    ]).then(([o, w, p]) => {
       setOrders(Array.isArray(o) ? o : []);
       setWarehouses(Array.isArray(w) ? w : []);
+      setProducts(Array.isArray(p) ? p : []);
     }).finally(() => setLoading(false));
   };
   useEffect(load, []);
+
+  const startEdit = (p: Product) =>
+    setEditingStock(prev => ({ ...prev, [p.id]: String(p.stock) }));
+
+  const cancelEdit = (id: number) =>
+    setEditingStock(prev => { const n = { ...prev }; delete n[id]; return n; });
+
+  const saveStock = async (p: Product) => {
+    const val = parseInt(editingStock[p.id] ?? "");
+    if (isNaN(val) || val < 0) return;
+    setSavingStock(p.id);
+    try {
+      const res = await fetch(`/api/products/${p.id}/stock`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stock: val }),
+      });
+      if (!res.ok) throw new Error((await res.json()).error);
+      setProducts(prev => prev.map(x => x.id === p.id ? { ...x, stock: val } : x));
+      cancelEdit(p.id);
+    } catch { alert("فشل تحديث المخزون"); }
+    finally { setSavingStock(null); }
+  };
+
+  const filteredProducts = useMemo(() => {
+    const q = stockSearch.toLowerCase();
+    return products.filter(p =>
+      !q || p.name.toLowerCase().includes(q) || (p.category || "").toLowerCase().includes(q)
+    );
+  }, [products, stockSearch]);
 
   const loadWarehouseItems = async (whId: number) => {
     if (expandedWh === whId) { setExpandedWh(null); return; }
@@ -349,106 +393,112 @@ export default function WarehouseOrders() {
       {/* ══════════════════════════════ INVENTORY TAB ══════════════════════════════ */}
       {tab === "inventory" && (
         <div className="space-y-4">
-          {warehouses.length === 0 ? (
-            <div className="text-center py-12 bg-white rounded-2xl border border-gray-100 text-gray-400">لا توجد مستودعات</div>
-          ) : warehouses.map(wh => (
-            <div key={wh.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-              {/* Warehouse header */}
-              <button
-                className="w-full px-5 py-4 flex items-center justify-between hover:bg-gray-50 transition-colors text-right"
-                onClick={() => loadWarehouseItems(wh.id)}>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-[#103c68]/10 flex items-center justify-center flex-shrink-0">
-                    <Warehouse size={18} className="text-[#103c68]" />
-                  </div>
-                  <div>
-                    <div className="font-bold text-gray-900">{wh.name}</div>
-                    <div className="text-xs text-gray-400">{wh.location}</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-left hidden sm:block">
-                    <div className="text-xs text-gray-400">المخزون الإجمالي</div>
-                    <div className="font-bold text-[#103c68]">{wh.total_stock?.toLocaleString("ar-SA")} وحدة</div>
-                  </div>
-                  <div className="text-left hidden sm:block">
-                    <div className="text-xs text-gray-400">الطاقة الاستيعابية</div>
-                    <div className="font-bold text-gray-600">{wh.capacity?.toLocaleString("ar-SA")}</div>
-                  </div>
-                  <ChevronDown
-                    size={18}
-                    className={`text-gray-400 transition-transform ${expandedWh === wh.id ? "rotate-180" : ""}`}
-                  />
-                </div>
-              </button>
 
-              {/* Progress bar */}
-              {wh.capacity > 0 && (
-                <div className="px-5 pb-3">
-                  <div className="flex items-center justify-between text-xs text-gray-400 mb-1">
-                    <span>نسبة الامتلاء</span>
-                    <span>{Math.min(100, Math.round((wh.total_stock / wh.capacity) * 100))}%</span>
-                  </div>
-                  <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[#103c68] rounded-full transition-all"
-                      style={{ width: `${Math.min(100, (wh.total_stock / wh.capacity) * 100)}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Items list */}
-              {expandedWh === wh.id && (
-                <div className="border-t border-gray-100">
-                  {items.length === 0 ? (
-                    <div className="text-center py-8 text-gray-400 text-sm">لا توجد أصناف في هذا المستودع</div>
-                  ) : (
-                    <div className="divide-y divide-gray-50">
-                      <div className="grid grid-cols-4 px-5 py-2.5 bg-gray-50 text-xs font-bold text-gray-500">
-                        <span className="col-span-2">الصنف</span>
-                        <span className="text-center">الكمية</span>
-                        <span className="text-center">الحد الأدنى</span>
-                      </div>
-                      {items.map(item => {
-                        const low = item.quantity <= item.min_stock;
-                        return (
-                          <div key={item.id} className={`grid grid-cols-4 px-5 py-3 items-center text-sm ${low ? "bg-red-50/50" : ""}`}>
-                            <div className="col-span-2 flex items-center gap-2">
-                              {low && <TrendingDown size={14} className="text-red-500 flex-shrink-0" />}
-                              <div>
-                                <div className={`font-semibold ${low ? "text-red-700" : "text-gray-800"}`}>{item.product_name}</div>
-                                <div className="text-xs text-gray-400">{item.unit}</div>
-                              </div>
-                            </div>
-                            <div className={`text-center font-black text-base ${low ? "text-red-600" : "text-[#103c68]"}`}>
-                              {item.quantity.toLocaleString("ar-SA")}
-                            </div>
-                            <div className="text-center text-gray-400 text-sm">{item.min_stock.toLocaleString("ar-SA")}</div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              )}
+          {/* Header + search */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="relative flex-1 min-w-[200px]">
+              <Search size={15} className="absolute top-1/2 -translate-y-1/2 right-3 text-gray-400" />
+              <input value={stockSearch} onChange={e => setStockSearch(e.target.value)}
+                placeholder="بحث عن منتج..."
+                className="w-full border border-gray-200 rounded-xl pr-9 pl-3 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#103c68]/20" />
             </div>
-          ))}
+            <div className="text-sm text-gray-500 bg-white border border-gray-200 rounded-xl px-4 py-2.5">
+              <span className="font-bold text-[#103c68]">{products.length}</span> منتج إجمالاً
+            </div>
+          </div>
 
-          {/* Low stock alerts */}
-          {items.filter(i => i.quantity <= i.min_stock).length > 0 && (
-            <div className="bg-red-50 border border-red-200 rounded-2xl p-4">
-              <div className="flex items-center gap-2 font-bold text-red-700 mb-2">
-                <AlertTriangle size={16} />{items.filter(i => i.quantity <= i.min_stock).length} صنف تحت الحد الأدنى
+          {/* Low-stock alert banner */}
+          {products.filter(p => p.stock === 0).length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-center gap-3">
+              <AlertTriangle size={16} className="text-red-500 flex-shrink-0" />
+              <div className="text-sm">
+                <span className="font-bold text-red-700">{products.filter(p => p.stock === 0).length} منتج نفذ مخزونه</span>
+                <span className="text-red-500 mr-1">— يُستحسن تحديث الكميات</span>
               </div>
-              {items.filter(i => i.quantity <= i.min_stock).map(i => (
-                <div key={i.id} className="text-sm text-red-600 flex items-center justify-between py-1">
-                  <span>{i.product_name}</span>
-                  <span className="font-bold">{i.quantity} / {i.min_stock} (الحد الأدنى)</span>
-                </div>
-              ))}
             </div>
           )}
+
+          {/* Products table */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+            {/* Table header */}
+            <div className="grid grid-cols-12 px-5 py-3 bg-gray-50 border-b border-gray-100 text-xs font-bold text-gray-500">
+              <div className="col-span-5">المنتج</div>
+              <div className="col-span-2 text-center">الوحدة</div>
+              <div className="col-span-3 text-center">الكمية الحالية</div>
+              <div className="col-span-2 text-center">تعديل</div>
+            </div>
+
+            {filteredProducts.length === 0 ? (
+              <div className="py-12 text-center text-gray-400 text-sm">لا توجد نتائج</div>
+            ) : (
+              <div className="divide-y divide-gray-50">
+                {filteredProducts.map(p => {
+                  const isEditing = p.id in editingStock;
+                  const isSaving  = savingStock === p.id;
+                  const isEmpty   = p.stock === 0;
+
+                  return (
+                    <div key={p.id} className={`grid grid-cols-12 px-5 py-3.5 items-center text-sm transition-colors
+                      ${isEmpty ? "bg-red-50/40" : "hover:bg-gray-50/60"}`}>
+
+                      {/* Name */}
+                      <div className="col-span-5 flex items-center gap-2 min-w-0">
+                        {isEmpty && <TrendingDown size={13} className="text-red-500 flex-shrink-0" />}
+                        <div>
+                          <div className={`font-semibold truncate ${isEmpty ? "text-red-700" : "text-gray-900"}`}>{p.name}</div>
+                          {p.category && <div className="text-xs text-gray-400">{p.category}</div>}
+                        </div>
+                      </div>
+
+                      {/* Unit */}
+                      <div className="col-span-2 text-center text-gray-500 text-xs">{p.unit}</div>
+
+                      {/* Stock value / edit input */}
+                      <div className="col-span-3 text-center">
+                        {isEditing ? (
+                          <input
+                            type="number" min="0" step="1"
+                            value={editingStock[p.id]}
+                            onChange={e => setEditingStock(prev => ({ ...prev, [p.id]: e.target.value }))}
+                            onKeyDown={e => { if (e.key === "Enter") saveStock(p); if (e.key === "Escape") cancelEdit(p.id); }}
+                            autoFocus
+                            className="w-24 border-2 border-[#103c68] rounded-lg px-2 py-1 text-center font-black text-[#103c68] text-base focus:outline-none"
+                          />
+                        ) : (
+                          <span className={`font-black text-lg ${isEmpty ? "text-red-600" : "text-[#103c68]"}`}>
+                            {p.stock.toLocaleString("ar-SA")}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Actions */}
+                      <div className="col-span-2 flex items-center justify-center gap-1.5">
+                        {isEditing ? (
+                          <>
+                            <button onClick={() => saveStock(p)} disabled={isSaving}
+                              className="p-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg disabled:opacity-50 transition-colors">
+                              {isSaving ? <RefreshCw size={13} className="animate-spin" /> : <Save size={13} />}
+                            </button>
+                            <button onClick={() => cancelEdit(p.id)}
+                              className="p-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition-colors">
+                              <XCircle size={13} />
+                            </button>
+                          </>
+                        ) : (
+                          <button onClick={() => startEdit(p)}
+                            className="p-1.5 bg-[#103c68]/10 hover:bg-[#103c68]/20 text-[#103c68] rounded-lg transition-colors">
+                            <Edit2 size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <p className="text-xs text-gray-400 text-center">اضغط <kbd className="bg-gray-100 px-1 rounded">Enter</kbd> لحفظ أو <kbd className="bg-gray-100 px-1 rounded">Esc</kbd> للإلغاء</p>
         </div>
       )}
 

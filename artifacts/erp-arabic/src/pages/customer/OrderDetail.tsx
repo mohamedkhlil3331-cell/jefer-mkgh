@@ -42,11 +42,15 @@ export default function OrderDetail() {
   const [submittingRating, setSubmittingRating] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/workflow/orders/${id}`)
-      .then(r => r.json())
-      .then(setOrder)
+    if (!user) return;
+    fetch(`/api/workflow/orders/${id}?customer_phone=${user.phone}`)
+      .then(r => {
+        if (r.status === 403) { navigate("/my-orders"); return null; }
+        return r.json();
+      })
+      .then(d => { if (d) setOrder(d); })
       .finally(() => setLoading(false));
-  }, [id]);
+  }, [id, user]);
 
   const submitRating = async () => {
     if (!rating || !order?.product_id || !user) return;

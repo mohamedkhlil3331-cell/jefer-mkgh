@@ -50,6 +50,14 @@ router.put("/products/:id", (req, res) => {
   res.json({ message: "تم التحديث" });
 });
 
+// Quick stock update (warehouse)
+router.patch("/products/:id/stock", (req, res) => {
+  const { stock, notes } = req.body;
+  if (stock === undefined || stock === null) return void res.status(400).json({ error: "الكمية مطلوبة" });
+  db.prepare("UPDATE products SET stock=? WHERE id=?").run(parseInt(stock), req.params.id);
+  res.json({ message: "تم تحديث المخزون", stock: parseInt(stock) });
+});
+
 // Quick price update only
 router.patch("/products/:id/prices", (req, res) => {
   const { price_per_unit, price_delivered, price_truck_buraydah } = req.body;
