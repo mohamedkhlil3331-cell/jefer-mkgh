@@ -278,7 +278,7 @@ export default function SupervisorOrders() {
                 </div>
               </div>
               <button
-                onClick={() => { setSelectedOrder(order); setSelectedVehicle(""); setDriverPhone(""); }}
+                onClick={() => { setSelectedOrder(order); setSelectedVehicle(""); setSelectedDriver(""); }}
                 className="w-full flex items-center justify-center gap-2 bg-[#103c68] hover:bg-[#0d3158] text-white py-3 rounded-xl font-bold text-sm transition-colors">
                 <Car size={15} />تخصيص سيارة
               </button>
@@ -416,7 +416,7 @@ export default function SupervisorOrders() {
                   <div className="space-y-2 max-h-48 overflow-y-auto">
                     {availableVehicles.map(v => (
                       <button key={v.id} type="button"
-                        onClick={() => { setSelectedVehicle(String(v.id)); if (v.driver_phone) setDriverPhone(v.driver_phone); }}
+                        onClick={() => { setSelectedVehicle(String(v.id)); }}
                         className={`w-full flex items-center gap-3 p-3.5 rounded-2xl border text-right transition-all ${
                           selectedVehicle === String(v.id)
                             ? "border-[#103c68] bg-[#103c68]/5 shadow-sm"
