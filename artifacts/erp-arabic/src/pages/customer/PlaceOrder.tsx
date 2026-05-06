@@ -155,7 +155,7 @@ export default function PlaceOrder() {
   };
 
   const clearPin = () => {
-    setForm(f => ({ ...f, delivery_lat: "", delivery_lng: "", delivery_location: "" }));
+    setForm(f => ({ ...f, delivery_lat: "", delivery_lng: "" }));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
