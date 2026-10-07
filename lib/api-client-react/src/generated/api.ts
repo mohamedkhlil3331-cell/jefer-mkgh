@@ -41,11 +41,15 @@ import type {
   EditChatMessageRequest,
   GetBranchDashboardParams,
   GetChatPushPublicKey200,
+  GetSiteAnalyticsSummaryParams,
   HealthStatus,
   MarkChatConversationRead200,
   RegisterChatPushSubscription201,
   RemoveChatPushSubscription200,
   RemoveChatPushSubscriptionRequest,
+  SiteAnalyticsAccepted,
+  SiteAnalyticsPageviewInput,
+  SiteAnalyticsSummary,
   StartChatConversationRequest,
   SupplierPurchaseInvoicePasteInput,
   SupplierPurchaseInvoicePasteResult,
@@ -2713,3 +2717,196 @@ export const usePasteSupplierPurchaseInvoices = <
 > => {
   return useMutation(getPasteSupplierPurchaseInvoicesMutationOptions(options));
 };
+
+/**
+ * @summary Record a privacy-minimized page view
+ */
+export const getTrackSiteAnalyticsPageviewUrl = () => {
+  return `/api/site-analytics/pageview`;
+};
+
+export const trackSiteAnalyticsPageview = async (
+  siteAnalyticsPageviewInput: SiteAnalyticsPageviewInput,
+  options?: RequestInit,
+): Promise<SiteAnalyticsAccepted> => {
+  return customFetch<SiteAnalyticsAccepted>(
+    getTrackSiteAnalyticsPageviewUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(siteAnalyticsPageviewInput),
+    },
+  );
+};
+
+export const getTrackSiteAnalyticsPageviewMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof trackSiteAnalyticsPageview>>,
+    TError,
+    { data: BodyType<SiteAnalyticsPageviewInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof trackSiteAnalyticsPageview>>,
+  TError,
+  { data: BodyType<SiteAnalyticsPageviewInput> },
+  TContext
+> => {
+  const mutationKey = ["trackSiteAnalyticsPageview"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof trackSiteAnalyticsPageview>>,
+    { data: BodyType<SiteAnalyticsPageviewInput> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return trackSiteAnalyticsPageview(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type TrackSiteAnalyticsPageviewMutationResult = NonNullable<
+  Awaited<ReturnType<typeof trackSiteAnalyticsPageview>>
+>;
+export type TrackSiteAnalyticsPageviewMutationBody =
+  BodyType<SiteAnalyticsPageviewInput>;
+export type TrackSiteAnalyticsPageviewMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Record a privacy-minimized page view
+ */
+export const useTrackSiteAnalyticsPageview = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof trackSiteAnalyticsPageview>>,
+    TError,
+    { data: BodyType<SiteAnalyticsPageviewInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof trackSiteAnalyticsPageview>>,
+  TError,
+  { data: BodyType<SiteAnalyticsPageviewInput> },
+  TContext
+> => {
+  return useMutation(getTrackSiteAnalyticsPageviewMutationOptions(options));
+};
+
+/**
+ * @summary Get aggregate page-view and referral metrics
+ */
+export const getGetSiteAnalyticsSummaryUrl = (
+  params?: GetSiteAnalyticsSummaryParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/site-analytics/summary?${stringifiedParams}`
+    : `/api/site-analytics/summary`;
+};
+
+export const getSiteAnalyticsSummary = async (
+  params?: GetSiteAnalyticsSummaryParams,
+  options?: RequestInit,
+): Promise<SiteAnalyticsSummary> => {
+  return customFetch<SiteAnalyticsSummary>(
+    getGetSiteAnalyticsSummaryUrl(params),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetSiteAnalyticsSummaryQueryKey = (
+  params?: GetSiteAnalyticsSummaryParams,
+) => {
+  return [`/api/site-analytics/summary`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetSiteAnalyticsSummaryQueryOptions = <
+  TData = Awaited<ReturnType<typeof getSiteAnalyticsSummary>>,
+  TError = ErrorType<ApiError>,
+>(
+  params?: GetSiteAnalyticsSummaryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getSiteAnalyticsSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetSiteAnalyticsSummaryQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getSiteAnalyticsSummary>>
+  > = ({ signal }) =>
+    getSiteAnalyticsSummary(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getSiteAnalyticsSummary>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetSiteAnalyticsSummaryQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getSiteAnalyticsSummary>>
+>;
+export type GetSiteAnalyticsSummaryQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary Get aggregate page-view and referral metrics
+ */
+
+export function useGetSiteAnalyticsSummary<
+  TData = Awaited<ReturnType<typeof getSiteAnalyticsSummary>>,
+  TError = ErrorType<ApiError>,
+>(
+  params?: GetSiteAnalyticsSummaryParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getSiteAnalyticsSummary>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetSiteAnalyticsSummaryQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

@@ -40,6 +40,7 @@ import VehicleDashboardAdmin from "@/pages/admin/VehicleDashboardAdmin";
 import LegalPage from "@/pages/admin/LegalPage";
 import SystemLogsPage from "@/pages/admin/SystemLogsPage";
 import RatingsAnalyticsPage from "@/pages/admin/RatingsAnalyticsPage";
+import SiteAnalyticsPage from "@/pages/admin/SiteAnalyticsPage";
 import LoadingPointsPage from "@/pages/admin/LoadingPointsPage";
 import HRRequestsPage from "@/pages/admin/HRRequestsPage";
 import AdminApprovalsPage from "@/pages/admin/AdminApprovalsPage";
@@ -72,6 +73,7 @@ import MkghAnalysisPage from "@/pages/mkgh/MkghAnalysisPage";
 import { MutationSyncMonitor } from "@/components/MutationSyncStatus";
 import RememberedScroll from "@/components/RememberedScroll";
 import ChatPage from "@/pages/ChatPage";
+import SiteAnalyticsTracker from "@/components/SiteAnalyticsTracker";
 
 const queryClient = new QueryClient();
 
@@ -251,6 +253,7 @@ function AppRoutes() {
       <Route path="/legal"              component={guard("legal_library",  LegalPage)} />
       <Route path="/system-logs"        component={guard("legal_logs", SystemLogsPage)} />
       <Route path="/ratings-analytics"  component={guard("legal_ratings",  RatingsAnalyticsPage)} />
+      <Route path="/site-analytics" component={guard("settings_system", SiteAnalyticsPage)} />
       <Route path="/loading-points"     component={guard("legal_loading",  LoadingPointsPage)} />
 
       {/* Settings */}
@@ -397,6 +400,7 @@ function App() {
               <CartProvider>
                 <OfflineBanner />
                 <WouterRouter base={base}>
+                  <SiteAnalyticsTracker />
                   <AuthGate />
                 </WouterRouter>
               </CartProvider>

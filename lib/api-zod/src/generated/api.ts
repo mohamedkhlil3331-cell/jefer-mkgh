@@ -679,3 +679,64 @@ export const PasteSupplierPurchaseInvoicesBody = zod.object({
     .min(1)
     .max(pasteSupplierPurchaseInvoicesBodyRowsMax),
 });
+
+/**
+ * @summary Record a privacy-minimized page view
+ */
+export const trackSiteAnalyticsPageviewBodyPagePathMax = 512;
+
+export const trackSiteAnalyticsPageviewBodyVisitorIdMin = 16;
+export const trackSiteAnalyticsPageviewBodyVisitorIdMax = 80;
+
+export const trackSiteAnalyticsPageviewBodyReferrerMax = 2048;
+
+export const TrackSiteAnalyticsPageviewBody = zod.object({
+  page_path: zod.string().min(1).max(trackSiteAnalyticsPageviewBodyPagePathMax),
+  visitor_id: zod
+    .string()
+    .min(trackSiteAnalyticsPageviewBodyVisitorIdMin)
+    .max(trackSiteAnalyticsPageviewBodyVisitorIdMax),
+  referrer: zod
+    .string()
+    .max(trackSiteAnalyticsPageviewBodyReferrerMax)
+    .optional(),
+});
+
+/**
+ * @summary Get aggregate page-view and referral metrics
+ */
+export const getSiteAnalyticsSummaryQueryDaysMin = 7;
+export const getSiteAnalyticsSummaryQueryDaysMax = 365;
+
+export const GetSiteAnalyticsSummaryQueryParams = zod.object({
+  days: zod.coerce
+    .number()
+    .min(getSiteAnalyticsSummaryQueryDaysMin)
+    .max(getSiteAnalyticsSummaryQueryDaysMax)
+    .optional(),
+});
+
+export const GetSiteAnalyticsSummaryResponse = zod.object({
+  days: zod.number(),
+  page_views: zod.number(),
+  sessions: zod.number(),
+  daily: zod.array(
+    zod.object({
+      day: zod.string(),
+      page_views: zod.number(),
+      sessions: zod.number(),
+    }),
+  ),
+  top_pages: zod.array(
+    zod.object({
+      label: zod.string(),
+      count: zod.number(),
+    }),
+  ),
+  top_sources: zod.array(
+    zod.object({
+      label: zod.string(),
+      count: zod.number(),
+    }),
+  ),
+});

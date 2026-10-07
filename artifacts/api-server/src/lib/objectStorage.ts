@@ -8,6 +8,12 @@ import {
   getObjectAclPolicy,
   setObjectAclPolicy,
 } from "./objectAcl";
+import {
+  HostingerObjectFile,
+  issueHostingerUpload,
+  resolveHostingerUploadPath,
+} from "./hostinger-filesystem-storage.js";
+import { isFilesystemStorageMode } from "./db-sync.js";
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 
@@ -51,6 +57,7 @@ export class ObjectStorageService {
       )
     );
     if (paths.length === 0) {
+      if (isFilesystemStorageMode()) return ["/local/public"];
       throw new Error(
         "PUBLIC_OBJECT_SEARCH_PATHS not set. Create a bucket in 'Object Storage' " +
           "tool and set PUBLIC_OBJECT_SEARCH_PATHS env var (comma-separated paths)."
@@ -60,6 +67,7 @@ export class ObjectStorageService {
   }
 
   getPrivateObjectDir(): string {
+    if (isFilesystemStorageMode()) return "/local/private";
     const dir = process.env.PRIVATE_OBJECT_DIR || "";
     if (!dir) {
       throw new Error(
@@ -75,6 +83,12 @@ export class ObjectStorageService {
       const fullPath = `${searchPath}/${filePath}`;
 
       const { bucketName, objectName } = parseObjectPath(fullPath);
+      if (isFilesystemStorageMode()) {
+        const localFile = new HostingerObjectFile(objectName);
+        const [exists] = await localFile.exists();
+        if (exists) return localFile as unknown as File;
+        continue;
+      }
       const bucket = objectStorageClient.bucket(bucketName);
       const file = bucket.file(objectName);
 
@@ -88,6 +102,19 @@ export class ObjectStorageService {
   }
 
   async downloadObject(file: File, cacheTtlSec: number = 3600): Promise<Response> {
+    if (file instanceof HostingerObjectFile) {
+      const [metadata] = await file.getMetadata();
+      const nodeStream = file.createReadStream();
+      const webStream = Readable.toWeb(nodeStream) as ReadableStream;
+      const isPublic = file.key.startsWith("public/");
+      const headers: Record<string, string> = {
+        "Content-Type": metadata.contentType || "application/octet-stream",
+        "Cache-Control": `${isPublic ? "public" : "private"}, max-age=${cacheTtlSec}`,
+        "X-Content-Type-Options": "nosniff",
+      };
+      if (metadata.size) headers["Content-Length"] = String(metadata.size);
+      return new Response(webStream, { headers });
+    }
     const [metadata] = await file.getMetadata();
     const aclPolicy = await getObjectAclPolicy(file);
     const isPublic = aclPolicy?.visibility === "public";
@@ -107,6 +134,7 @@ export class ObjectStorageService {
   }
 
   async getObjectEntityUploadURL(): Promise<string> {
+    if (isFilesystemStorageMode()) return issueHostingerUpload("uploads");
     const privateObjectDir = this.getPrivateObjectDir();
     if (!privateObjectDir) {
       throw new Error(
@@ -129,6 +157,7 @@ export class ObjectStorageService {
   }
 
   async getBranchDocumentUploadURL(): Promise<string> {
+    if (isFilesystemStorageMode()) return issueHostingerUpload("branch-documents");
     const privateObjectDir = this.getPrivateObjectDir();
     const objectId = randomUUID();
     const fullPath = `${privateObjectDir}/branch-documents/${objectId}`;
@@ -153,6 +182,12 @@ export class ObjectStorageService {
     }
 
     const entityId = parts.slice(1).join("/");
+    if (isFilesystemStorageMode()) {
+      const objectFile = new HostingerObjectFile(`private/${entityId}`);
+      const [exists] = await objectFile.exists();
+      if (!exists) throw new ObjectNotFoundError();
+      return objectFile as unknown as File;
+    }
     let entityDir = this.getPrivateObjectDir();
     if (!entityDir.endsWith("/")) {
       entityDir = `${entityDir}/`;
@@ -169,6 +204,21 @@ export class ObjectStorageService {
   }
 
   normalizeObjectEntityPath(rawPath: string): string {
+    if (isFilesystemStorageMode()) {
+      const localPath = resolveHostingerUploadPath(rawPath);
+      if (localPath) return localPath;
+      try {
+        const url = new URL(rawPath);
+        if (url.hostname === "storage.googleapis.com") {
+          const segments = url.pathname.split("/").filter(Boolean);
+          const privateIndex = segments.indexOf("private");
+          if (privateIndex >= 1) return `/objects/${segments.slice(privateIndex + 1).join("/")}`;
+        }
+      } catch {
+        // Already-normalized object paths are not absolute URLs.
+      }
+      return rawPath;
+    }
     if (!rawPath.startsWith("https://storage.googleapis.com/")) {
       return rawPath;
     }

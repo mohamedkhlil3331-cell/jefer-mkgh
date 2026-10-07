@@ -5,10 +5,44 @@ import db from "../lib/db.js";
 import { isSpecialSessionValid } from "../lib/special-sessions.js";
 import { isSysAdminToken } from "./auth.js";
 import { isRentalAccessTokenValid } from "./rental-accounts.js";
+import { saveHostingerUpload } from "../lib/hostinger-filesystem-storage.js";
+import { isFilesystemStorageMode } from "../lib/db-sync.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
 const FINANCE_ROLES = new Set(["admin", "supervisor", "reviewer", "finance", "accountant"]);
+
+router.put("/storage/local-upload/:token", async (req: Request, res: Response): Promise<void> => {
+  if (!isFilesystemStorageMode()) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  const token = Array.isArray(req.params.token) ? req.params.token[0] : req.params.token;
+  if (!token || !/^[0-9a-f-]{36}$/i.test(token)) {
+    res.status(404).json({ error: "رابط الرفع غير صالح أو منتهي" });
+    return;
+  }
+  try {
+    const result = await saveHostingerUpload(
+      token,
+      req,
+      String(req.headers["content-type"] || "application/octet-stream"),
+    );
+    res.status(200).json({ ok: true, size: result.size });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message === "UPLOAD_URL_EXPIRED") {
+      res.status(410).json({ error: "انتهت صلاحية رابط الرفع؛ اطلب رابطاً جديداً" });
+      return;
+    }
+    if (message === "UPLOAD_TOO_LARGE") {
+      res.status(413).json({ error: "حجم الملف يتجاوز الحد المسموح" });
+      return;
+    }
+    req.log.error({ err: error }, "Hostinger local file upload failed");
+    res.status(500).json({ error: "تعذر حفظ الملف" });
+  }
+});
 
 function authorizeProtectedReceipt(req: Request, objectPath: string) {
   const paths = [objectPath, `/api/storage${objectPath}`, `/api${objectPath}`];

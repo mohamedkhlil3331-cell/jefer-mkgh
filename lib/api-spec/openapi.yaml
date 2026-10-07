@@ -1120,6 +1120,56 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ApiError"
+  /site-analytics/pageview:
+    post:
+      operationId: trackSiteAnalyticsPageview
+      tags: [site-analytics]
+      summary: Record a privacy-minimized page view
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteAnalyticsPageviewInput"
+      responses:
+        "202":
+          description: Page view accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteAnalyticsAccepted"
+        "400":
+          description: Invalid page-view data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /site-analytics/summary:
+    get:
+      operationId: getSiteAnalyticsSummary
+      tags: [site-analytics]
+      summary: Get aggregate page-view and referral metrics
+      parameters:
+        - name: days
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 7
+            maximum: 365
+      responses:
+        "200":
+          description: Aggregate metrics for the selected period
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteAnalyticsSummary"
+        "403":
+          description: Administrator access required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   schemas:
     BranchDocumentUploadRequest:
@@ -1720,6 +1770,81 @@ components:
         - workshop_added_count
         - workshop_item_names
         - replayed
+    SiteAnalyticsPageviewInput:
+      type: object
+      properties:
+        page_path:
+          type: string
+          minLength: 1
+          maxLength: 512
+        visitor_id:
+          type: string
+          minLength: 16
+          maxLength: 80
+        referrer:
+          type: string
+          maxLength: 2048
+      required:
+        - page_path
+        - visitor_id
+    SiteAnalyticsAccepted:
+      type: object
+      properties:
+        accepted:
+          type: boolean
+      required:
+        - accepted
+    SiteAnalyticsBreakdownItem:
+      type: object
+      properties:
+        label:
+          type: string
+        count:
+          type: integer
+      required:
+        - label
+        - count
+    SiteAnalyticsDailyItem:
+      type: object
+      properties:
+        day:
+          type: string
+        page_views:
+          type: integer
+        sessions:
+          type: integer
+      required:
+        - day
+        - page_views
+        - sessions
+    SiteAnalyticsSummary:
+      type: object
+      properties:
+        days:
+          type: integer
+        page_views:
+          type: integer
+        sessions:
+          type: integer
+        daily:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteAnalyticsDailyItem"
+        top_pages:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteAnalyticsBreakdownItem"
+        top_sources:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteAnalyticsBreakdownItem"
+      required:
+        - days
+        - page_views
+        - sessions
+        - daily
+        - top_pages
+        - top_sources
     ApiError:
       type: object
       properties:

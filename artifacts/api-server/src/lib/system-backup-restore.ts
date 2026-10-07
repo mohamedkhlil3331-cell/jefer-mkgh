@@ -6,7 +6,14 @@ import { pipeline } from "node:stream/promises";
 import Database from "better-sqlite3";
 import * as yauzl from "yauzl";
 import db, { DB_PATH, UPLOADS_PATH, checkpointWAL } from "./db.js";
-import { makeStorage, uploadDbBackup } from "./db-sync.js";
+import { isFilesystemStorageMode, makeStorage, uploadDbBackup } from "./db-sync.js";
+import {
+  HostingerObjectFile,
+  listHostingerObjects,
+  removeHostingerObject,
+  writeHostingerObject,
+  type HostingerObjectMetadata,
+} from "./hostinger-filesystem-storage.js";
 
 const RESTORE_AUDIT_TABLES = new Set([
   "system_backup_restore_runs",
@@ -790,11 +797,123 @@ function storageRollbackKey(runId: number, objectKey: string): string {
   return `_system_restore_rollback/${runId}/${encoded}`;
 }
 
+async function restoreFilesystemObjectFiles(
+  backup: ExtractedBackup,
+  mode: RestoreMode,
+  runId: number,
+): Promise<{ outcomes: FileOutcome[]; rollback: () => Promise<void>; cleanup: () => Promise<void> }> {
+  const current = await listHostingerObjects();
+  const currentByKey = new Map(current.map(object => [object.key, object]));
+  const incomingByKey = new Map(backup.objects.map(object => [object.storage_key, object]));
+  const outcomes: FileOutcome[] = [];
+  const uploadedKeys: string[] = [];
+
+  if (mode === "full") {
+    const rollbackDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), `mkgh-local-objects-${runId}-`));
+    const snapshots: Array<{ key: string; filePath: string; metadata: HostingerObjectMetadata }> = [];
+    for (const object of current) {
+      const snapshotPath = path.join(rollbackDir, ...object.key.split("/"));
+      await fs.promises.mkdir(path.dirname(snapshotPath), { recursive: true });
+      await fs.promises.copyFile(object.filePath, snapshotPath);
+      snapshots.push({ key: object.key, filePath: snapshotPath, metadata: object.metadata });
+    }
+
+    const restoreSnapshot = async () => {
+      const now = await listHostingerObjects();
+      for (const object of now) await removeHostingerObject(object.key);
+      for (const snapshot of snapshots) {
+        await writeHostingerObject(snapshot.key, snapshot.filePath, snapshot.metadata);
+      }
+    };
+
+    try {
+      for (const object of current) await removeHostingerObject(object.key);
+      for (const object of backup.objects) {
+        await writeHostingerObject(object.storage_key, object.filePath, {
+          contentType: object.content_type || "application/octet-stream",
+          cacheControl: object.cache_control,
+          contentDisposition: object.content_disposition,
+          metadata: object.metadata,
+        });
+        const [savedMetadata] = await new HostingerObjectFile(object.storage_key).getMetadata();
+        if (savedMetadata.size !== object.bytes) {
+          throw new Error(`تعذر التحقق من الملف المستعاد: ${object.storage_key.slice(0, 120)}`);
+        }
+        uploadedKeys.push(object.storage_key);
+        outcomes.push({
+          itemType: "object", key: object.storage_key, label: object.storage_key,
+          outcome: "restored",
+        });
+      }
+    } catch (error) {
+      await restoreSnapshot().catch(() => {});
+      await fs.promises.rm(rollbackDir, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+
+    return {
+      outcomes,
+      rollback: restoreSnapshot,
+      cleanup: async () => {
+        await fs.promises.rm(rollbackDir, { recursive: true, force: true });
+      },
+    };
+  }
+
+  try {
+    for (const object of backup.objects) {
+      const existing = currentByKey.get(object.storage_key);
+      if (existing) {
+        if (existing.metadata.size === object.bytes
+            && await sha256File(existing.filePath) === await sha256File(object.filePath)) {
+          outcomes.push({
+            itemType: "object", key: object.storage_key, label: object.storage_key,
+            outcome: "already_present",
+          });
+        } else {
+          outcomes.push({
+            itemType: "object", key: object.storage_key, label: object.storage_key,
+            outcome: "conflict", details: "يوجد ملف مختلف بالمسار نفسه؛ احتُفظ بالملف الحالي",
+          });
+        }
+        continue;
+      }
+      await writeHostingerObject(object.storage_key, object.filePath, {
+        contentType: object.content_type || "application/octet-stream",
+        cacheControl: object.cache_control,
+        contentDisposition: object.content_disposition,
+        metadata: object.metadata,
+      });
+      const [savedMetadata] = await new HostingerObjectFile(object.storage_key).getMetadata();
+      if (savedMetadata.size !== object.bytes) {
+        throw new Error(`تعذر التحقق من الملف المستعاد: ${object.storage_key.slice(0, 120)}`);
+      }
+      uploadedKeys.push(object.storage_key);
+      outcomes.push({
+        itemType: "object", key: object.storage_key, label: object.storage_key,
+        outcome: "restored",
+      });
+    }
+  } catch (error) {
+    for (const key of uploadedKeys) await removeHostingerObject(key).catch(() => {});
+    throw error;
+  }
+
+  return {
+    outcomes,
+    rollback: async () => {
+      for (const key of uploadedKeys) await removeHostingerObject(key);
+    },
+    cleanup: async () => {},
+  };
+}
+
 async function restoreObjectFiles(
   backup: ExtractedBackup,
   mode: RestoreMode,
   runId: number,
 ): Promise<{ outcomes: FileOutcome[]; rollback: () => Promise<void>; cleanup: () => Promise<void> }> {
+  if (isFilesystemStorageMode()) return restoreFilesystemObjectFiles(backup, mode, runId);
   const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
   if (!bucketId) throw new Error("تخزين الملفات غير مهيأ؛ لم تُستعد الملفات");
   const bucket = makeStorage().bucket(bucketId);

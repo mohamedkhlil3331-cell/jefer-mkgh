@@ -512,6 +512,45 @@ export interface SupplierPurchaseInvoicePasteResult {
   replayed: boolean;
 }
 
+export interface SiteAnalyticsPageviewInput {
+  /**
+   * @minLength 1
+   * @maxLength 512
+   */
+  page_path: string;
+  /**
+   * @minLength 16
+   * @maxLength 80
+   */
+  visitor_id: string;
+  /** @maxLength 2048 */
+  referrer?: string;
+}
+
+export interface SiteAnalyticsAccepted {
+  accepted: boolean;
+}
+
+export interface SiteAnalyticsBreakdownItem {
+  label: string;
+  count: number;
+}
+
+export interface SiteAnalyticsDailyItem {
+  day: string;
+  page_views: number;
+  sessions: number;
+}
+
+export interface SiteAnalyticsSummary {
+  days: number;
+  page_views: number;
+  sessions: number;
+  daily: SiteAnalyticsDailyItem[];
+  top_pages: SiteAnalyticsBreakdownItem[];
+  top_sources: SiteAnalyticsBreakdownItem[];
+}
+
 export interface ApiError {
   error: string;
 }
@@ -545,4 +584,12 @@ export type RegisterChatPushSubscription201 = {
 
 export type RemoveChatPushSubscription200 = {
   ok: boolean;
+};
+
+export type GetSiteAnalyticsSummaryParams = {
+  /**
+   * @minimum 7
+   * @maximum 365
+   */
+  days?: number;
 };

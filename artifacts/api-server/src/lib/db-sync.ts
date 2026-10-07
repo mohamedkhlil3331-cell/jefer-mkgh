@@ -1,6 +1,6 @@
 import { Storage } from "@google-cloud/storage";
 import Database from "better-sqlite3";
-import { hostname } from "node:os";
+import { hostname, homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import fs from "fs";
 import path from "path";
@@ -74,6 +74,14 @@ export function makeStorage(): Storage {
   });
 }
 
+export function isFilesystemStorageMode(): boolean {
+  const backend = process.env.ERP_STORAGE_BACKEND;
+  if (backend && backend !== "filesystem") {
+    throw new Error(`[db-sync] Unsupported ERP_STORAGE_BACKEND: ${backend}`);
+  }
+  return backend === "filesystem";
+}
+
 function assertDevelopmentWriterLock(operation: string): void {
   if (process.env.NODE_ENV !== "production" && process.env.DEV_DB_WRITER_LOCK_HELD !== "1") {
     throw new Error(`[db-sync] Refusing development database ${operation} without the exclusive writer lock`);
@@ -108,6 +116,11 @@ export async function restoreDbFromStorage(dbPath: string): Promise<boolean> {
 }
 
 export async function downloadDbBackupToStaging(dbPath: string): Promise<boolean> {
+  if (isFilesystemStorageMode()) {
+    // Hostinger owns the persistent SQLite file directly; never restore a
+    // Replit Object Storage snapshot over it.
+    return false;
+  }
   assertDevelopmentWriterLock("restore");
   const isProduction = process.env.NODE_ENV === "production";
   if (!BUCKET_ID) {
@@ -219,6 +232,7 @@ export async function uploadDbBackup(
   checkpointFn?: () => void,
   allowWhilePaused = false,
 ): Promise<void> {
+  if (isFilesystemStorageMode()) return;
   assertDevelopmentWriterLock("backup");
   const run = backupQueue.then(async () => {
     if (backupPauseDepth > 0 && !allowWhilePaused) return;
@@ -316,11 +330,30 @@ export function registerShutdownBackup(
 }
 
 export function getDefaultDbPath(): string {
+  return path.join(getAppDataDir(), "erp.db");
+}
+
+export function getAppDataDir(): string {
   const cwd = process.cwd();
   const apiServerRoot = path.basename(cwd) === "api-server"
     ? cwd
     : path.join(cwd, "artifacts", "api-server");
-  return path.join(apiServerRoot, "data", "erp.db");
+  if (!isFilesystemStorageMode()) return path.join(apiServerRoot, "data");
+
+  const configuredDir = process.env.ERP_DATA_DIR?.trim();
+  if (!configuredDir) {
+    throw new Error("[db-sync] ERP_DATA_DIR is required when ERP_STORAGE_BACKEND=filesystem");
+  }
+  const expandedDir = configuredDir === "~"
+    ? homedir()
+    : configuredDir.startsWith("~/")
+      ? path.join(homedir(), configuredDir.slice(2))
+      : configuredDir;
+  const dataDir = path.resolve(expandedDir);
+  if (dataDir.split(path.sep).some(part => part === "hbuilds" || part === "public_html")) {
+    throw new Error("[db-sync] ERP_DATA_DIR must be outside Hostinger's managed hbuilds and public_html directories");
+  }
+  return dataDir;
 }
 
 export function getBackupWriterId(): string {

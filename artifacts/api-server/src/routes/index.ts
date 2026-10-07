@@ -58,6 +58,7 @@ import invoiceExtractionRouter from "./invoice-extraction.js";
 import rentalAccountsRouter from "./rental-accounts.js";
 import rentalTripPortalRouter from "./rental-trip-portal.js";
 import chatRouter from "./chat.js";
+import siteAnalyticsRouter from "./site-analytics.js";
 
 const router: IRouter = Router();
 
@@ -129,6 +130,7 @@ router.use(driverCustodyRouter);
 router.use(rentalAccountsRouter);
 router.use(rentalTripPortalRouter);
 router.use(chatRouter);
+router.use(siteAnalyticsRouter);
 router.use(invoiceExtractionRouter);
 
 export default router;

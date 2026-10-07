@@ -61,6 +61,9 @@ const REP_STATUS_COLOR: Record<string, string> = {
   delivered: "bg-green-100 text-green-700", cancelled: "bg-red-100 text-red-600",
 };
 
+const SITE_ANALYTICS_ENABLED =
+  (import.meta.env as unknown as Record<string, string | undefined>).VITE_SITE_ANALYTICS === "1";
+
 const QUICK_LINKS = [
   { href: "/reviewer",        icon: ClipboardCheck,  label: "مراجعة الطلبات",  color: "bg-blue-50 text-blue-700"        },
   { href: "/supervisor",      icon: Truck,           label: "إدارة النقليات",  color: "bg-orange-50 text-orange-700"    },
@@ -74,6 +77,9 @@ const QUICK_LINKS = [
   { href: "/tariffs",         icon: MapPin,          label: "التعريفات",       color: "bg-amber-50 text-amber-700"      },
   { href: "/drivers-manage",  icon: Car,             label: "إدارة السائقين",  color: "bg-yellow-50 text-yellow-700"    },
   { href: "/reports",         icon: BarChart3,       label: "التقارير",        color: "bg-rose-50 text-rose-700"        },
+  ...(SITE_ANALYTICS_ENABLED
+    ? [{ href: "/site-analytics", icon: TrendingUp, label: "تحليلات الزيارات", color: "bg-cyan-50 text-cyan-700" }]
+    : []),
 ];
 
 export default function AdminDashboard() {

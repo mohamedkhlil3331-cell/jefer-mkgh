@@ -7,7 +7,8 @@ import multer from "multer";
 import Database from "better-sqlite3";
 import { ZipFile } from "yazl";
 import db, { UPLOADS_PATH } from "../lib/db.js";
-import { makeStorage, pauseDbBackup, waitForDbBackupIdle } from "../lib/db-sync.js";
+import { isFilesystemStorageMode, makeStorage, pauseDbBackup, waitForDbBackupIdle } from "../lib/db-sync.js";
+import { listHostingerObjects } from "../lib/hostinger-filesystem-storage.js";
 import {
   extensionForContentType,
   inferLocalUploadExtension,
@@ -143,7 +144,7 @@ function verifyTicket(ticket: unknown): BackupTicket | null {
 router.get("/system-backup/ticket", (req, res) => {
   const admin = currentAdmin(req);
   if (!admin) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة لتنزيل النسخة الاحتياطية" });
-  if (!process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID || !process.env.SESSION_SECRET) {
+  if ((!isFilesystemStorageMode() && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
     return void res.status(503).json({ error: "خدمة النسخ الاحتياطي غير مهيأة" });
   }
   const ticket = signTicket({
@@ -157,7 +158,7 @@ router.get("/system-backup/ticket", (req, res) => {
 });
 
 router.get("/system-backup/download", async (req: Request, res: Response) => {
-  if (!process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID || !process.env.SESSION_SECRET) {
+  if ((!isFilesystemStorageMode() && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
     return void res.status(503).json({ error: "خدمة النسخ الاحتياطي غير مهيأة" });
   }
   if (!verifyTicket(req.query.ticket)) {
@@ -192,41 +193,88 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
     const snapshotPath = path.join(tempDir, "erp.db");
     await db.backup(snapshotPath);
 
-    const storage = makeStorage();
-    const bucket = storage.bucket(process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID);
-    const [allFiles] = await bucket.getFiles();
-    // The live SQLite snapshot above supersedes the periodic DB object. The
-    // latter changes every 30 seconds and cannot be read consistently mid-ZIP.
-    const files = allFiles.filter(file => !file.name.startsWith("db-backups/")
-      && !file.name.startsWith("_system_restore_")
-      && !file.name.endsWith("/"));
-    const originalObjectPaths = new Set(files.map(file => `storage/${file.name}`));
+    type StorageCandidate = {
+      key: string;
+      size: number;
+      generation?: string | number;
+      updated?: string;
+      crc32c?: string;
+      contentType?: string;
+      cacheControl?: string;
+      contentDisposition?: string;
+      metadata?: Record<string, string>;
+      localPath?: string;
+    };
+    const objectCandidates: StorageCandidate[] = [];
+    let openGcsStream: ((key: string, generation?: string | number) => NodeJS.ReadableStream) | undefined;
+    if (isFilesystemStorageMode()) {
+      const localObjects = await listHostingerObjects();
+      for (const object of localObjects) {
+        if (object.key.startsWith("_system_restore_") || object.key.endsWith("/")) continue;
+        objectCandidates.push({
+          key: object.key,
+          size: Number(object.metadata.size),
+          updated: object.metadata.updated,
+          contentType: object.metadata.contentType,
+          cacheControl: object.metadata.cacheControl,
+          contentDisposition: object.metadata.contentDisposition,
+          metadata: object.metadata.metadata,
+          localPath: object.filePath,
+        });
+      }
+    } else {
+      const bucket = makeStorage().bucket(process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID!);
+      const [allFiles] = await bucket.getFiles();
+      // The live SQLite snapshot supersedes the rotating database object.
+      const files = allFiles.filter(file => !file.name.startsWith("db-backups/")
+        && !file.name.startsWith("_system_restore_")
+        && !file.name.endsWith("/"));
+      for (const file of files) {
+        objectCandidates.push({
+          key: file.name,
+          size: Number(file.metadata.size),
+          generation: file.metadata.generation,
+          updated: file.metadata.updated,
+          crc32c: file.metadata.crc32c,
+          contentType: file.metadata.contentType,
+          cacheControl: file.metadata.cacheControl,
+          contentDisposition: file.metadata.contentDisposition,
+          metadata: file.metadata.metadata as Record<string, string> | undefined,
+        });
+      }
+      openGcsStream = (key, generation) => bucket.file(
+        key,
+        generation ? { generation: Number(generation) } : undefined,
+      ).createReadStream();
+    }
+    const originalObjectPaths = new Set(objectCandidates.map(file => `storage/${file.key}`));
     const chosenArchivePaths = new Set(["manifest.json", "README.txt", "database/erp.db", "database-tables.xlsx"]);
-    const entries = files.map(file => {
-      const key = file.name;
+    const entries = objectCandidates.map(file => {
+      const key = file.key;
       const originalArchiveName = path.posix.normalize(`storage/${key}`);
       if (!key || key.includes("\\") || key.split("/").includes("..")
           || originalArchiveName !== `storage/${key}`) {
         throw new Error("Unsafe object name in backup");
       }
-      const size = Number(file.metadata.size);
+      const size = Number(file.size);
       if (!Number.isSafeInteger(size) || size < 0) throw new Error("Invalid object size in backup");
       const archiveName = uniqueArchivePath(
         originalArchiveName,
-        extensionForContentType(file.metadata.contentType),
+        extensionForContentType(file.contentType),
         originalObjectPaths,
         chosenArchivePaths,
         key,
       );
       return {
         file, key, archiveName, size,
-        generation: file.metadata.generation,
-        updated: file.metadata.updated,
-        crc32c: file.metadata.crc32c,
-        contentType: file.metadata.contentType,
-        cacheControl: file.metadata.cacheControl,
-        contentDisposition: file.metadata.contentDisposition,
-        metadata: file.metadata.metadata,
+        generation: file.generation,
+        updated: file.updated,
+        crc32c: file.crc32c,
+        contentType: file.contentType,
+        cacheControl: file.cacheControl,
+        contentDisposition: file.contentDisposition,
+        metadata: file.metadata,
+        localPath: file.localPath,
       };
     });
     const localUploads = await listLocalUploads(UPLOADS_PATH);
@@ -282,10 +330,9 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
     for (const entry of entries) {
       zip.addReadStreamLazy(entry.archiveName, { size: entry.size, compress: false }, cb => {
         if (finished) return cb(new Error("Download cancelled"), null as never);
-        const file = entry.generation
-          ? bucket.file(entry.key, { generation: Number(entry.generation) })
-          : bucket.file(entry.key);
-        source = file.createReadStream();
+        if (entry.localPath) source = fs.createReadStream(entry.localPath);
+        else if (openGcsStream) source = openGcsStream(entry.key, entry.generation);
+        else return cb(new Error("Object storage stream is unavailable"), null as never);
         source.once("error", err => zip?.emit("error", err));
         cb(null, source);
       });
@@ -320,7 +367,7 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
 router.post("/system-backup/restore", (req: Request, res: Response, next) => {
   const admin = currentAdmin(req);
   if (!admin) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة لاستعادة النسخة" });
-  if (!process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) {
+  if (!isFilesystemStorageMode() && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) {
     return void res.status(503).json({ error: "تخزين الملفات غير مهيأ؛ لم تبدأ الاستعادة" });
   }
   restoreArchiveUpload(req, res, error => {

@@ -3,13 +3,15 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import crypto from "crypto";
-import { getDefaultDbPath } from "./db-sync.js";
+import { getAppDataDir, getDefaultDbPath, isFilesystemStorageMode } from "./db-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.dirname(getDefaultDbPath());
+const DATA_DIR = getAppDataDir();
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
-export const UPLOADS_PATH = path.join(__dirname, "..", "..", "uploads");
+export const UPLOADS_PATH = isFilesystemStorageMode()
+  ? path.join(DATA_DIR, "uploads")
+  : path.join(__dirname, "..", "..", "uploads");
 if (!fs.existsSync(UPLOADS_PATH)) fs.mkdirSync(UPLOADS_PATH, { recursive: true });
 
 export const DB_PATH = getDefaultDbPath();
@@ -3056,6 +3058,20 @@ db.exec(`
     ON system_backup_restore_items(run_id, id);
   CREATE INDEX IF NOT EXISTS idx_system_backup_restore_items_reviewed
     ON system_backup_restore_items(reviewed_at, id);
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS site_analytics_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    visitor_id TEXT NOT NULL,
+    page_path TEXT NOT NULL,
+    source_host TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_site_analytics_events_created
+    ON site_analytics_events(created_at);
+  CREATE INDEX IF NOT EXISTS idx_site_analytics_events_visitor
+    ON site_analytics_events(visitor_id, created_at);
 `);
 
 export default db;

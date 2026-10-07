@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import db from "../lib/db.js";
-import { isBackupWriterFenced } from "../lib/db-sync.js";
+import { isBackupWriterFenced, isFilesystemStorageMode } from "../lib/db-sync.js";
 import { acquireActorLock } from "../lib/session-control.js";
 import { isSpecialSessionValid } from "../lib/special-sessions.js";
 
@@ -13,6 +13,7 @@ const PUBLIC_MUTATION_PATHS = new Set([
   "/api/auth/forgot-password/request-otp",
   "/api/auth/forgot-password/reset",
   "/api/mkgh/auth",
+  "/api/site-analytics/pageview",
 ]);
 
 type CurrentSession = { user_id: number };
@@ -46,6 +47,14 @@ export async function mutationSessionGuard(req: Request, res: Response, next: Ne
   if (!MUTATING_METHODS.has(req.method.toUpperCase())) {
     return next();
   }
+
+  // The URL is a short-lived, single-use capability issued to an authenticated
+  // client; the file bytes are then uploaded directly to the app server.
+  if (
+    isFilesystemStorageMode() &&
+    req.method.toUpperCase() === "PUT" &&
+    /^\/api\/storage\/local-upload\/[0-9a-f-]{36}$/i.test(req.path)
+  ) return next();
 
   if (isBackupWriterFenced()) {
     return void res.status(503).json({

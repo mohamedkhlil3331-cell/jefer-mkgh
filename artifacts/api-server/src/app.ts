@@ -1,12 +1,13 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import pinoHttp from "pino-http";
+import fs from "node:fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import db, { UPLOADS_PATH } from "./lib/db.js";
-import { isBackupWriterFenced, makeStorage } from "./lib/db-sync.js";
+import { isBackupWriterFenced, isFilesystemStorageMode, makeStorage } from "./lib/db-sync.js";
 import { mutationSessionGuard } from "./middlewares/mutation-session-guard.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -43,6 +44,7 @@ const AUDIT_SKIP_GET = [
 ];
 app.use((req: Request, res: Response, next: NextFunction) => {
   const p = req.path;
+  if (p === "/api/site-analytics/pageview") return next();
   // Skip dev-dashboard and credentials routes
   if (p.startsWith("/mkgh/") || p.startsWith("/auth/login") || p.startsWith("/auth/otp") || p.startsWith("/auth/register")) return next();
   // For GET: only log meaningful page-level reads, skip noisy polling
@@ -80,6 +82,9 @@ app.use("/api/uploads", express.static(UPLOADS_PATH));
 app.get("/api/uploads/:file", async (req, res, next) => {
   const name = req.params.file;
   if (typeof name !== "string" || !/^[A-Za-z0-9._-]+$/.test(name)) return next();
+  if (isFilesystemStorageMode()) {
+    return res.status(404).json({ error: "الملف غير موجود؛ قد يلزم إعادة رفع النسخة الأصلية" });
+  }
   const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
   if (!bucketId) return res.status(503).json({ error: "تعذر الوصول إلى الملفات المحفوظة" });
   try {
@@ -104,6 +109,25 @@ app.use("/api/public", express.static(path.join(import.meta.dirname, "..", "publ
 
 
 app.use("/api", router);
+
+if (process.env.HOSTINGER_SERVE_FRONTEND === "1") {
+  const defaultFrontendDir = path.resolve(__dirname, "../../../artifacts/erp-arabic/dist/public");
+  const frontendDir = path.resolve(process.env.HOSTINGER_FRONTEND_DIR || defaultFrontendDir);
+  const frontendIndex = path.join(frontendDir, "index.html");
+  if (!fs.existsSync(frontendIndex)) {
+    throw new Error(`[startup] Hostinger frontend build was not found at ${frontendIndex}`);
+  }
+  app.use(express.static(frontendDir, { index: false }));
+  app.get("/{*splat}", (req, res, next) => {
+    if (req.path === "/api" || req.path.startsWith("/api/")) {
+      next();
+      return;
+    }
+    res.sendFile(frontendIndex, error => {
+      if (error) next(error);
+    });
+  });
+}
 
 app.use("/api/auth/login", (err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   logger.error({ err }, "[auth] Login request failed");
