@@ -535,8 +535,11 @@ export default function Sidebar() {
               className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-muted transition-colors text-muted-foreground hover:text-foreground">
               <Menu size={20} />
             </button>
-            <div className="w-8 h-8 rounded-xl overflow-hidden shadow-sm">
-              <img src="/jefer-logo-new.png" alt="MKGH" className="w-full h-full object-contain" />
+            <div className="flex flex-col items-center gap-0.5">
+              <div className="w-8 h-8 rounded-xl overflow-hidden shadow-sm">
+                <img src="/jefer-logo-new.png" alt="MKGH" className="w-full h-full object-contain" />
+              </div>
+              <span data-testid="text-brand-mark" className="text-[8px] font-bold leading-none tracking-wider text-muted-foreground">mkgh</span>
             </div>
             {user && (
               <div title={user.name} className={`w-7 h-7 rounded-lg ${ROLE_COLOR[user.role]} flex items-center justify-center`}>
@@ -547,8 +550,11 @@ export default function Sidebar() {
         ) : (
           <>
             <div className="flex items-center gap-2">
-              <div className="w-9 h-9 rounded-xl overflow-hidden flex-shrink-0 shadow-sm">
-                <img src="/jefer-logo-new.png" alt="MKGH" className="w-full h-full object-contain" />
+              <div className="flex flex-col items-center gap-0.5 flex-shrink-0">
+                <div className="w-9 h-9 rounded-xl overflow-hidden shadow-sm">
+                  <img src="/jefer-logo-new.png" alt="MKGH" className="w-full h-full object-contain" />
+                </div>
+                <span data-testid="text-brand-mark" className="text-[8px] font-bold leading-none tracking-wider text-muted-foreground">mkgh</span>
               </div>
               <div className="flex-1 min-w-0">
                 <div className="font-black text-sm text-foreground tracking-tight">MKGH</div>
