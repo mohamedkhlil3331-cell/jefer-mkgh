@@ -144,7 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem("mkgh_token", data.token);
       setToken(data.token);
       setUser(data.user);
-      toast({ title: "مرحبا بكم" });
+      toast({ title: "مرحبا بكم", duration: 4000 });
     } catch (err: any) {
       if (err?.name === "AbortError") throw new Error("تعذر الاتصال بالخادم، حاول مجدداً");
       throw err;
