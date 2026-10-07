@@ -5,22 +5,6 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-export interface HealthStatus {
-  status: string;
-}
-
-export interface SystemBackupTicket {
-  /** @minLength 20 */
-  ticket: string;
-  expiresAt: string;
-  /** @minimum 1 */
-  expiresInSeconds: number;
-}
-
-export interface ErrorResponse {
-  error: string;
-  code?: string;
-}
 
 export type DownloadSystemBackupParams = {
   /**

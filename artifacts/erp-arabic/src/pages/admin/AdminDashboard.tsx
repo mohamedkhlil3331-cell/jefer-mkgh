@@ -4,7 +4,7 @@ import {
   Users, Package, Truck, DollarSign, Plus, Pencil, Trash2,
   LayoutDashboard, Warehouse, ClipboardCheck, BarChart3,
   Tag, MapPin, Car, CalendarDays, Bell, Shield, ArrowLeft,
-  RefreshCw, CheckCircle, Clock, XCircle, TrendingUp,
+  RefreshCw, CheckCircle, Clock, XCircle, TrendingUp, Archive,
   ChevronRight, Building2,
 } from "lucide-react";
 
@@ -52,6 +52,7 @@ const QUICK_LINKS = [
   { href: "/tariffs",         icon: MapPin,          label: "التعريفات",       color: "bg-amber-50 text-amber-700"      },
   { href: "/drivers-manage",  icon: Car,             label: "إدارة السائقين",  color: "bg-yellow-50 text-yellow-700"    },
   { href: "/reports",         icon: BarChart3,       label: "التقارير",        color: "bg-rose-50 text-rose-700"        },
+  { href: "/system-backup",   icon: Archive,         label: "النسخ الاحتياطي", color: "bg-sky-50 text-sky-700"          },
 ];
 
 export default function AdminDashboard() {

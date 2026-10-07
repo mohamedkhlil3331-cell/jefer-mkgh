@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: system-backup
+    description: Admin-only export of ERP data and stored files
 paths:
   /healthz:
     get:
@@ -24,7 +26,104 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /admin/system-backup/tickets:
+    post:
+      operationId: createSystemBackupTicket
+      tags: [system-backup]
+      summary: Create a short-lived system backup download ticket
+      security:
+        - bearerAuth: []
+      responses:
+        "201":
+          description: Download ticket created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemBackupTicket"
+        "401":
+          description: Missing or expired login session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Administrator role required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: Backup ticket signing is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Unexpected ticket creation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /admin/system-backup/download:
+    get:
+      operationId: downloadSystemBackup
+      tags: [system-backup]
+      summary: Stream the comprehensive ZIP backup
+      parameters:
+        - name: ticket
+          in: query
+          required: true
+          description: Short-lived ticket returned by the ticket endpoint
+          schema:
+            type: string
+            minLength: 20
+      responses:
+        "200":
+          description: ZIP archive containing a SQLite snapshot, workbook, uploads, and App Storage objects
+          headers:
+            Content-Disposition:
+              schema:
+                type: string
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "400":
+          description: Missing or malformed ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Invalid, expired, or revoked ticket
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "403":
+          description: Administrator role required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          description: A required backup source is unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Backup preparation or ZIP streaming failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
   schemas:
     HealthStatus:
       type: object
@@ -33,4 +132,29 @@ components:
           type: string
       required:
         - status
+    SystemBackupTicket:
+      type: object
+      properties:
+        ticket:
+          type: string
+          minLength: 20
+        expiresAt:
+          type: string
+          format: date-time
+        expiresInSeconds:
+          type: integer
+          minimum: 1
+      required:
+        - ticket
+        - expiresAt
+        - expiresInSeconds
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+      required:
+        - error
 

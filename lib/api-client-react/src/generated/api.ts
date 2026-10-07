@@ -5,15 +5,23 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  DownloadSystemBackupParams,
+  ErrorResponse,
+  HealthStatus,
+  SystemBackupTicket,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
 import type { ErrorType } from "../custom-fetch";
@@ -92,6 +100,190 @@ export function useHealthCheck<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getHealthCheckQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Create a short-lived system backup download ticket
+ */
+export const getCreateSystemBackupTicketUrl = () => {
+  return `/api/admin/system-backup/tickets`;
+};
+
+export const createSystemBackupTicket = async (
+  options?: RequestInit,
+): Promise<SystemBackupTicket> => {
+  return customFetch<SystemBackupTicket>(getCreateSystemBackupTicketUrl(), {
+    ...options,
+    method: "POST",
+  });
+};
+
+export const getCreateSystemBackupTicketMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createSystemBackupTicket>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createSystemBackupTicket>>,
+  TError,
+  void,
+  TContext
+> => {
+  const mutationKey = ["createSystemBackupTicket"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createSystemBackupTicket>>,
+    void
+  > = () => {
+    return createSystemBackupTicket(requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateSystemBackupTicketMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createSystemBackupTicket>>
+>;
+
+export type CreateSystemBackupTicketMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Create a short-lived system backup download ticket
+ */
+export const useCreateSystemBackupTicket = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createSystemBackupTicket>>,
+    TError,
+    void,
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createSystemBackupTicket>>,
+  TError,
+  void,
+  TContext
+> => {
+  return useMutation(getCreateSystemBackupTicketMutationOptions(options));
+};
+
+/**
+ * @summary Stream the comprehensive ZIP backup
+ */
+export const getDownloadSystemBackupUrl = (
+  params: DownloadSystemBackupParams,
+) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/system-backup/download?${stringifiedParams}`
+    : `/api/admin/system-backup/download`;
+};
+
+export const downloadSystemBackup = async (
+  params: DownloadSystemBackupParams,
+  options?: RequestInit,
+): Promise<Blob> => {
+  return customFetch<Blob>(getDownloadSystemBackupUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getDownloadSystemBackupQueryKey = (
+  params?: DownloadSystemBackupParams,
+) => {
+  return [
+    `/api/admin/system-backup/download`,
+    ...(params ? [params] : []),
+  ] as const;
+};
+
+export const getDownloadSystemBackupQueryOptions = <
+  TData = Awaited<ReturnType<typeof downloadSystemBackup>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  params: DownloadSystemBackupParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof downloadSystemBackup>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getDownloadSystemBackupQueryKey(params);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof downloadSystemBackup>>
+  > = ({ signal }) =>
+    downloadSystemBackup(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof downloadSystemBackup>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type DownloadSystemBackupQueryResult = NonNullable<
+  Awaited<ReturnType<typeof downloadSystemBackup>>
+>;
+export type DownloadSystemBackupQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Stream the comprehensive ZIP backup
+ */
+
+export function useDownloadSystemBackup<
+  TData = Awaited<ReturnType<typeof downloadSystemBackup>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  params: DownloadSystemBackupParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof downloadSystemBackup>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getDownloadSystemBackupQueryOptions(params, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

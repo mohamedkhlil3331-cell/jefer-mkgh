@@ -14,3 +14,15 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * @summary Stream the comprehensive ZIP backup
+ */
+export const downloadSystemBackupQueryTicketMin = 20;
+
+export const DownloadSystemBackupQueryParams = zod.object({
+  ticket: zod.coerce
+    .string()
+    .min(downloadSystemBackupQueryTicketMin)
+    .describe("Short-lived ticket returned by the ticket endpoint"),
+});

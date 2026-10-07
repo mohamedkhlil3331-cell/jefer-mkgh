@@ -16,6 +16,7 @@ import tariffsRouter from "./tariffs.js";
 import driverExpensesRouter from "./driver-expenses.js";
 import driversRouter from "./drivers.js";
 import aiRouter from "./ai.js";
+import systemBackupRouter from "./system-backup.js";
 
 const router: IRouter = Router();
 
@@ -36,5 +37,6 @@ router.use(erpTrips);
 router.use(erpExpenses);
 router.use(erpOperations);
 router.use(aiRouter);
+router.use(systemBackupRouter);
 
 export default router;
