@@ -34,3 +34,4 @@
 - [Driver diesel attribution](driver-diesel-attribution.md) — vehicle links on driver expenses are metadata; the diesel register is read-only and must not alter driver balances or vehicle net.
 - [Supplier claim print history](supplier-claim-print-history.md) — use the existing claim workflow, append reprint events, and never infer a legacy printer from the claim creator.
 - [Supplier invoice paste grid](supplier-invoice-paste.md) — keep file import; add an editable, auto-expanding clipboard grid with all invoice columns and fleet-or-external vehicle entry.
+- [GitHub CLI authentication](github-cli-auth.md) — Replit's GitHub API connection does not authenticate shell `git push`; configure Git transport credentials separately without exposing or persisting the token in Git config.
