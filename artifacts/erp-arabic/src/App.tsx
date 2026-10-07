@@ -9,6 +9,7 @@ import { ThemeProvider } from "@/context/ThemeContext";
 import Sidebar from "@/components/Sidebar";
 import Login from "@/pages/Login";
 import OfflineBanner from "@/components/OfflineBanner";
+import { Toaster } from "@/components/ui/toaster";
 import Notifications from "@/pages/Notifications";
 import MainHome from "@/pages/MainHome";
 
@@ -398,6 +399,7 @@ function App() {
           <LangProvider>
             <AuthProvider>
               <CartProvider>
+                <Toaster />
                 <OfflineBanner />
                 <WouterRouter base={base}>
                   <SiteAnalyticsTracker />

@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState } from "react";
 import { clearRememberedViewState } from "@/lib/remembered-view-storage";
+import { toast } from "@/hooks/use-toast";
 
 export interface User {
   id: number;
@@ -143,6 +144,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem("mkgh_token", data.token);
       setToken(data.token);
       setUser(data.user);
+      toast({ title: "مرحبا بكم" });
     } catch (err: any) {
       if (err?.name === "AbortError") throw new Error("تعذر الاتصال بالخادم، حاول مجدداً");
       throw err;
