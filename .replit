@@ -91,9 +91,3 @@ externalPort = 6800
 [[ports]]
 localPort = 19689
 externalPort = 3001
-
-[objectStorage]
-defaultBucketID = "replit-objstore-e24f7dc6-17ef-498a-a1a0-196a18e01da2"
-
-[nix]
-channel = "stable-25_05"

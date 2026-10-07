@@ -32,7 +32,6 @@ import HRRequestsPage from "@/pages/admin/HRRequestsPage";
 import AdminApprovalsPage from "@/pages/admin/AdminApprovalsPage";
 import UsersPage from "@/pages/admin/UsersPage";
 import ReportsPage from "@/pages/admin/ReportsPage";
-import SystemBackupPage from "@/pages/admin/SystemBackupPage";
 import EmployeePortal from "@/pages/employee/EmployeePortal";
 import WorkshopManagerPage from "@/pages/workshop/WorkshopManagerPage";
 import AIChatWidget from "@/components/AIChatWidget";
@@ -76,7 +75,6 @@ function AppRoutes() {
       {/* Users management */}
       <Route path="/users" component={UsersPage} />
       <Route path="/reports" component={ReportsPage} />
-      <Route path="/system-backup" component={SystemBackupPage} />
 
       {/* New sections */}
       <Route path="/warehouses" component={WarehousesPage} />

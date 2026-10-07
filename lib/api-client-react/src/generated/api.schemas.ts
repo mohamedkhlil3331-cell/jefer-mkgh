@@ -8,24 +8,3 @@
 export interface HealthStatus {
   status: string;
 }
-
-export interface SystemBackupTicket {
-  /** @minLength 20 */
-  ticket: string;
-  expiresAt: string;
-  /** @minimum 1 */
-  expiresInSeconds: number;
-}
-
-export interface ErrorResponse {
-  error: string;
-  code?: string;
-}
-
-export type DownloadSystemBackupParams = {
-  /**
-   * Short-lived ticket returned by the ticket endpoint
-   * @minLength 20
-   */
-  ticket: string;
-};
