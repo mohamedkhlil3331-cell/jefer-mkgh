@@ -5,6 +5,544 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+export type BranchDocumentUploadRequestContentType =
+  (typeof BranchDocumentUploadRequestContentType)[keyof typeof BranchDocumentUploadRequestContentType];
+
+export const BranchDocumentUploadRequestContentType = {
+  "application/pdf": "application/pdf",
+  "image/jpeg": "image/jpeg",
+  "image/png": "image/png",
+  "image/webp": "image/webp",
+} as const;
+
+export interface BranchDocumentUploadRequest {
+  /** @maxLength 255 */
+  name: string;
+  contentType: BranchDocumentUploadRequestContentType;
+  /** @minimum 1 */
+  size: number;
+}
+
+export interface BranchDocumentUploadUrl {
+  uploadURL: string;
+  /** @pattern ^/objects/ */
+  objectPath: string;
+}
+
+export type BranchDocumentInputDocumentType =
+  (typeof BranchDocumentInputDocumentType)[keyof typeof BranchDocumentInputDocumentType];
+
+export const BranchDocumentInputDocumentType = {
+  tax_number: "tax_number",
+  cr_number: "cr_number",
+  national_address: "national_address",
+  custom: "custom",
+} as const;
+
+export type BranchDocumentInputContentType =
+  (typeof BranchDocumentInputContentType)[keyof typeof BranchDocumentInputContentType];
+
+export const BranchDocumentInputContentType = {
+  "application/pdf": "application/pdf",
+  "image/jpeg": "image/jpeg",
+  "image/png": "image/png",
+  "image/webp": "image/webp",
+} as const;
+
+export interface BranchDocumentInput {
+  document_type: BranchDocumentInputDocumentType;
+  /** @maxLength 120 */
+  title: string;
+  /** @pattern ^/objects/ */
+  object_path: string;
+  /** @maxLength 255 */
+  file_name: string;
+  content_type: BranchDocumentInputContentType;
+}
+
+export type BranchDocumentDocumentType =
+  (typeof BranchDocumentDocumentType)[keyof typeof BranchDocumentDocumentType];
+
+export const BranchDocumentDocumentType = {
+  tax_number: "tax_number",
+  cr_number: "cr_number",
+  national_address: "national_address",
+  custom: "custom",
+} as const;
+
+export type BranchDocumentContentType =
+  (typeof BranchDocumentContentType)[keyof typeof BranchDocumentContentType];
+
+export const BranchDocumentContentType = {
+  "application/pdf": "application/pdf",
+  "image/jpeg": "image/jpeg",
+  "image/png": "image/png",
+  "image/webp": "image/webp",
+} as const;
+
+export interface BranchDocument {
+  id: number;
+  branch_id: number;
+  document_type: BranchDocumentDocumentType;
+  title: string;
+  file_name: string;
+  content_type: BranchDocumentContentType;
+  file_size: number;
+  created_at: string;
+}
+
+export interface BranchDashboardBranch {
+  id: number;
+  entity_name: string;
+}
+
+export interface BranchDashboardVehicleMetrics {
+  total: number;
+  available: number;
+  busy: number;
+  maintenance: number;
+  broken: number;
+}
+
+export interface BranchDashboardRecordMetrics {
+  count: number;
+  amount: number;
+}
+
+export type BranchDashboardResponseScope =
+  (typeof BranchDashboardResponseScope)[keyof typeof BranchDashboardResponseScope];
+
+export const BranchDashboardResponseScope = {
+  all: "all",
+  branch: "branch",
+} as const;
+
+export interface BranchDashboardResponse {
+  scope: BranchDashboardResponseScope;
+  branch: BranchDashboardBranch | null;
+  vehicles: BranchDashboardVehicleMetrics;
+  maintenance: BranchDashboardRecordMetrics;
+  purchase_invoices: BranchDashboardRecordMetrics;
+  reimbursement_claims: BranchDashboardRecordMetrics;
+}
+
+export interface VehicleAttachmentDeleteResult {
+  ok: boolean;
+  fileRemoved: boolean;
+  fileRetainedBecauseShared: boolean;
+  referencesVerified: boolean;
+  clearedFields: string[];
+}
+
+export interface ChatContact {
+  id: number;
+  name: string;
+  phone: string;
+  role: string;
+}
+
+export type ChatAccessRuleEffect =
+  (typeof ChatAccessRuleEffect)[keyof typeof ChatAccessRuleEffect];
+
+export const ChatAccessRuleEffect = {
+  include: "include",
+  exclude: "exclude",
+} as const;
+
+export interface ChatAccessRule {
+  /** @minimum 1 */
+  contact_user_id: number;
+  effect: ChatAccessRuleEffect;
+}
+
+export type ChatCustomerCategoryAccessKey =
+  (typeof ChatCustomerCategoryAccessKey)[keyof typeof ChatCustomerCategoryAccessKey];
+
+export const ChatCustomerCategoryAccessKey = {
+  company: "company",
+  rental: "rental",
+} as const;
+
+export interface ChatCustomerCategoryAccess {
+  key: ChatCustomerCategoryAccessKey;
+  label: string;
+  rules: ChatAccessRule[];
+}
+
+/**
+ * @nullable
+ */
+export type ChatCustomerAccessCustomerCategory =
+  | (typeof ChatCustomerAccessCustomerCategory)[keyof typeof ChatCustomerAccessCustomerCategory]
+  | null;
+
+export const ChatCustomerAccessCustomerCategory = {
+  company: "company",
+  rental: "rental",
+} as const;
+
+export interface ChatCustomerAccessCustomer {
+  id: number;
+  name: string;
+  phone: string;
+  role: string;
+  /** @nullable */
+  category: ChatCustomerAccessCustomerCategory;
+  default_contact_ids: number[];
+  rules: ChatAccessRule[];
+}
+
+export interface ChatCustomerAccessOverview {
+  staff: ChatContact[];
+  customers: ChatCustomerAccessCustomer[];
+  categories: ChatCustomerCategoryAccess[];
+}
+
+export type ChatCustomerAccessRulesUpdateScope =
+  (typeof ChatCustomerAccessRulesUpdateScope)[keyof typeof ChatCustomerAccessRulesUpdateScope];
+
+export const ChatCustomerAccessRulesUpdateScope = {
+  category: "category",
+  customer: "customer",
+} as const;
+
+/**
+ * @nullable
+ */
+export type ChatCustomerAccessRulesUpdateCategory =
+  | (typeof ChatCustomerAccessRulesUpdateCategory)[keyof typeof ChatCustomerAccessRulesUpdateCategory]
+  | null;
+
+export const ChatCustomerAccessRulesUpdateCategory = {
+  company: "company",
+  rental: "rental",
+} as const;
+
+export interface ChatCustomerAccessRulesUpdate {
+  scope: ChatCustomerAccessRulesUpdateScope;
+  /** @nullable */
+  category: ChatCustomerAccessRulesUpdateCategory;
+  /**
+   * @minimum 1
+   * @nullable
+   */
+  customer_user_id: number | null;
+  /** @maxItems 200 */
+  rules: ChatAccessRule[];
+}
+
+export type ChatCustomerAccessRulesSavedScope =
+  (typeof ChatCustomerAccessRulesSavedScope)[keyof typeof ChatCustomerAccessRulesSavedScope];
+
+export const ChatCustomerAccessRulesSavedScope = {
+  category: "category",
+  customer: "customer",
+} as const;
+
+/**
+ * @nullable
+ */
+export type ChatCustomerAccessRulesSavedCategory =
+  | (typeof ChatCustomerAccessRulesSavedCategory)[keyof typeof ChatCustomerAccessRulesSavedCategory]
+  | null;
+
+export const ChatCustomerAccessRulesSavedCategory = {
+  company: "company",
+  rental: "rental",
+} as const;
+
+export interface ChatCustomerAccessRulesSaved {
+  ok: boolean;
+  scope: ChatCustomerAccessRulesSavedScope;
+  /** @nullable */
+  category: ChatCustomerAccessRulesSavedCategory;
+  /** @nullable */
+  customer_user_id: number | null;
+  rules: ChatAccessRule[];
+}
+
+export type ChatMessageType =
+  (typeof ChatMessageType)[keyof typeof ChatMessageType];
+
+export const ChatMessageType = {
+  text: "text",
+  voice: "voice",
+} as const;
+
+export interface ChatMessage {
+  id: number;
+  conversation_id: number;
+  sender_id: number;
+  sender_name: string;
+  sender_role: string;
+  type: ChatMessageType;
+  text: string | null;
+  media_url: string | null;
+  media_type: string | null;
+  media_size: number | null;
+  created_at: string;
+  edited_at: string | null;
+}
+
+export type ChatMessageCreateType =
+  (typeof ChatMessageCreateType)[keyof typeof ChatMessageCreateType];
+
+export const ChatMessageCreateType = {
+  text: "text",
+  voice: "voice",
+} as const;
+
+export interface ChatMessageCreate {
+  type: ChatMessageCreateType;
+  /** @maxLength 4000 */
+  text?: string;
+  upload_token?: string;
+}
+
+export interface StartChatConversationRequest {
+  /** @minimum 1 */
+  recipient_user_id: number;
+}
+
+export type ChatVoiceUploadRequestContentType =
+  (typeof ChatVoiceUploadRequestContentType)[keyof typeof ChatVoiceUploadRequestContentType];
+
+export const ChatVoiceUploadRequestContentType = {
+  "audio/webm": "audio/webm",
+  "audio/ogg": "audio/ogg",
+  "audio/mp4": "audio/mp4",
+  "audio/mpeg": "audio/mpeg",
+} as const;
+
+export interface ChatVoiceUploadRequest {
+  /** @maxLength 160 */
+  name: string;
+  contentType: ChatVoiceUploadRequestContentType;
+  /**
+   * @minimum 1
+   * @maximum 25000000
+   */
+  size: number;
+}
+
+export interface EditChatMessageRequest {
+  /**
+   * @minLength 1
+   * @maxLength 4000
+   */
+  text: string;
+}
+
+export interface RemoveChatPushSubscriptionRequest {
+  endpoint: string;
+}
+
+export interface ChatConversation {
+  id: number;
+  other_user_id: number;
+  other_user_name: string;
+  other_user_phone: string;
+  other_user_role: string;
+  last_message: ChatMessage | null;
+  updated_at: string;
+  unread_count: number;
+}
+
+export interface ChatConversationCreated {
+  id: number;
+}
+
+export interface ChatVoiceUpload {
+  upload_url: string;
+  upload_token: string;
+}
+
+export interface ChatNotificationSettings {
+  messages_enabled: boolean;
+  orders_enabled: boolean;
+}
+
+export type ChatPushSubscriptionKeys = {
+  p256dh: string;
+  auth: string;
+};
+
+export interface ChatPushSubscription {
+  endpoint: string;
+  keys: ChatPushSubscriptionKeys;
+}
+
+export type ChatRetentionSettingsRetentionMode =
+  (typeof ChatRetentionSettingsRetentionMode)[keyof typeof ChatRetentionSettingsRetentionMode];
+
+export const ChatRetentionSettingsRetentionMode = {
+  auto_delete: "auto_delete",
+  keep: "keep",
+} as const;
+
+export interface ChatRetentionSettings {
+  retention_mode: ChatRetentionSettingsRetentionMode;
+  /**
+   * @minimum 1
+   * @maximum 3650
+   */
+  retention_days: number;
+  allow_user_delete: boolean;
+}
+
+export type ChatAdminConversation = ChatRetentionSettings & {
+  id: number;
+  user_id: number;
+  user_name: string;
+  user_role: string;
+  other_user_id: number;
+  other_user_name: string;
+  other_user_role: string;
+};
+
+/**
+ * @nullable
+ */
+export type SupplierPurchaseInvoicePasteRowInputWorkOn =
+  | (typeof SupplierPurchaseInvoicePasteRowInputWorkOn)[keyof typeof SupplierPurchaseInvoicePasteRowInputWorkOn]
+  | null;
+
+export const SupplierPurchaseInvoicePasteRowInputWorkOn = {
+  vehicle: "vehicle",
+  trailer: "trailer",
+} as const;
+
+export interface SupplierPurchaseInvoicePasteRowInput {
+  /** @nullable */
+  serial_no: string | null;
+  /** @nullable */
+  invoice_date: string | null;
+  /** @nullable */
+  branch: string | null;
+  /** @nullable */
+  vehicle_plate: string | null;
+  /** @nullable */
+  work_on: SupplierPurchaseInvoicePasteRowInputWorkOn;
+  /** @nullable */
+  trailer_number: string | null;
+  /** @nullable */
+  invoice_number: string | null;
+  /** @nullable */
+  supplier_name: string | null;
+  /** @minLength 1 */
+  item_name: string;
+  /** @minimum 0 */
+  quantity: number;
+  /** @minimum 0 */
+  price_before_vat: number;
+  /** @minimum 0 */
+  price_after_vat: number;
+  /** @minimum 0 */
+  discount_amount: number;
+  /** @nullable */
+  notes: string | null;
+}
+
+export interface SupplierPurchaseInvoicePasteInput {
+  /**
+   * @minLength 16
+   * @maxLength 200
+   */
+  request_key: string;
+  /**
+   * @minItems 1
+   * @maxItems 500
+   */
+  rows: SupplierPurchaseInvoicePasteRowInput[];
+}
+
+/**
+ * @nullable
+ */
+export type SupplierPurchaseInvoicePasteSavedRowWorkOn =
+  | (typeof SupplierPurchaseInvoicePasteSavedRowWorkOn)[keyof typeof SupplierPurchaseInvoicePasteSavedRowWorkOn]
+  | null;
+
+export const SupplierPurchaseInvoicePasteSavedRowWorkOn = {
+  vehicle: "vehicle",
+  trailer: "trailer",
+} as const;
+
+export interface SupplierPurchaseInvoicePasteSavedRow {
+  id: number;
+  /** @nullable */
+  serial_no: string | null;
+  /** @nullable */
+  invoice_date: string | null;
+  /** @nullable */
+  branch: string | null;
+  /** @nullable */
+  vehicle_plate: string | null;
+  /** @nullable */
+  invoice_number: string | null;
+  /** @nullable */
+  reimbursement_claim_id: number | null;
+  /** @nullable */
+  work_on: SupplierPurchaseInvoicePasteSavedRowWorkOn;
+  /** @nullable */
+  trailer_number: string | null;
+  /** @nullable */
+  supplier_name: string | null;
+  /** @nullable */
+  supplier_id: number | null;
+  item_name: string;
+  price_before_vat: number;
+  quantity: number;
+  price_after_vat: number;
+  discount_amount: number;
+  /** @nullable */
+  notes: string | null;
+  /** @nullable */
+  imported_by: string | null;
+  created_at: string;
+}
+
+export interface SupplierPurchaseInvoicePasteResult {
+  ok: boolean;
+  inserted: number;
+  invoice_ids: number[];
+  invoices: SupplierPurchaseInvoicePasteSavedRow[];
+  workshop_added_count: number;
+  workshop_item_names: string[];
+  replayed: boolean;
+}
+
+export interface ApiError {
+  error: string;
+}
+
 export interface HealthStatus {
   status: string;
 }
+
+export type GetBranchDashboardParams = {
+  /**
+   * @minimum 1
+   */
+  branchId?: number;
+};
+
+export type DeleteChatMessage200 = {
+  ok: boolean;
+};
+
+export type MarkChatConversationRead200 = {
+  ok: boolean;
+};
+
+export type GetChatPushPublicKey200 = {
+  public_key: string;
+};
+
+export type RegisterChatPushSubscription201 = {
+  ok: boolean;
+};
+
+export type RemoveChatPushSubscription200 = {
+  ok: boolean;
+};

@@ -1,0 +1,30 @@
+STRICT INSTRUCTION: SCOPED UPDATE ONLY. I need to implement 3 features in the "User Management" module: "Granular Micro-Permissions", "Predefined Role Templates", AND "Fixing the Delete User" functionality. DO NOT rewrite the whole app or touch the dashboards' internal code.
+
+Specific Requirements:
+
+1. FIX DELETE FUNCTIONALITY (CRITICAL): 
+   - The "Delete" (حذف) button exists in the UI but does not delete the user from the database.
+   - Create the backend API endpoint to permanently delete a user from the SQLite `users` table by ID.
+   - Wire the frontend Delete button to this API. It MUST show a browser confirmation alert (`confirm("هل أنت متأكد من حذف هذا المستخدم نهائياً؟")`) before executing.
+   - Remove the deleted user's row from the frontend table dynamically upon success.
+
+2. DATABASE SCHEMA:
+   - Ensure the `users` table uses a `permissions` column (stored as a JSON array of specific access keys like 'trips_add', 'reports_income', 'users_manage', etc.).
+
+3. UI - ROLE TEMPLATES DROPDOWN:
+   - In the Add/Edit User modal, add a dropdown containing these 20 predefined roles:
+     (مدير نظام, مراجع, محاسب, موظف, مشرف النقليات والمستودع, سائق, سيارة, مندوب, مندوب مشتريات, مدير الورشة, مدير مصنع البلك, مدير النقليات, مدير التشغيل, المدير التنفيذي, مدير الموارد البشرية, المدير المالي, مسئول إصدار فواتير الأسمنت, مشرف حركة البلاكر, عميل).
+
+4. UI - CATEGORIZED GRANULAR CHECKBOXES:
+   - Below the dropdown, display an exhaustive list of system features using checkboxes grouped into clean categories:
+     * 🚚 Operations (العمليات): [ ] Add Trip, [ ] Edit/Delete Trip, [ ] View Trips List.
+     * 💰 Accounting (الحسابات): [ ] Add Expense, [ ] View Income Statement, [ ] View Petty Cash, [ ] General Expenses.
+     * 👥 Management (الإدارة): [ ] Manage Users, [ ] Fleet Analytics, [ ] Client Reports.
+     * 📦 Portals (البوابات): [ ] Client Portal, [ ] Driver Portal, [ ] Vehicle Portal.
+
+5. AUTO-FILL & OVERRIDE LOGIC (JS):
+   - When a Role Template is selected from the dropdown, automatically check/uncheck the relevant checkboxes below it to match the role's default permissions.
+   - The Admin MUST still be able to manually check/uncheck any individual box after a template is selected to create a custom permission set before clicking "Save".
+
+6. BACKEND MIDDLEWARE:
+   - Route authorization must strictly evaluate the saved JSON `permissions` array keys to grant access, rather than just checking the role name.

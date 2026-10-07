@@ -18,7 +18,7 @@ pnpm workspace monorepo. Full multi-role logistics platform for MKGH cement/cons
 
 | Artifact | Path | Description |
 |---|---|---|
-| `erp-arabic` | `/erp/` | Main platform — multi-role portal + legacy ERP |
+| `erp-arabic` | `/` | Main platform — multi-role portal + legacy ERP |
 | `api-server` | `/api/` | Backend REST API |
 
 ## Platform Roles
@@ -31,8 +31,8 @@ pnpm workspace monorepo. Full multi-role logistics platform for MKGH cement/cons
 | warehouse (مستودع) | 0500000003 | 123456 | Invoice issuance |
 | driver (سائق) | 0500000004 | 123456 | Loading + delivery + breakdown report |
 | rep (مندوب) | 0500000005 | 123456 | Customer orders tracking |
-| workshop_manager (مدير الورشة) | 0500000006 | 123456 | Breakdown reports + resolve |
-| purchasing (مسئول المشتريات) | 0500000007 | 123456 | Employee portal |
+| workshop_manager (مدير الورشة) | 0500000006 | 123456 | Breakdown reports + work orders + inventory |
+| purchasing (مسئول المشتريات) | 0500000007 | 123456 | Purchase requests approve/receive + inventory |
 | customer (عميل) | 0555555555 | 123456 | Product catalog + orders + account |
 
 ## Order Workflow
@@ -69,9 +69,22 @@ Driver confirms delivery
 
 ## Database Tables
 
-**New platform tables:** users, sessions, products, product_ratings, workflow_orders, customer_transfers, notifications
+**New platform tables:** users, sessions, products, product_ratings, workflow_orders, customer_transfers, notifications, breakdown_reports, workshop_jobs, workshop_inventory, purchase_requests
 
 **Legacy ERP tables:** employees, leave_requests, invoices, trips, fleet_expenses, petty_cash, fleet_vehicles, workshop
+
+## Workshop & Purchasing Module
+
+**Workshop Jobs** (`workshop_jobs`): work orders per vehicle, `invoice_target` = `vehicle` (charges vehicle) or `inventory` (deducts workshop stock). Created from breakdown reports or manually.
+
+**Workshop Inventory** (`workshop_inventory`): spare parts stock with min_stock alerts. Managed by both workshop_manager and purchasing.
+
+**Purchase Requests** (`purchase_requests`): workshop_manager creates → purchasing approves/rejects → on receive, stock added to workshop_inventory.
+
+Key API routes (no auth guard — rely on role-based UI):
+- `GET/POST /api/workshop-jobs`, `PUT /api/workshop-jobs/:id/complete`, `PUT /api/workshop-jobs/:id/status`
+- `GET/POST/PUT /api/workshop-inventory`, `PUT /api/workshop-inventory/:id/receive`
+- `GET/POST /api/purchase-requests`, `PUT /api/purchase-requests/:id/approve|reject|receive`
 
 ## Data Source
 

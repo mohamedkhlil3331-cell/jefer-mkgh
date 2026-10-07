@@ -10,7 +10,238 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: vehicle-attachments
+    description: Vehicle document and image deletion
+  - name: branch-dashboard
+    description: Read-only branch dashboard summaries
+  - name: company-branch-documents
+    description: Branch profile document uploads and downloads
+  - name: supplier-purchase-invoices
+    description: Supplier invoice entry workflows
 paths:
+  /company-settings/{id}/documents/upload-url:
+    post:
+      operationId: createCompanyBranchDocumentUploadUrl
+      tags: [company-branch-documents]
+      summary: Create a private upload URL for a company branch document
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BranchDocumentUploadRequest"
+      responses:
+        "200":
+          description: Private upload URL and object path
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BranchDocumentUploadUrl"
+        "400":
+          description: Invalid file metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Administrator access required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Active branch not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /company-settings/{id}/documents:
+    get:
+      operationId: getCompanyBranchDocuments
+      tags: [company-branch-documents]
+      summary: List documents attached to a company branch
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Branch documents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/BranchDocument"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Administrator access required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Active branch not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    post:
+      operationId: createCompanyBranchDocument
+      tags: [company-branch-documents]
+      summary: Attach an uploaded document to a company branch
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BranchDocumentInput"
+      responses:
+        "201":
+          description: Branch document saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BranchDocument"
+        "400":
+          description: Invalid document metadata or upload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Administrator access required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Active branch or uploaded file not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /company-settings/{id}/documents/{documentId}/file:
+    get:
+      operationId: getCompanyBranchDocumentFile
+      tags: [company-branch-documents]
+      summary: Download a private company branch document
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+        - name: documentId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: The private image or PDF document
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Administrator access required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Branch document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /branch-dashboard:
+    get:
+      operationId: getBranchDashboard
+      tags: [branch-dashboard]
+      summary: Get branch-linked dashboard metrics
+      parameters:
+        - name: branchId
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Dashboard metrics for one active branch or all active branches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BranchDashboardResponse"
+        "400":
+          description: Invalid branch identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Administrator access required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Active branch not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
   /healthz:
     get:
       operationId: healthCheck
@@ -24,8 +255,1478 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /chat/contacts:
+    get:
+      operationId: getChatContacts
+      tags: [chat]
+      summary: List active users available for direct chat under the chat access policy
+      responses:
+        "200":
+          description: Available coworkers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChatContact"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: A valid chat account is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/admin/customer-access:
+    get:
+      operationId: getChatAdminCustomerAccess
+      tags: [chat]
+      summary: Get customer chat access rules and available customer accounts
+      responses:
+        "200":
+          description: Customer chat access configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCustomerAccessOverview"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Chat access management permission required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/admin/customer-access/rules:
+    put:
+      operationId: updateChatAdminCustomerAccessRules
+      tags: [chat]
+      summary: Replace chat contact exceptions for a customer or customer category
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCustomerAccessRulesUpdate"
+      responses:
+        "200":
+          description: Saved customer chat access rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCustomerAccessRulesSaved"
+        "400":
+          description: Invalid access rule data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Chat access management permission required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Customer account not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/conversations:
+    get:
+      operationId: getChatConversations
+      tags: [chat]
+      summary: List the current user's direct conversations
+      responses:
+        "200":
+          description: Direct conversations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChatConversation"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    post:
+      operationId: createChatConversation
+      tags: [chat]
+      summary: Start or retrieve a direct conversation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartChatConversationRequest"
+      responses:
+        "200":
+          description: Existing or newly created conversation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatConversationCreated"
+        "400":
+          description: Invalid recipient
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Recipient is unavailable for chat
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/conversations/{conversationId}/messages:
+    get:
+      operationId: getChatMessages
+      tags: [chat]
+      summary: List messages in a direct conversation
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Conversation messages in chronological order
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChatMessage"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Conversation membership required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    post:
+      operationId: sendChatMessage
+      tags: [chat]
+      summary: Send a text or voice message
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatMessageCreate"
+      responses:
+        "201":
+          description: Persisted message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatMessage"
+        "400":
+          description: Invalid message data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Conversation membership required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/conversations/{conversationId}/messages/before/{beforeId}:
+    get:
+      operationId: getOlderChatMessages
+      tags: [chat]
+      summary: Load earlier messages in a direct conversation
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+        - name: beforeId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Earlier conversation messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChatMessage"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Conversation membership required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/conversations/{conversationId}/voice-upload-url:
+    post:
+      operationId: createChatVoiceUpload
+      tags: [chat]
+      summary: Create a private upload URL for a voice message
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatVoiceUploadRequest"
+      responses:
+        "201":
+          description: Temporary upload credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatVoiceUpload"
+        "400":
+          description: Unsupported audio file
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Conversation membership required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/messages/{messageId}:
+    put:
+      operationId: editChatMessage
+      tags: [chat]
+      summary: Edit the sender's text message
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EditChatMessageRequest"
+      responses:
+        "200":
+          description: Updated message
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatMessage"
+        "400":
+          description: Invalid message text
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Message editing is not permitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Message not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: deleteChatMessage
+      tags: [chat]
+      summary: Delete a message when conversation policy permits
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Message deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required: [ok]
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Message deletion is not permitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Message not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/messages/{messageId}/media:
+    get:
+      operationId: getChatMessageMedia
+      tags: [chat]
+      summary: Stream voice media after checking conversation membership
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Private audio bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Conversation membership required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Voice message not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/conversations/{conversationId}/read:
+    post:
+      operationId: markChatConversationRead
+      tags: [chat]
+      summary: Mark incoming messages in a conversation as read
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Conversation read marker updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required: [ok]
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Conversation membership required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/notification-settings:
+    get:
+      operationId: getChatNotificationSettings
+      tags: [chat]
+      summary: Get the authenticated user's notification preferences
+      responses:
+        "200":
+          description: Message and order notification preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatNotificationSettings"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: An active ERP account is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    put:
+      operationId: updateChatNotificationSettings
+      tags: [chat]
+      summary: Update the authenticated user's notification preferences
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatNotificationSettings"
+      responses:
+        "200":
+          description: Saved preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatNotificationSettings"
+        "400":
+          description: Invalid notification preferences
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: An active ERP account is required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/push/vapid-public-key:
+    get:
+      operationId: getChatPushPublicKey
+      tags: [chat]
+      summary: Get the VAPID public key for browser push subscriptions
+      responses:
+        "200":
+          description: Browser push public key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  public_key:
+                    type: string
+                required: [public_key]
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/push/subscriptions:
+    post:
+      operationId: registerChatPushSubscription
+      tags: [chat]
+      summary: Register this browser's push subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatPushSubscription"
+      responses:
+        "201":
+          description: Subscription saved
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required: [ok]
+        "400":
+          description: Invalid browser subscription
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+    delete:
+      operationId: removeChatPushSubscription
+      tags: [chat]
+      summary: Remove this browser's push subscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RemoveChatPushSubscriptionRequest"
+      responses:
+        "200":
+          description: Subscription removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required: [ok]
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/admin/users/{userId}/conversations:
+    get:
+      operationId: getChatAdminUserConversations
+      tags: [chat]
+      summary: List conversations and retention controls from a user card
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Conversations for the selected user
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ChatAdminConversation"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Manager permission required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /chat/admin/conversations/{conversationId}/settings:
+    put:
+      operationId: updateChatConversationSettings
+      tags: [chat]
+      summary: Update message retention and deletion policy for a conversation
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatRetentionSettings"
+      responses:
+        "200":
+          description: Saved conversation policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatAdminConversation"
+        "400":
+          description: Invalid policy values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "403":
+          description: Manager permission required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /vehicle-compliance/{id}:
+    delete:
+      operationId: deleteVehicleComplianceDocument
+      tags: [vehicle-attachments]
+      summary: Delete a vehicle compliance document and its unshared file
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Document deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VehicleAttachmentDeleteResult"
+        "400":
+          description: Invalid document identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Document not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: Unsupported attachment storage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          description: The stored file could not be removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /vehicle-images/{id}:
+    delete:
+      operationId: deleteVehicleImage
+      tags: [vehicle-attachments]
+      summary: Delete a vehicle image and its unshared file
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Image deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VehicleAttachmentDeleteResult"
+        "400":
+          description: Invalid image identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Image not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: Unsupported attachment storage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          description: The stored image could not be removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /fleet-vehicles/{plate}/attachments/{field}:
+    delete:
+      operationId: deleteFleetVehicleAttachment
+      tags: [vehicle-attachments]
+      summary: Remove a directly linked vehicle attachment and its unshared file
+      parameters:
+        - name: plate
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: field
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Attachment removed from the vehicle
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VehicleAttachmentDeleteResult"
+        "400":
+          description: Invalid attachment field
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "404":
+          description: Vehicle or attachment not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "422":
+          description: Unsupported attachment storage
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "500":
+          description: The stored file could not be removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+  /purchase-invoices/paste:
+    post:
+      operationId: pasteSupplierPurchaseInvoices
+      tags: [supplier-purchase-invoices]
+      summary: Save a pasted batch of supplier invoice rows
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SupplierPurchaseInvoicePasteInput"
+      responses:
+        "201":
+          description: The saved supplier invoice rows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SupplierPurchaseInvoicePasteResult"
+        "400":
+          description: Invalid pasted invoice data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
+        "409":
+          description: The request key was reused with different invoice rows
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiError"
 components:
   schemas:
+    BranchDocumentUploadRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        contentType:
+          type: string
+          enum: [application/pdf, image/jpeg, image/png, image/webp]
+        size:
+          type: integer
+          minimum: 1
+      required: [name, contentType, size]
+    BranchDocumentUploadUrl:
+      type: object
+      properties:
+        uploadURL:
+          type: string
+          format: uri
+        objectPath:
+          type: string
+          pattern: "^/objects/"
+      required: [uploadURL, objectPath]
+    BranchDocumentInput:
+      type: object
+      properties:
+        document_type:
+          type: string
+          enum: [tax_number, cr_number, national_address, custom]
+        title:
+          type: string
+          maxLength: 120
+        object_path:
+          type: string
+          pattern: "^/objects/"
+        file_name:
+          type: string
+          maxLength: 255
+        content_type:
+          type: string
+          enum: [application/pdf, image/jpeg, image/png, image/webp]
+      required: [document_type, title, object_path, file_name, content_type]
+    BranchDocument:
+      type: object
+      properties:
+        id:
+          type: integer
+        branch_id:
+          type: integer
+        document_type:
+          type: string
+          enum: [tax_number, cr_number, national_address, custom]
+        title:
+          type: string
+        file_name:
+          type: string
+        content_type:
+          type: string
+          enum: [application/pdf, image/jpeg, image/png, image/webp]
+        file_size:
+          type: integer
+        created_at:
+          type: string
+      required: [id, branch_id, document_type, title, file_name, content_type, file_size, created_at]
+    BranchDashboardBranch:
+      type: object
+      properties:
+        id:
+          type: integer
+        entity_name:
+          type: string
+      required:
+        - id
+        - entity_name
+    BranchDashboardVehicleMetrics:
+      type: object
+      properties:
+        total:
+          type: integer
+        available:
+          type: integer
+        busy:
+          type: integer
+        maintenance:
+          type: integer
+        broken:
+          type: integer
+      required:
+        - total
+        - available
+        - busy
+        - maintenance
+        - broken
+    BranchDashboardRecordMetrics:
+      type: object
+      properties:
+        count:
+          type: integer
+        amount:
+          type: number
+      required:
+        - count
+        - amount
+    BranchDashboardResponse:
+      type: object
+      properties:
+        scope:
+          type: string
+          enum: [all, branch]
+        branch:
+          anyOf:
+            - $ref: "#/components/schemas/BranchDashboardBranch"
+            - type: "null"
+        vehicles:
+          $ref: "#/components/schemas/BranchDashboardVehicleMetrics"
+        maintenance:
+          $ref: "#/components/schemas/BranchDashboardRecordMetrics"
+        purchase_invoices:
+          $ref: "#/components/schemas/BranchDashboardRecordMetrics"
+        reimbursement_claims:
+          $ref: "#/components/schemas/BranchDashboardRecordMetrics"
+      required:
+        - scope
+        - branch
+        - vehicles
+        - maintenance
+        - purchase_invoices
+        - reimbursement_claims
+    VehicleAttachmentDeleteResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        fileRemoved:
+          type: boolean
+        fileRetainedBecauseShared:
+          type: boolean
+        referencesVerified:
+          type: boolean
+        clearedFields:
+          type: array
+          items:
+            type: string
+      required:
+        - ok
+        - fileRemoved
+        - fileRetainedBecauseShared
+        - referencesVerified
+        - clearedFields
+    ChatContact:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        phone:
+          type: string
+        role:
+          type: string
+      required: [id, name, phone, role]
+    ChatAccessRule:
+      type: object
+      properties:
+        contact_user_id:
+          type: integer
+          minimum: 1
+        effect:
+          type: string
+          enum: [include, exclude]
+      required: [contact_user_id, effect]
+    ChatCustomerCategoryAccess:
+      type: object
+      properties:
+        key:
+          type: string
+          enum: [company, rental]
+        label:
+          type: string
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatAccessRule"
+      required: [key, label, rules]
+    ChatCustomerAccessCustomer:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        phone:
+          type: string
+        role:
+          type: string
+        category:
+          type: ["string", "null"]
+          enum: [company, rental, null]
+        default_contact_ids:
+          type: array
+          items:
+            type: integer
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatAccessRule"
+      required: [id, name, phone, role, category, default_contact_ids, rules]
+    ChatCustomerAccessOverview:
+      type: object
+      properties:
+        staff:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatContact"
+        customers:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatCustomerAccessCustomer"
+        categories:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatCustomerCategoryAccess"
+      required: [staff, customers, categories]
+    ChatCustomerAccessRulesUpdate:
+      type: object
+      properties:
+        scope:
+          type: string
+          enum: [category, customer]
+        category:
+          type: ["string", "null"]
+          enum: [company, rental, null]
+        customer_user_id:
+          type: ["integer", "null"]
+          minimum: 1
+        rules:
+          type: array
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/ChatAccessRule"
+      required: [scope, category, customer_user_id, rules]
+    ChatCustomerAccessRulesSaved:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        scope:
+          type: string
+          enum: [category, customer]
+        category:
+          type: ["string", "null"]
+          enum: [company, rental, null]
+        customer_user_id:
+          type: ["integer", "null"]
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatAccessRule"
+      required: [ok, scope, category, customer_user_id, rules]
+    ChatMessage:
+      type: object
+      properties:
+        id:
+          type: integer
+        conversation_id:
+          type: integer
+        sender_id:
+          type: integer
+        sender_name:
+          type: string
+        sender_role:
+          type: string
+        type:
+          type: string
+          enum: [text, voice]
+        text:
+          anyOf:
+            - type: string
+            - type: "null"
+        media_url:
+          anyOf:
+            - type: string
+            - type: "null"
+        media_type:
+          anyOf:
+            - type: string
+            - type: "null"
+        media_size:
+          anyOf:
+            - type: integer
+            - type: "null"
+        created_at:
+          type: string
+        edited_at:
+          anyOf:
+            - type: string
+            - type: "null"
+      required: [id, conversation_id, sender_id, sender_name, sender_role, type, text, media_url, media_type, media_size, created_at, edited_at]
+    ChatMessageCreate:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [text, voice]
+        text:
+          type: string
+          maxLength: 4000
+        upload_token:
+          type: string
+      required: [type]
+    StartChatConversationRequest:
+      type: object
+      properties:
+        recipient_user_id:
+          type: integer
+          minimum: 1
+      required: [recipient_user_id]
+    ChatVoiceUploadRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          maxLength: 160
+        contentType:
+          type: string
+          enum: [audio/webm, audio/ogg, audio/mp4, audio/mpeg]
+        size:
+          type: integer
+          minimum: 1
+          maximum: 25000000
+      required: [name, contentType, size]
+    EditChatMessageRequest:
+      type: object
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 4000
+      required: [text]
+    RemoveChatPushSubscriptionRequest:
+      type: object
+      properties:
+        endpoint:
+          type: string
+          format: uri
+      required: [endpoint]
+    ChatConversation:
+      type: object
+      properties:
+        id:
+          type: integer
+        other_user_id:
+          type: integer
+        other_user_name:
+          type: string
+        other_user_phone:
+          type: string
+        other_user_role:
+          type: string
+        last_message:
+          anyOf:
+            - $ref: "#/components/schemas/ChatMessage"
+            - type: "null"
+        updated_at:
+          type: string
+        unread_count:
+          type: integer
+      required: [id, other_user_id, other_user_name, other_user_phone, other_user_role, last_message, updated_at, unread_count]
+    ChatConversationCreated:
+      type: object
+      properties:
+        id:
+          type: integer
+      required: [id]
+    ChatVoiceUpload:
+      type: object
+      properties:
+        upload_url:
+          type: string
+          format: uri
+        upload_token:
+          type: string
+      required: [upload_url, upload_token]
+    ChatNotificationSettings:
+      type: object
+      properties:
+        messages_enabled:
+          type: boolean
+        orders_enabled:
+          type: boolean
+      required: [messages_enabled, orders_enabled]
+    ChatPushSubscription:
+      type: object
+      properties:
+        endpoint:
+          type: string
+          format: uri
+        keys:
+          type: object
+          properties:
+            p256dh:
+              type: string
+            auth:
+              type: string
+          required: [p256dh, auth]
+      required: [endpoint, keys]
+    ChatRetentionSettings:
+      type: object
+      properties:
+        retention_mode:
+          type: string
+          enum: [auto_delete, keep]
+        retention_days:
+          type: integer
+          minimum: 1
+          maximum: 3650
+        allow_user_delete:
+          type: boolean
+      required: [retention_mode, retention_days, allow_user_delete]
+    ChatAdminConversation:
+      allOf:
+        - $ref: "#/components/schemas/ChatRetentionSettings"
+        - type: object
+          properties:
+            id:
+              type: integer
+            user_id:
+              type: integer
+            user_name:
+              type: string
+            user_role:
+              type: string
+            other_user_id:
+              type: integer
+            other_user_name:
+              type: string
+            other_user_role:
+              type: string
+          required: [id, user_id, user_name, user_role, other_user_id, other_user_name, other_user_role]
+    SupplierPurchaseInvoicePasteInput:
+      type: object
+      properties:
+        request_key:
+          type: string
+          minLength: 16
+          maxLength: 200
+        rows:
+          type: array
+          minItems: 1
+          maxItems: 500
+          items:
+            $ref: "#/components/schemas/SupplierPurchaseInvoicePasteRowInput"
+      required: [request_key, rows]
+    SupplierPurchaseInvoicePasteRowInput:
+      type: object
+      properties:
+        serial_no:
+          type: ["string", "null"]
+        invoice_date:
+          type: ["string", "null"]
+        branch:
+          type: ["string", "null"]
+        vehicle_plate:
+          type: ["string", "null"]
+        work_on:
+          type: ["string", "null"]
+          enum: [vehicle, trailer, null]
+        trailer_number:
+          type: ["string", "null"]
+        invoice_number:
+          type: ["string", "null"]
+        supplier_name:
+          type: ["string", "null"]
+        item_name:
+          type: string
+          minLength: 1
+        quantity:
+          type: number
+          minimum: 0
+        price_before_vat:
+          type: number
+          minimum: 0
+        price_after_vat:
+          type: number
+          minimum: 0
+        discount_amount:
+          type: number
+          minimum: 0
+        notes:
+          type: ["string", "null"]
+      required:
+        - serial_no
+        - invoice_date
+        - branch
+        - vehicle_plate
+        - work_on
+        - trailer_number
+        - invoice_number
+        - supplier_name
+        - item_name
+        - quantity
+        - price_before_vat
+        - price_after_vat
+        - discount_amount
+        - notes
+    SupplierPurchaseInvoicePasteSavedRow:
+      type: object
+      properties:
+        id:
+          type: integer
+        serial_no:
+          type: ["string", "null"]
+        invoice_date:
+          type: ["string", "null"]
+        branch:
+          type: ["string", "null"]
+        vehicle_plate:
+          type: ["string", "null"]
+        invoice_number:
+          type: ["string", "null"]
+        reimbursement_claim_id:
+          type: ["integer", "null"]
+        work_on:
+          type: ["string", "null"]
+          enum: [vehicle, trailer, null]
+        trailer_number:
+          type: ["string", "null"]
+        supplier_name:
+          type: ["string", "null"]
+        supplier_id:
+          type: ["integer", "null"]
+        item_name:
+          type: string
+        price_before_vat:
+          type: number
+        quantity:
+          type: number
+        price_after_vat:
+          type: number
+        discount_amount:
+          type: number
+        notes:
+          type: ["string", "null"]
+        imported_by:
+          type: ["string", "null"]
+        created_at:
+          type: string
+      required:
+        - id
+        - serial_no
+        - invoice_date
+        - branch
+        - vehicle_plate
+        - invoice_number
+        - reimbursement_claim_id
+        - work_on
+        - trailer_number
+        - supplier_name
+        - supplier_id
+        - item_name
+        - price_before_vat
+        - quantity
+        - price_after_vat
+        - discount_amount
+        - notes
+        - imported_by
+        - created_at
+    SupplierPurchaseInvoicePasteResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        inserted:
+          type: integer
+        invoice_ids:
+          type: array
+          items:
+            type: integer
+        invoices:
+          type: array
+          items:
+            $ref: "#/components/schemas/SupplierPurchaseInvoicePasteSavedRow"
+        workshop_added_count:
+          type: integer
+        workshop_item_names:
+          type: array
+          items:
+            type: string
+        replayed:
+          type: boolean
+      required:
+        - ok
+        - inserted
+        - invoice_ids
+        - invoices
+        - workshop_added_count
+        - workshop_item_names
+        - replayed
+    ApiError:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
     HealthStatus:
       type: object
       properties:

@@ -8,9 +8,674 @@
 import * as zod from "zod";
 
 /**
+ * @summary Create a private upload URL for a company branch document
+ */
+
+export const CreateCompanyBranchDocumentUploadUrlParams = zod.object({
+  id: zod.coerce.number().min(1),
+});
+
+export const createCompanyBranchDocumentUploadUrlBodyNameMax = 255;
+
+export const CreateCompanyBranchDocumentUploadUrlBody = zod.object({
+  name: zod.string().max(createCompanyBranchDocumentUploadUrlBodyNameMax),
+  contentType: zod.enum([
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+  ]),
+  size: zod.number().min(1),
+});
+
+export const createCompanyBranchDocumentUploadUrlResponseObjectPathRegExp =
+  new RegExp("^\/objects");
+
+export const CreateCompanyBranchDocumentUploadUrlResponse = zod.object({
+  uploadURL: zod.string().url(),
+  objectPath: zod
+    .string()
+    .regex(createCompanyBranchDocumentUploadUrlResponseObjectPathRegExp),
+});
+
+/**
+ * @summary List documents attached to a company branch
+ */
+
+export const GetCompanyBranchDocumentsParams = zod.object({
+  id: zod.coerce.number().min(1),
+});
+
+export const GetCompanyBranchDocumentsResponseItem = zod.object({
+  id: zod.number(),
+  branch_id: zod.number(),
+  document_type: zod.enum([
+    "tax_number",
+    "cr_number",
+    "national_address",
+    "custom",
+  ]),
+  title: zod.string(),
+  file_name: zod.string(),
+  content_type: zod.enum([
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+  ]),
+  file_size: zod.number(),
+  created_at: zod.string(),
+});
+export const GetCompanyBranchDocumentsResponse = zod.array(
+  GetCompanyBranchDocumentsResponseItem,
+);
+
+/**
+ * @summary Attach an uploaded document to a company branch
+ */
+
+export const CreateCompanyBranchDocumentParams = zod.object({
+  id: zod.coerce.number().min(1),
+});
+
+export const createCompanyBranchDocumentBodyTitleMax = 120;
+
+export const createCompanyBranchDocumentBodyObjectPathRegExp = new RegExp(
+  "^\/objects",
+);
+export const createCompanyBranchDocumentBodyFileNameMax = 255;
+
+export const CreateCompanyBranchDocumentBody = zod.object({
+  document_type: zod.enum([
+    "tax_number",
+    "cr_number",
+    "national_address",
+    "custom",
+  ]),
+  title: zod.string().max(createCompanyBranchDocumentBodyTitleMax),
+  object_path: zod
+    .string()
+    .regex(createCompanyBranchDocumentBodyObjectPathRegExp),
+  file_name: zod.string().max(createCompanyBranchDocumentBodyFileNameMax),
+  content_type: zod.enum([
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+  ]),
+});
+
+/**
+ * @summary Download a private company branch document
+ */
+
+export const GetCompanyBranchDocumentFileParams = zod.object({
+  id: zod.coerce.number().min(1),
+  documentId: zod.coerce.number().min(1),
+});
+
+/**
+ * @summary Get branch-linked dashboard metrics
+ */
+
+export const GetBranchDashboardQueryParams = zod.object({
+  branchId: zod.coerce.number().min(1).optional(),
+});
+
+export const GetBranchDashboardResponse = zod.object({
+  scope: zod.enum(["all", "branch"]),
+  branch: zod.union([
+    zod.object({
+      id: zod.number(),
+      entity_name: zod.string(),
+    }),
+    zod.null(),
+  ]),
+  vehicles: zod.object({
+    total: zod.number(),
+    available: zod.number(),
+    busy: zod.number(),
+    maintenance: zod.number(),
+    broken: zod.number(),
+  }),
+  maintenance: zod.object({
+    count: zod.number(),
+    amount: zod.number(),
+  }),
+  purchase_invoices: zod.object({
+    count: zod.number(),
+    amount: zod.number(),
+  }),
+  reimbursement_claims: zod.object({
+    count: zod.number(),
+    amount: zod.number(),
+  }),
+});
+
+/**
  * Returns server health status
  * @summary Health check
  */
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
+});
+
+/**
+ * @summary List active users available for direct chat under the chat access policy
+ */
+export const GetChatContactsResponseItem = zod.object({
+  id: zod.number(),
+  name: zod.string(),
+  phone: zod.string(),
+  role: zod.string(),
+});
+export const GetChatContactsResponse = zod.array(GetChatContactsResponseItem);
+
+/**
+ * @summary Get customer chat access rules and available customer accounts
+ */
+
+export const GetChatAdminCustomerAccessResponse = zod.object({
+  staff: zod.array(
+    zod.object({
+      id: zod.number(),
+      name: zod.string(),
+      phone: zod.string(),
+      role: zod.string(),
+    }),
+  ),
+  customers: zod.array(
+    zod.object({
+      id: zod.number(),
+      name: zod.string(),
+      phone: zod.string(),
+      role: zod.string(),
+      category: zod
+        .union([
+          zod.literal("company"),
+          zod.literal("rental"),
+          zod.literal(null),
+        ])
+        .nullable(),
+      default_contact_ids: zod.array(zod.number()),
+      rules: zod.array(
+        zod.object({
+          contact_user_id: zod.number().min(1),
+          effect: zod.enum(["include", "exclude"]),
+        }),
+      ),
+    }),
+  ),
+  categories: zod.array(
+    zod.object({
+      key: zod.enum(["company", "rental"]),
+      label: zod.string(),
+      rules: zod.array(
+        zod.object({
+          contact_user_id: zod.number().min(1),
+          effect: zod.enum(["include", "exclude"]),
+        }),
+      ),
+    }),
+  ),
+});
+
+/**
+ * @summary Replace chat contact exceptions for a customer or customer category
+ */
+
+export const updateChatAdminCustomerAccessRulesBodyRulesMax = 200;
+
+export const UpdateChatAdminCustomerAccessRulesBody = zod.object({
+  scope: zod.enum(["category", "customer"]),
+  category: zod
+    .union([zod.literal("company"), zod.literal("rental"), zod.literal(null)])
+    .nullable(),
+  customer_user_id: zod.number().min(1).nullable(),
+  rules: zod
+    .array(
+      zod.object({
+        contact_user_id: zod.number().min(1),
+        effect: zod.enum(["include", "exclude"]),
+      }),
+    )
+    .max(updateChatAdminCustomerAccessRulesBodyRulesMax),
+});
+
+export const UpdateChatAdminCustomerAccessRulesResponse = zod.object({
+  ok: zod.boolean(),
+  scope: zod.enum(["category", "customer"]),
+  category: zod
+    .union([zod.literal("company"), zod.literal("rental"), zod.literal(null)])
+    .nullable(),
+  customer_user_id: zod.number().nullable(),
+  rules: zod.array(
+    zod.object({
+      contact_user_id: zod.number().min(1),
+      effect: zod.enum(["include", "exclude"]),
+    }),
+  ),
+});
+
+/**
+ * @summary List the current user's direct conversations
+ */
+export const GetChatConversationsResponseItem = zod.object({
+  id: zod.number(),
+  other_user_id: zod.number(),
+  other_user_name: zod.string(),
+  other_user_phone: zod.string(),
+  other_user_role: zod.string(),
+  last_message: zod.union([
+    zod.object({
+      id: zod.number(),
+      conversation_id: zod.number(),
+      sender_id: zod.number(),
+      sender_name: zod.string(),
+      sender_role: zod.string(),
+      type: zod.enum(["text", "voice"]),
+      text: zod.union([zod.string(), zod.null()]),
+      media_url: zod.union([zod.string(), zod.null()]),
+      media_type: zod.union([zod.string(), zod.null()]),
+      media_size: zod.union([zod.number(), zod.null()]),
+      created_at: zod.string(),
+      edited_at: zod.union([zod.string(), zod.null()]),
+    }),
+    zod.null(),
+  ]),
+  updated_at: zod.string(),
+  unread_count: zod.number(),
+});
+export const GetChatConversationsResponse = zod.array(
+  GetChatConversationsResponseItem,
+);
+
+/**
+ * @summary Start or retrieve a direct conversation
+ */
+
+export const CreateChatConversationBody = zod.object({
+  recipient_user_id: zod.number().min(1),
+});
+
+export const CreateChatConversationResponse = zod.object({
+  id: zod.number(),
+});
+
+/**
+ * @summary List messages in a direct conversation
+ */
+
+export const GetChatMessagesParams = zod.object({
+  conversationId: zod.coerce.number().min(1),
+});
+
+export const GetChatMessagesResponseItem = zod.object({
+  id: zod.number(),
+  conversation_id: zod.number(),
+  sender_id: zod.number(),
+  sender_name: zod.string(),
+  sender_role: zod.string(),
+  type: zod.enum(["text", "voice"]),
+  text: zod.union([zod.string(), zod.null()]),
+  media_url: zod.union([zod.string(), zod.null()]),
+  media_type: zod.union([zod.string(), zod.null()]),
+  media_size: zod.union([zod.number(), zod.null()]),
+  created_at: zod.string(),
+  edited_at: zod.union([zod.string(), zod.null()]),
+});
+export const GetChatMessagesResponse = zod.array(GetChatMessagesResponseItem);
+
+/**
+ * @summary Send a text or voice message
+ */
+
+export const SendChatMessageParams = zod.object({
+  conversationId: zod.coerce.number().min(1),
+});
+
+export const sendChatMessageBodyTextMax = 4000;
+
+export const SendChatMessageBody = zod.object({
+  type: zod.enum(["text", "voice"]),
+  text: zod.string().max(sendChatMessageBodyTextMax).optional(),
+  upload_token: zod.string().optional(),
+});
+
+/**
+ * @summary Load earlier messages in a direct conversation
+ */
+
+export const GetOlderChatMessagesParams = zod.object({
+  conversationId: zod.coerce.number().min(1),
+  beforeId: zod.coerce.number().min(1),
+});
+
+export const GetOlderChatMessagesResponseItem = zod.object({
+  id: zod.number(),
+  conversation_id: zod.number(),
+  sender_id: zod.number(),
+  sender_name: zod.string(),
+  sender_role: zod.string(),
+  type: zod.enum(["text", "voice"]),
+  text: zod.union([zod.string(), zod.null()]),
+  media_url: zod.union([zod.string(), zod.null()]),
+  media_type: zod.union([zod.string(), zod.null()]),
+  media_size: zod.union([zod.number(), zod.null()]),
+  created_at: zod.string(),
+  edited_at: zod.union([zod.string(), zod.null()]),
+});
+export const GetOlderChatMessagesResponse = zod.array(
+  GetOlderChatMessagesResponseItem,
+);
+
+/**
+ * @summary Create a private upload URL for a voice message
+ */
+
+export const CreateChatVoiceUploadParams = zod.object({
+  conversationId: zod.coerce.number().min(1),
+});
+
+export const createChatVoiceUploadBodyNameMax = 160;
+
+export const createChatVoiceUploadBodySizeMax = 25000000;
+
+export const CreateChatVoiceUploadBody = zod.object({
+  name: zod.string().max(createChatVoiceUploadBodyNameMax),
+  contentType: zod.enum(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg"]),
+  size: zod.number().min(1).max(createChatVoiceUploadBodySizeMax),
+});
+
+/**
+ * @summary Edit the sender's text message
+ */
+
+export const EditChatMessageParams = zod.object({
+  messageId: zod.coerce.number().min(1),
+});
+
+export const editChatMessageBodyTextMax = 4000;
+
+export const EditChatMessageBody = zod.object({
+  text: zod.string().min(1).max(editChatMessageBodyTextMax),
+});
+
+export const EditChatMessageResponse = zod.object({
+  id: zod.number(),
+  conversation_id: zod.number(),
+  sender_id: zod.number(),
+  sender_name: zod.string(),
+  sender_role: zod.string(),
+  type: zod.enum(["text", "voice"]),
+  text: zod.union([zod.string(), zod.null()]),
+  media_url: zod.union([zod.string(), zod.null()]),
+  media_type: zod.union([zod.string(), zod.null()]),
+  media_size: zod.union([zod.number(), zod.null()]),
+  created_at: zod.string(),
+  edited_at: zod.union([zod.string(), zod.null()]),
+});
+
+/**
+ * @summary Delete a message when conversation policy permits
+ */
+
+export const DeleteChatMessageParams = zod.object({
+  messageId: zod.coerce.number().min(1),
+});
+
+export const DeleteChatMessageResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+/**
+ * @summary Stream voice media after checking conversation membership
+ */
+
+export const GetChatMessageMediaParams = zod.object({
+  messageId: zod.coerce.number().min(1),
+});
+
+/**
+ * @summary Mark incoming messages in a conversation as read
+ */
+
+export const MarkChatConversationReadParams = zod.object({
+  conversationId: zod.coerce.number().min(1),
+});
+
+export const MarkChatConversationReadResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+/**
+ * @summary Get the authenticated user's notification preferences
+ */
+export const GetChatNotificationSettingsResponse = zod.object({
+  messages_enabled: zod.boolean(),
+  orders_enabled: zod.boolean(),
+});
+
+/**
+ * @summary Update the authenticated user's notification preferences
+ */
+export const UpdateChatNotificationSettingsBody = zod.object({
+  messages_enabled: zod.boolean(),
+  orders_enabled: zod.boolean(),
+});
+
+export const UpdateChatNotificationSettingsResponse = zod.object({
+  messages_enabled: zod.boolean(),
+  orders_enabled: zod.boolean(),
+});
+
+/**
+ * @summary Get the VAPID public key for browser push subscriptions
+ */
+export const GetChatPushPublicKeyResponse = zod.object({
+  public_key: zod.string(),
+});
+
+/**
+ * @summary Register this browser's push subscription
+ */
+export const RegisterChatPushSubscriptionBody = zod.object({
+  endpoint: zod.string().url(),
+  keys: zod.object({
+    p256dh: zod.string(),
+    auth: zod.string(),
+  }),
+});
+
+/**
+ * @summary Remove this browser's push subscription
+ */
+export const RemoveChatPushSubscriptionBody = zod.object({
+  endpoint: zod.string().url(),
+});
+
+export const RemoveChatPushSubscriptionResponse = zod.object({
+  ok: zod.boolean(),
+});
+
+/**
+ * @summary List conversations and retention controls from a user card
+ */
+
+export const GetChatAdminUserConversationsParams = zod.object({
+  userId: zod.coerce.number().min(1),
+});
+
+export const getChatAdminUserConversationsResponseOneRetentionDaysMax = 3650;
+
+export const GetChatAdminUserConversationsResponseItem = zod
+  .object({
+    retention_mode: zod.enum(["auto_delete", "keep"]),
+    retention_days: zod
+      .number()
+      .min(1)
+      .max(getChatAdminUserConversationsResponseOneRetentionDaysMax),
+    allow_user_delete: zod.boolean(),
+  })
+  .and(
+    zod.object({
+      id: zod.number(),
+      user_id: zod.number(),
+      user_name: zod.string(),
+      user_role: zod.string(),
+      other_user_id: zod.number(),
+      other_user_name: zod.string(),
+      other_user_role: zod.string(),
+    }),
+  );
+export const GetChatAdminUserConversationsResponse = zod.array(
+  GetChatAdminUserConversationsResponseItem,
+);
+
+/**
+ * @summary Update message retention and deletion policy for a conversation
+ */
+
+export const UpdateChatConversationSettingsParams = zod.object({
+  conversationId: zod.coerce.number().min(1),
+});
+
+export const updateChatConversationSettingsBodyRetentionDaysMax = 3650;
+
+export const UpdateChatConversationSettingsBody = zod.object({
+  retention_mode: zod.enum(["auto_delete", "keep"]),
+  retention_days: zod
+    .number()
+    .min(1)
+    .max(updateChatConversationSettingsBodyRetentionDaysMax),
+  allow_user_delete: zod.boolean(),
+});
+
+export const updateChatConversationSettingsResponseOneRetentionDaysMax = 3650;
+
+export const UpdateChatConversationSettingsResponse = zod
+  .object({
+    retention_mode: zod.enum(["auto_delete", "keep"]),
+    retention_days: zod
+      .number()
+      .min(1)
+      .max(updateChatConversationSettingsResponseOneRetentionDaysMax),
+    allow_user_delete: zod.boolean(),
+  })
+  .and(
+    zod.object({
+      id: zod.number(),
+      user_id: zod.number(),
+      user_name: zod.string(),
+      user_role: zod.string(),
+      other_user_id: zod.number(),
+      other_user_name: zod.string(),
+      other_user_role: zod.string(),
+    }),
+  );
+
+/**
+ * @summary Delete a vehicle compliance document and its unshared file
+ */
+
+export const DeleteVehicleComplianceDocumentParams = zod.object({
+  id: zod.coerce.number().min(1),
+});
+
+export const DeleteVehicleComplianceDocumentResponse = zod.object({
+  ok: zod.boolean(),
+  fileRemoved: zod.boolean(),
+  fileRetainedBecauseShared: zod.boolean(),
+  referencesVerified: zod.boolean(),
+  clearedFields: zod.array(zod.string()),
+});
+
+/**
+ * @summary Delete a vehicle image and its unshared file
+ */
+
+export const DeleteVehicleImageParams = zod.object({
+  id: zod.coerce.number().min(1),
+});
+
+export const DeleteVehicleImageResponse = zod.object({
+  ok: zod.boolean(),
+  fileRemoved: zod.boolean(),
+  fileRetainedBecauseShared: zod.boolean(),
+  referencesVerified: zod.boolean(),
+  clearedFields: zod.array(zod.string()),
+});
+
+/**
+ * @summary Remove a directly linked vehicle attachment and its unshared file
+ */
+export const DeleteFleetVehicleAttachmentParams = zod.object({
+  plate: zod.coerce.string(),
+  field: zod.coerce.string(),
+});
+
+export const DeleteFleetVehicleAttachmentResponse = zod.object({
+  ok: zod.boolean(),
+  fileRemoved: zod.boolean(),
+  fileRetainedBecauseShared: zod.boolean(),
+  referencesVerified: zod.boolean(),
+  clearedFields: zod.array(zod.string()),
+});
+
+/**
+ * @summary Save a pasted batch of supplier invoice rows
+ */
+export const pasteSupplierPurchaseInvoicesBodyRequestKeyMin = 16;
+export const pasteSupplierPurchaseInvoicesBodyRequestKeyMax = 200;
+
+export const pasteSupplierPurchaseInvoicesBodyRowsItemQuantityMin = 0;
+
+export const pasteSupplierPurchaseInvoicesBodyRowsItemPriceBeforeVatMin = 0;
+
+export const pasteSupplierPurchaseInvoicesBodyRowsItemPriceAfterVatMin = 0;
+
+export const pasteSupplierPurchaseInvoicesBodyRowsItemDiscountAmountMin = 0;
+
+export const pasteSupplierPurchaseInvoicesBodyRowsMax = 500;
+
+export const PasteSupplierPurchaseInvoicesBody = zod.object({
+  request_key: zod
+    .string()
+    .min(pasteSupplierPurchaseInvoicesBodyRequestKeyMin)
+    .max(pasteSupplierPurchaseInvoicesBodyRequestKeyMax),
+  rows: zod
+    .array(
+      zod.object({
+        serial_no: zod.string().nullable(),
+        invoice_date: zod.string().nullable(),
+        branch: zod.string().nullable(),
+        vehicle_plate: zod.string().nullable(),
+        work_on: zod
+          .union([
+            zod.literal("vehicle"),
+            zod.literal("trailer"),
+            zod.literal(null),
+          ])
+          .nullable(),
+        trailer_number: zod.string().nullable(),
+        invoice_number: zod.string().nullable(),
+        supplier_name: zod.string().nullable(),
+        item_name: zod.string().min(1),
+        quantity: zod
+          .number()
+          .min(pasteSupplierPurchaseInvoicesBodyRowsItemQuantityMin),
+        price_before_vat: zod
+          .number()
+          .min(pasteSupplierPurchaseInvoicesBodyRowsItemPriceBeforeVatMin),
+        price_after_vat: zod
+          .number()
+          .min(pasteSupplierPurchaseInvoicesBodyRowsItemPriceAfterVatMin),
+        discount_amount: zod
+          .number()
+          .min(pasteSupplierPurchaseInvoicesBodyRowsItemDiscountAmountMin),
+        notes: zod.string().nullable(),
+      }),
+    )
+    .min(1)
+    .max(pasteSupplierPurchaseInvoicesBodyRowsMax),
 });

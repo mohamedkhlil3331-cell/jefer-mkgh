@@ -1,680 +1,1069 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useCallback } from "react";
+import { useRememberedState } from "@/hooks/useRememberedState";
 import { useAuth } from "@/context/AuthContext";
 import {
-  Users, ShoppingCart, TrendingUp, CheckCircle, Clock, XCircle,
-  Plus, X, Search, ChevronDown, Package, MapPin, Phone,
-  Building2, FileText, Filter, RefreshCw, ArrowRight,
-  DollarSign, Truck, AlertCircle, Star,
+  Users, Package, TrendingUp, DollarSign, Clock, CheckCircle2,
+  XCircle, AlertCircle, Search, ShoppingCart, FileText, Award,
+  Truck, Building2, Plus, RefreshCw, ChevronDown, ChevronUp,
+  Download, Phone, MapPin, X, Star,
 } from "lucide-react";
 
+/* ─── Types ──────────────────────────────────────────────────────────────── */
 interface Order {
-  id: number; order_number: string; customer_name: string; customer_phone: string;
-  product_name: string; quantity: number; unit: string;
-  total_before_vat: number; vat_amount: number; total_with_vat: number;
-  delivery_location: string; destination_type: string; stage: string;
-  vehicle_plate: string; driver_name: string; driver_phone: string;
-  created_at: string;
+  id: number; order_number: string; customer_phone: string; customer_name: string;
+  product_name: string; quantity: number; unit: string; unit_price: number;
+  total_with_vat: number; stage: string; payment_method: string;
+  delivery_location: string; created_at: string;
 }
-interface Product {
-  id: number; name: string; price_per_unit: number; price_delivered: number;
-  unit: string; category: string; stock: number; active: number;
+interface Product { id: number; name: string; category: string; price_per_unit: number; unit: string; load_capacity: number; }
+interface Client {
+  id: number; name: string; phone: string; company_name: string; city: string;
+  order_count: number; total_revenue: number; last_order_at: string;
 }
-interface Customer {
-  id: number; name: string; phone: string; company_name: string;
-  vat_number: string; active: number;
+interface PendingClient {
+  link_id: number; customer_phone: string; name: string; phone: string;
+  company_name: string; city: string; linked_at: string; registered_at: string;
+}
+interface RepStats {
+  total_orders: number; active_orders: number; delivered_orders: number;
+  total_revenue: number; total_qty: number; client_count: number; pending_count: number;
+  category_stats: Array<{ category: string; total_qty: number; total_revenue: number }>;
+}
+interface Target {
+  id: number; product_category: string; target_qty: number;
+  tier1_qty: number; tier1_bonus: number; tier2_qty: number; tier2_bonus: number;
+  tier3_qty: number; tier3_bonus: number; period: string;
+  start_date: string | null; end_date: string | null;
+  achieved_qty: number; progress_pct: number; earned_bonus: number; earned_tier: number;
+}
+interface StatementData {
+  customer: { name: string; phone: string; company_name: string; city: string; address: string };
+  orders: Order[];
+  summary: { total_orders: number; delivered: number; cancelled: number; total_revenue: number; paid_revenue: number };
 }
 
-const STAGE_LABEL: Record<string, string> = {
-  pending: "انتظار المراجعة", payment_confirmed: "تم تأكيد الدفع",
-  vehicle_assigned: "تم تجهيز السيارة", invoiced: "صدرت الفاتورة",
-  loaded: "في الطريق", delivered: "تم التسليم", cancelled: "ملغي",
+type Tab = "dashboard" | "clients" | "pending" | "orders" | "newOrder" | "rep_requests";
+
+interface RepRequest {
+  id: number; request_no: string; product_name: string;
+  loading_locations: string[]; delivery_location: string | null;
+  rep_name: string | null; rep_phone: string | null;
+  status: string; vehicle_plate: string | null;
+  driver_name: string | null; driver_phone: string | null;
+  permit_photo_url: string | null; invoice_photo_url: string | null;
+  notes: string | null; created_at: string;
+}
+
+const STAGES: Record<string, { label: string; color: string }> = {
+  pending:                { label: "بانتظار التأكيد",      color: "bg-yellow-100 text-yellow-700 border-yellow-200" },
+  pending_cash_approval:  { label: "انتظار موافقة كاش",    color: "bg-amber-100 text-amber-700 border-amber-200" },
+  pending_rep_approval:   { label: "يحتاج موافقتك",        color: "bg-violet-100 text-violet-700 border-violet-200" },
+  fsohat_pending:         { label: "بانتظار الفسحة",       color: "bg-blue-100 text-blue-700 border-blue-200" },
+  fsohat_processing:      { label: "جارٍ إصدار الفسحة",    color: "bg-indigo-100 text-indigo-700 border-indigo-200" },
+  payment_confirmed:      { label: "تم تأكيد الدفع",      color: "bg-blue-100 text-blue-700 border-blue-200" },
+  vehicle_assigned:       { label: "تم تحديد المركبة",    color: "bg-indigo-100 text-indigo-700 border-indigo-200" },
+  invoiced:               { label: "تم إصدار الفاتورة",   color: "bg-purple-100 text-purple-700 border-purple-200" },
+  loaded:                 { label: "تم التحميل",           color: "bg-orange-100 text-orange-700 border-orange-200" },
+  delivered:              { label: "تم التسليم",           color: "bg-green-100 text-green-700 border-green-200" },
+  cancelled:              { label: "ملغي",                 color: "bg-red-100 text-red-700 border-red-200" },
 };
-const STAGE_COLOR: Record<string, string> = {
-  pending: "bg-amber-50 text-amber-700 border-amber-200",
-  payment_confirmed: "bg-blue-50 text-blue-700 border-blue-200",
-  vehicle_assigned: "bg-indigo-50 text-indigo-700 border-indigo-200",
-  invoiced: "bg-purple-50 text-purple-700 border-purple-200",
-  loaded: "bg-cyan-50 text-cyan-700 border-cyan-200",
-  delivered: "bg-green-50 text-green-700 border-green-200",
-  cancelled: "bg-red-50 text-red-600 border-red-200",
-};
-const STAGE_ICON: Record<string, React.ElementType> = {
-  pending: Clock, payment_confirmed: CheckCircle,
-  vehicle_assigned: Truck, invoiced: FileText,
-  loaded: Truck, delivered: Star, cancelled: XCircle,
-};
 
-const DEST_OPTIONS = ["مستودع", "موقع", "مصنع"];
+const fmt = (n: number) => (n || 0).toLocaleString("ar-SA", { maximumFractionDigits: 0 });
+const fmtDate = (s: string) => s ? new Date(s).toLocaleDateString("ar-SA") : "—";
 
-export default function RepOrders() {
-  const { user } = useAuth();
-  const [orders,    setOrders]    = useState<Order[]>([]);
-  const [products,  setProducts]  = useState<Product[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading,   setLoading]   = useState(true);
-
-  // UI state
-  const [tab,           setTab]           = useState<"dashboard"|"orders"|"newOrder"|"customers">("dashboard");
-  const [stageFilter,   setStageFilter]   = useState("all");
-  const [searchOrders,  setSearchOrders]  = useState("");
-  const [searchCust,    setSearchCust]    = useState("");
-  const [submitting,    setSubmitting]    = useState(false);
-  const [successMsg,    setSuccessMsg]    = useState("");
-
-  // New order form
-  const [selectedProduct, setSelectedProduct]   = useState<Product | null>(null);
-  const [custPhone,        setCustPhone]         = useState("");
-  const [custName,         setCustName]          = useState("");
-  const [qty,              setQty]               = useState("");
-  const [deliveryLoc,      setDeliveryLoc]       = useState("");
-  const [destType,         setDestType]          = useState("مستودع");
-  const [customPrice,      setCustomPrice]       = useState("");
-  const [showProdPicker,   setShowProdPicker]    = useState(false);
-  const [showCustPicker,   setShowCustPicker]    = useState(false);
-  const [prodSearch,       setProdSearch]        = useState("");
-
-  // New customer form
-  const [newCustForm, setNewCustForm] = useState({ name: "", phone: "", company_name: "", vat_number: "" });
-  const [addingCust,  setAddingCust]  = useState(false);
-  const [custMsg,     setCustMsg]     = useState("");
-
-  const load = () => {
-    setLoading(true);
-    Promise.all([
-      fetch(`/api/workflow/orders?role=rep&phone=${user?.phone}`).then(r => r.json()),
-      fetch("/api/products").then(r => r.json()),
-      fetch("/api/users").then(r => r.json()),
-    ]).then(([o, p, u]) => {
-      setOrders(Array.isArray(o) ? o : []);
-      setProducts((Array.isArray(p) ? p : []).filter((x: Product) => x.active));
-      setCustomers((Array.isArray(u) ? u : []).filter((x: Customer) => (x as unknown as { role: string }).role === "customer"));
-    }).catch(console.error)
-      .finally(() => setLoading(false));
-  };
-  useEffect(() => { if (user) load(); }, [user]);
-
-  // Stats
-  const stats = useMemo(() => ({
-    total:     orders.length,
-    pending:   orders.filter(o => o.stage === "pending").length,
-    delivered: orders.filter(o => o.stage === "delivered").length,
-    revenue:   orders.filter(o => o.stage !== "cancelled").reduce((s, o) => s + (o.total_with_vat || 0), 0),
-    inProgress: orders.filter(o => !["pending","delivered","cancelled"].includes(o.stage)).length,
-  }), [orders]);
-
-  // Filtered orders
-  const filteredOrders = useMemo(() => {
-    let list = stageFilter === "all" ? orders : orders.filter(o => o.stage === stageFilter);
-    if (searchOrders.trim()) {
-      const q = searchOrders.toLowerCase();
-      list = list.filter(o =>
-        o.order_number?.toLowerCase().includes(q) ||
-        o.customer_name?.toLowerCase().includes(q) ||
-        o.customer_phone?.includes(q) ||
-        o.product_name?.toLowerCase().includes(q)
-      );
-    }
-    return list;
-  }, [orders, stageFilter, searchOrders]);
-
-  const filteredProducts = useMemo(() => {
-    if (!prodSearch.trim()) return products;
-    const q = prodSearch.toLowerCase();
-    return products.filter(p => p.name.toLowerCase().includes(q) || p.category?.toLowerCase().includes(q));
-  }, [products, prodSearch]);
-
-  const filteredCustomers = useMemo(() => {
-    if (!searchCust.trim()) return customers;
-    const q = searchCust.toLowerCase();
-    return customers.filter(c =>
-      c.name?.toLowerCase().includes(q) || c.phone?.includes(q) || c.company_name?.toLowerCase().includes(q)
-    );
-  }, [customers, searchCust]);
-
-  // Order total preview
-  const unitPrice = customPrice ? parseFloat(customPrice) : (selectedProduct?.price_per_unit || 0);
-  const totalBefore = (parseFloat(qty) || 0) * unitPrice;
-  const vat = totalBefore * 0.15;
-  const totalWith = totalBefore + vat;
-
-  const selectCustomer = (c: Customer) => {
-    setCustPhone(c.phone);
-    setCustName(c.name);
-    setShowCustPicker(false);
-  };
-
-  const submitOrder = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!selectedProduct || !custPhone || !qty || !deliveryLoc) return;
-    setSubmitting(true);
-    try {
-      const repRow = { id: user?.id || 0 };
-      const body = {
-        customer_phone: custPhone,
-        customer_name: custName,
-        rep_id: repRow.id,
-        product_id: selectedProduct.id,
-        quantity: parseFloat(qty),
-        unit_price: unitPrice,
-        delivery_location: deliveryLoc,
-        destination_type: destType,
-      };
-      const r = await fetch("/api/workflow/orders", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || "فشل إنشاء الطلب");
-      setSuccessMsg(`تم إنشاء الطلب بنجاح رقم: ${d.order_number}`);
-      // Reset form
-      setSelectedProduct(null); setCustPhone(""); setCustName("");
-      setQty(""); setDeliveryLoc(""); setDestType("مستودع"); setCustomPrice("");
-      load();
-      setTimeout(() => { setSuccessMsg(""); setTab("orders"); }, 2500);
-    } catch (err) { alert((err as Error).message); }
-    finally { setSubmitting(false); }
-  };
-
-  const submitNewCustomer = async (e: React.FormEvent) => {
-    e.preventDefault(); setAddingCust(true); setCustMsg("");
-    try {
-      const r = await fetch("/api/users", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...newCustForm, role: "customer", password: newCustForm.phone || "123456", active: 1 }),
-      });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.error || "فشل الإضافة");
-      setCustMsg("تمت إضافة العميل بنجاح");
-      setNewCustForm({ name: "", phone: "", company_name: "", vat_number: "" });
-      load();
-    } catch (err) { setCustMsg("❌ " + (err as Error).message); }
-    finally { setAddingCust(false); }
-  };
-
-  if (loading) return (
-    <div className="flex items-center justify-center h-64">
-      <RefreshCw size={24} className="animate-spin text-[#103c68]" />
-    </div>
+/* ─── CSV Export ─────────────────────────────────────────────────────────── */
+function exportCSV(stmt: StatementData) {
+  const header = "رقم الطلب,المنتج,الكمية,الوحدة,السعر,الإجمالي بالضريبة,الحالة,التاريخ";
+  const rows = stmt.orders.map(o =>
+    [o.order_number, o.product_name, o.quantity, o.unit, o.unit_price, o.total_with_vat,
+      STAGES[o.stage]?.label || o.stage, fmtDate(o.created_at)].join(",")
   );
+  const csv = [header, ...rows].join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `كشف-${stmt.customer.name}-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+}
 
-  const StageBadge = ({ stage }: { stage: string }) => {
-    const Icon = STAGE_ICON[stage] ?? Clock;
-    return (
-      <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border ${STAGE_COLOR[stage] ?? "bg-gray-50 text-gray-600 border-gray-200"}`}>
-        <Icon size={11} />{STAGE_LABEL[stage] ?? stage}
-      </span>
-    );
-  };
-
+/* ─── Target Progress Card ───────────────────────────────────────────────── */
+function TargetCard({ t }: { t: Target }) {
+  const pct = t.progress_pct;
+  const tierPos = (qty: number) => t.target_qty > 0 ? Math.min(100, (qty / t.target_qty) * 100) : 0;
+  const tierColors = ["", "text-yellow-600", "text-orange-500", "text-emerald-600"];
   return (
-    <div dir="rtl" className="space-y-5">
-
-      {/* ── Header ── */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+      <div className="flex items-center justify-between mb-3">
         <div>
-          <h1 className="text-2xl font-black text-gray-900 flex items-center gap-2">
-            <Users size={24} className="text-[#103c68]" />بوابة المندوب
-          </h1>
-          <p className="text-gray-400 text-sm mt-0.5">مرحباً {user?.name} — {orders.length} طلب إجمالاً</p>
+          <p className="font-bold text-gray-900 text-sm">{t.product_category}</p>
+          <p className="text-xs text-gray-500">
+            {t.period === "monthly" ? "شهري" : t.period}
+            {t.start_date ? ` · ${fmtDate(t.start_date)} – ${fmtDate(t.end_date || "")}` : ""}
+          </p>
         </div>
-        <button onClick={() => setTab("newOrder")}
-          className="flex items-center gap-2 px-5 py-2.5 bg-[#103c68] hover:bg-[#0d3158] text-white rounded-xl font-bold text-sm shadow-sm transition-colors">
-          <Plus size={16} />طلب جديد
-        </button>
+        {t.earned_tier > 0 && (
+          <div className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded-full ${
+            ["", "bg-yellow-50 text-yellow-700", "bg-orange-50 text-orange-700", "bg-emerald-50 text-emerald-700"][t.earned_tier]
+          }`}>
+            <Star size={11} fill="currentColor" /> مستوى {t.earned_tier}
+          </div>
+        )}
       </div>
 
-      {/* ── Tabs ── */}
-      <div className="flex gap-1.5 flex-wrap bg-gray-100 p-1.5 rounded-2xl w-fit">
-        {([
-          { id: "dashboard", label: "الرئيسية",   icon: TrendingUp },
-          { id: "orders",    label: "الطلبات",    icon: ShoppingCart, count: orders.length },
-          { id: "newOrder",  label: "طلب جديد",   icon: Plus },
-          { id: "customers", label: "العملاء",    icon: Users, count: customers.length },
-        ] as const).map(t => {
-          const Icon = t.icon;
+      {/* Progress bar with tier markers */}
+      <div className="relative mb-1">
+        <div className="h-5 bg-gray-100 rounded-full overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all duration-500"
+            style={{
+              width: `${pct}%`,
+              background: pct >= 100 ? "linear-gradient(90deg,#10b981,#059669)" : "linear-gradient(90deg,#103c68,#0eb5cb)",
+            }}
+          />
+        </div>
+        {[{ qty: t.tier1_qty, n: 1 }, { qty: t.tier2_qty, n: 2 }, { qty: t.tier3_qty, n: 3 }]
+          .filter(tier => tier.qty > 0)
+          .map(tier => (
+            <div
+              key={tier.n}
+              className="absolute top-0 h-5"
+              style={{ left: `${tierPos(tier.qty)}%`, transform: "translateX(-50%)" }}
+            >
+              <div className={`w-0.5 h-5 ${t.achieved_qty >= tier.qty ? "bg-emerald-400" : "bg-gray-400"}`} />
+            </div>
+          ))}
+      </div>
+      <p className="text-xs text-gray-500 text-end mb-3">
+        {fmt(t.achieved_qty)} / {fmt(t.target_qty)} {pct >= 100 ? "✓ اكتمل" : `(${pct}%)`}
+      </p>
+
+      {/* Tier bonuses row */}
+      <div className="flex gap-2 flex-wrap">
+        {[
+          { qty: t.tier1_qty, bonus: t.tier1_bonus, n: 1 },
+          { qty: t.tier2_qty, bonus: t.tier2_bonus, n: 2 },
+          { qty: t.tier3_qty, bonus: t.tier3_bonus, n: 3 },
+        ].filter(tier => tier.qty > 0).map(tier => {
+          const reached = t.achieved_qty >= tier.qty;
           return (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-all
-                ${tab === t.id ? "bg-white text-[#103c68] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
-              <Icon size={14} />{t.label}
-              {"count" in t && t.count !== undefined && (
-                <span className={`text-xs font-black px-1.5 rounded-full ${tab === t.id ? "bg-[#103c68]/10 text-[#103c68]" : "bg-gray-200 text-gray-600"}`}>{t.count}</span>
-              )}
-            </button>
+            <div key={tier.n} className={`flex-1 text-center rounded-xl p-2 border text-xs ${
+              reached ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-gray-50 border-gray-200 text-gray-500"
+            }`}>
+              <p className="font-bold">{fmt(tier.qty)}</p>
+              <p className={`font-black text-sm ${tierColors[tier.n]}`}>{fmt(tier.bonus)} ﷼</p>
+              <p>{reached ? "✓ محقق" : `مستوى ${tier.n}`}</p>
+            </div>
           );
         })}
       </div>
-
-      {/* ══════════════════════════════════════════ DASHBOARD TAB ══════════════════════════════════════════ */}
-      {tab === "dashboard" && (
-        <div className="space-y-5">
-          {/* KPI cards */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            {[
-              { label: "إجمالي طلباتي", val: stats.total,     icon: ShoppingCart, color: "bg-[#103c68]" },
-              { label: "في الانتظار",    val: stats.pending,   icon: Clock,        color: "bg-amber-500" },
-              { label: "قيد التنفيذ",   val: stats.inProgress,icon: Truck,        color: "bg-blue-500"  },
-              { label: "مسلّمة",         val: stats.delivered, icon: CheckCircle,  color: "bg-green-500" },
-            ].map(({ label, val, icon: Icon, color }) => (
-              <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex items-start gap-3">
-                <div className={`${color} w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0`}>
-                  <Icon size={20} className="text-white" />
-                </div>
-                <div>
-                  <div className="text-2xl font-black text-gray-900">{val}</div>
-                  <div className="text-xs text-gray-400 mt-0.5">{label}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Revenue */}
-          <div className="bg-gradient-to-l from-[#103c68] to-[#1a5899] rounded-2xl p-6 text-white flex items-center justify-between">
-            <div>
-              <div className="text-sm opacity-75">إجمالي مبيعاتي (شامل الضريبة)</div>
-              <div className="text-4xl font-black mt-1">{stats.revenue.toLocaleString("ar-SA", { maximumFractionDigits: 0 })} ر.س</div>
-              <div className="text-xs opacity-60 mt-1">من {stats.total} طلب · {stats.delivered} مسلّم</div>
-            </div>
-            <DollarSign size={60} className="opacity-10" />
-          </div>
-
-          {/* Recent orders */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm">
-            <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between">
-              <h2 className="font-bold text-gray-800">آخر الطلبات</h2>
-              <button onClick={() => setTab("orders")} className="text-xs text-[#103c68] flex items-center gap-1 hover:underline">
-                عرض الكل <ArrowRight size={12} />
-              </button>
-            </div>
-            {orders.slice(0, 5).length === 0 ? (
-              <div className="text-center py-10 text-gray-300">
-                <ShoppingCart size={36} className="mx-auto mb-2 opacity-40" />
-                <p className="text-sm">لا توجد طلبات بعد</p>
-                <button onClick={() => setTab("newOrder")} className="mt-3 text-[#103c68] text-sm font-bold hover:underline">إنشاء أول طلب</button>
-              </div>
-            ) : (
-              <div className="divide-y divide-gray-50">
-                {orders.slice(0, 5).map(o => (
-                  <div key={o.id} className="px-5 py-3.5 flex items-center justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <div className="font-mono text-xs text-[#103c68] font-bold">{o.order_number}</div>
-                      <div className="font-semibold text-gray-800 text-sm truncate">{o.customer_name || o.customer_phone}</div>
-                      <div className="text-xs text-gray-400">{o.product_name} × {o.quantity} {o.unit}</div>
-                    </div>
-                    <div className="text-left flex-shrink-0">
-                      <div className="font-bold text-gray-900 text-sm">{o.total_with_vat?.toFixed(0)} ر.س</div>
-                      <StageBadge stage={o.stage} />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Quick actions */}
-          <div className="grid grid-cols-2 gap-3">
-            <button onClick={() => setTab("newOrder")}
-              className="bg-[#103c68] text-white rounded-2xl p-5 text-center hover:bg-[#0d3158] transition-colors">
-              <Plus size={24} className="mx-auto mb-2" />
-              <div className="font-bold text-sm">طلب جديد</div>
-            </button>
-            <button onClick={() => setTab("customers")}
-              className="bg-white border border-gray-100 shadow-sm text-gray-700 rounded-2xl p-5 text-center hover:bg-gray-50 transition-colors">
-              <Users size={24} className="mx-auto mb-2 text-[#103c68]" />
-              <div className="font-bold text-sm">إدارة العملاء</div>
-              <div className="text-xs text-gray-400 mt-0.5">{customers.length} عميل</div>
-            </button>
-          </div>
+      {t.earned_bonus > 0 && (
+        <div className="w-full bg-gradient-to-l from-emerald-500 to-teal-500 text-white rounded-xl p-2 text-center text-xs font-bold mt-2">
+          البونص المكتسب: {fmt(t.earned_bonus)} ﷼
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* ══════════════════════════════════════════ ORDERS TAB ══════════════════════════════════════════ */}
-      {tab === "orders" && (
-        <div className="space-y-4">
-          {/* Filters */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 flex flex-wrap gap-2 items-center">
-            <Filter size={14} className="text-gray-400 ms-1" />
-            {["all","pending","payment_confirmed","vehicle_assigned","loaded","delivered","cancelled"].map(s => (
-              <button key={s} onClick={() => setStageFilter(s)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
-                  ${stageFilter === s
-                    ? "bg-[#103c68] text-white"
-                    : "bg-gray-50 text-gray-500 hover:bg-gray-100"}`}>
-                {s === "all" ? `الكل (${orders.length})` : `${STAGE_LABEL[s]} (${orders.filter(o => o.stage === s).length})`}
-              </button>
-            ))}
+/* ═══════════════════════════════════════════════════════════════════════════
+   Main Component
+═══════════════════════════════════════════════════════════════════════════ */
+export default function RepOrders() {
+  const { user } = useAuth();
+  const [tab, setTab] = useRememberedState("rep-orders-tab", "dashboard" as Tab);
+
+  const [stats,    setStats]    = useState<RepStats | null>(null);
+  const [clients,  setClients]  = useState<Client[]>([]);
+  const [pending,  setPending]  = useState<PendingClient[]>([]);
+  const [targets,  setTargets]  = useState<Target[]>([]);
+  const [orders,   setOrders]   = useState<Order[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading,  setLoading]  = useState(true);
+  const [repRequests, setRepRequests] = useState<RepRequest[]>([]);
+
+  const [stmtData,    setStmtData]    = useState<StatementData | null>(null);
+  const [stmtClient,  setStmtClient]  = useState<Client | null>(null);
+  const [stmtLoading, setStmtLoading] = useState(false);
+
+  const [approvalStmts,        setApprovalStmts]        = useState<Record<number, StatementData | null>>({});
+  const [approvalStmtLoading,  setApprovalStmtLoading]  = useState<Record<number, boolean>>({});
+  const [approvalStmtOpen,     setApprovalStmtOpen]     = useState<Record<number, boolean>>({});
+
+  const [clientSearch, setClientSearch] = useRememberedState("rep-client-search", "");
+  const [orderSearch,  setOrderSearch]  = useRememberedState("rep-order-search", "");
+  const [stageFilter,  setStageFilter]  = useRememberedState("rep-order-stage-filter", "all");
+  const [expandedOrder, setExpandedOrder] = useState<number | null>(null);
+
+  const [form, setForm] = useState({
+    customer_phone: "", product_id: "", quantity: "", unit_price: "",
+    delivery_location: "", destination_type: "site", payment_method: "transfer", notes: "",
+  });
+  const [placing, setPlacing] = useState(false);
+  const [placeMsg, setPlaceMsg] = useState({ type: "", text: "" });
+
+  const repPhone = user?.phone || "";
+  const token = () => localStorage.getItem("mkgh_token") || "";
+
+  const loadAll = useCallback(async () => {
+    if (!repPhone) return;
+    setLoading(true);
+    // Load rep requests separately (no auth header needed)
+    fetch(`/api/rep-requests?rep_phone=${encodeURIComponent(repPhone)}`)
+      .then(r => r.ok ? r.json() : [])
+      .then(d => setRepRequests(Array.isArray(d) ? d : []))
+      .catch(() => {});
+    try {
+      const [statsRes, clientsRes, pendingRes, targetsRes, ordersRes, productsRes] = await Promise.all([
+        fetch(`/api/rep/stats?rep_phone=${repPhone}`,           { headers: { Authorization: `Bearer ${token()}` } }),
+        fetch(`/api/rep/clients?rep_phone=${repPhone}`,         { headers: { Authorization: `Bearer ${token()}` } }),
+        fetch(`/api/rep/pending-clients?rep_phone=${repPhone}`, { headers: { Authorization: `Bearer ${token()}` } }),
+        fetch(`/api/rep/targets?rep_phone=${repPhone}`,         { headers: { Authorization: `Bearer ${token()}` } }),
+        fetch(`/api/workflow/orders?role=rep&phone=${repPhone}`,{ headers: { Authorization: `Bearer ${token()}` } }),
+        fetch(`/api/products`,                                  { headers: { Authorization: `Bearer ${token()}` } }),
+      ]);
+      if (statsRes.ok)    setStats(await statsRes.json());
+      if (clientsRes.ok)  setClients(await clientsRes.json());
+      if (pendingRes.ok)  setPending(await pendingRes.json());
+      if (targetsRes.ok)  setTargets(await targetsRes.json());
+      if (ordersRes.ok)   setOrders(await ordersRes.json());
+      if (productsRes.ok) setProducts(await productsRes.json());
+    } catch { /* ignore */ }
+    setLoading(false);
+  }, [repPhone]);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  const approveClient = async (link_id: number, action: "approve" | "reject") => {
+    await fetch(`/api/rep/pending-clients/${link_id}/action`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ action, rep_phone: repPhone }),
+    });
+    loadAll();
+  };
+
+  const approveCash = async (orderId: number, action: "approve" | "reject", note?: string) => {
+    if (action === "approve") {
+      await fetch(`/api/workflow/orders/${orderId}/approve-cash`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+        body: JSON.stringify({ approver_phone: repPhone, approver_name: user?.name, note: note || "" }),
+      });
+    } else {
+      await fetch(`/api/workflow/orders/${orderId}/cancel`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+        body: JSON.stringify({ reason: "رفض المندوب للدفع النقدي" }),
+      });
+    }
+    loadAll();
+  };
+
+  const repApproveOrder = async (orderId: number) => {
+    await fetch(`/api/workflow/orders/${orderId}/rep-approve`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ approver_phone: repPhone, approver_name: user?.name }),
+    });
+    loadAll();
+  };
+
+  const repRejectOrder = async (orderId: number) => {
+    const reason = prompt("سبب الرفض (اختياري):");
+    if (reason === null) return;
+    await fetch(`/api/workflow/orders/${orderId}/rep-reject`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+      body: JSON.stringify({ approver_phone: repPhone, reason: reason || "رفض المندوب — رصيد العميل غير كافٍ" }),
+    });
+    loadAll();
+  };
+
+  const viewStatement = async (client: Client) => {
+    setStmtClient(client); setStmtLoading(true); setStmtData(null);
+    const res = await fetch(`/api/rep/clients/${client.phone}/statement?rep_phone=${repPhone}`, {
+      headers: { Authorization: `Bearer ${token()}` },
+    });
+    if (res.ok) setStmtData(await res.json());
+    setStmtLoading(false);
+  };
+
+  const toggleApprovalStmt = async (orderId: number, customerPhone: string) => {
+    const nowOpen = !approvalStmtOpen[orderId];
+    setApprovalStmtOpen(prev => ({ ...prev, [orderId]: nowOpen }));
+    if (nowOpen && approvalStmts[orderId] === undefined && !approvalStmtLoading[orderId]) {
+      setApprovalStmtLoading(prev => ({ ...prev, [orderId]: true }));
+      try {
+        const res = await fetch(`/api/portal/customers/${customerPhone}/statement`, {
+          headers: { Authorization: `Bearer ${token()}` },
+        });
+        const data = res.ok ? await res.json() : null;
+        setApprovalStmts(prev => ({ ...prev, [orderId]: data }));
+      } catch { setApprovalStmts(prev => ({ ...prev, [orderId]: null })); }
+      setApprovalStmtLoading(prev => ({ ...prev, [orderId]: false }));
+    }
+  };
+
+  const placeOrder = async () => {
+    if (!form.customer_phone || !form.product_id || !form.quantity) {
+      setPlaceMsg({ type: "error", text: "يرجى تعبئة جميع الحقول المطلوبة" });
+      return;
+    }
+    setPlacing(true); setPlaceMsg({ type: "", text: "" });
+    const prod = products.find(p => String(p.id) === form.product_id);
+    const unitPrice = parseFloat(form.unit_price) || prod?.price_per_unit || 0;
+    const customer = clients.find(c => c.phone === form.customer_phone);
+    try {
+      const res = await fetch("/api/workflow/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}` },
+        body: JSON.stringify({
+          customer_phone: form.customer_phone,
+          customer_name: customer?.name || "",
+          rep_id: user?.id,
+          product_id: parseInt(form.product_id),
+          product_name: prod?.name || "",
+          quantity: parseFloat(form.quantity),
+          unit: prod?.unit || "طن",
+          unit_price: unitPrice,
+          delivery_location: form.delivery_location,
+          destination_type: form.destination_type,
+          payment_method: form.payment_method,
+          notes: form.notes,
+        }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || "حدث خطأ");
+      setPlaceMsg({ type: "success", text: `تم إرسال الطلب ${d.order_number}` });
+      setForm({ customer_phone: "", product_id: "", quantity: "", unit_price: "", delivery_location: "", destination_type: "site", payment_method: "transfer", notes: "" });
+      loadAll();
+    } catch (e) { setPlaceMsg({ type: "error", text: (e as Error).message }); }
+    setPlacing(false);
+  };
+
+  const filteredClients = useMemo(() =>
+    clients.filter(c =>
+      !clientSearch || c.name.includes(clientSearch) || c.phone.includes(clientSearch) || (c.company_name || "").includes(clientSearch)
+    ), [clients, clientSearch]);
+
+  const filteredOrders = useMemo(() =>
+    orders.filter(o =>
+      (stageFilter === "all" || o.stage === stageFilter) &&
+      (!orderSearch || o.order_number.includes(orderSearch) || (o.customer_name || "").includes(orderSearch))
+    ), [orders, stageFilter, orderSearch]);
+
+  const totalEarnedBonus = useMemo(() => targets.reduce((s, t) => s + t.earned_bonus, 0), [targets]);
+  const selectedProduct = products.find(p => String(p.id) === form.product_id);
+
+  const repApprovalOrders = useMemo(
+    () => orders.filter(o => o.stage === "pending_rep_approval"),
+    [orders]
+  );
+  const pendingApprovalCount = pending.length + repApprovalOrders.length;
+
+  const activeRepRequests = repRequests.filter(r => !["delivered","cancelled"].includes(r.status));
+
+  const TABS: { key: Tab; label: string; icon: React.ElementType; badge?: number }[] = [
+    { key: "dashboard",    label: "الرئيسية",  icon: TrendingUp },
+    { key: "clients",      label: "عملائي",    icon: Users,       badge: clients.length },
+    { key: "pending",      label: "الموافقات", icon: Clock,       badge: pendingApprovalCount },
+    { key: "orders",       label: "الطلبات",   icon: ShoppingCart, badge: orders.filter(o => !["delivered","cancelled","draft"].includes(o.stage)).length },
+    { key: "newOrder",     label: "طلب جديد",  icon: Plus },
+    { key: "rep_requests", label: "طلباتي 👤", icon: Plus,         badge: activeRepRequests.length },
+  ];
+
+  return (
+    <div className="min-h-screen bg-gray-50" dir="rtl">
+      {/* Header */}
+      <div className="bg-[#103c68] text-white sticky top-0 z-30 shadow-lg">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div>
+            <h1 className="font-black text-lg">لوحة المندوب</h1>
+            <p className="text-white/60 text-xs">{user?.name} · {user?.phone}</p>
           </div>
+          <button onClick={loadAll} disabled={loading} className="p-2 rounded-xl hover:bg-white/10 transition-colors">
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
+          </button>
+        </div>
+        {/* Tab bar */}
+        <div className="flex overflow-x-auto scrollbar-hide border-t border-white/10">
+          {TABS.map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)}
+              className={`flex-1 min-w-[70px] flex flex-col items-center gap-0.5 py-2.5 text-xs font-semibold transition-colors relative ${
+                tab === t.key ? "text-white border-b-2 border-[#0eb5cb]" : "text-white/50 hover:text-white/80"
+              }`}
+            >
+              <t.icon size={15} />
+              {t.label}
+              {(t.badge ?? 0) > 0 && (
+                <span className="absolute top-1.5 end-1 bg-[#0eb5cb] text-white text-[9px] font-black min-w-[14px] h-3.5 rounded-full flex items-center justify-center px-0.5">
+                  {t.badge}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
 
-          <div className="relative">
-            <Search size={15} className="absolute end-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            <input value={searchOrders} onChange={e => setSearchOrders(e.target.value)}
-              placeholder="بحث بالرقم أو العميل أو المنتج..."
-              className="w-full bg-white border border-gray-200 rounded-xl pe-10 ps-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-[#103c68]/20 shadow-sm" />
+      <div className="max-w-2xl mx-auto px-4 py-5 space-y-4">
+        {loading && tab !== "newOrder" && (
+          <div className="flex justify-center py-16 text-gray-400">
+            <RefreshCw size={28} className="animate-spin" />
           </div>
+        )}
 
-          <div className="text-xs text-gray-400 px-1">عرض {filteredOrders.length} من {orders.length} طلب</div>
-
-          {filteredOrders.length === 0 ? (
-            <div className="text-center py-16 bg-white rounded-2xl border border-gray-100 text-gray-400">
-              <ShoppingCart size={36} className="mx-auto mb-2 opacity-30" />
-              <p>لا توجد طلبات مطابقة</p>
+        {/* ── DASHBOARD ──────────────────────────────────────────────── */}
+        {!loading && tab === "dashboard" && (
+          <>
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { label: "عملائي",        value: stats?.client_count || 0,  icon: Users,       color: "bg-blue-50 text-[#103c68]",     vfmt: fmt },
+                { label: "طلبات نشطة",    value: stats?.active_orders || 0, icon: ShoppingCart, color: "bg-orange-50 text-orange-600",  vfmt: fmt },
+                { label: "إجمالي المبيعات", value: stats?.total_revenue || 0, icon: DollarSign,  color: "bg-emerald-50 text-emerald-600", vfmt: (n: number) => `${fmt(n)} ﷼` },
+                { label: "بونص محقق",     value: totalEarnedBonus,           icon: Award,       color: "bg-yellow-50 text-yellow-600",  vfmt: (n: number) => `${fmt(n)} ﷼` },
+              ].map(card => (
+                <div key={card.label} className={`rounded-2xl p-4 ${card.color} shadow-sm`}>
+                  <card.icon size={18} className="mb-2 opacity-70" />
+                  <p className="text-2xl font-black">{card.vfmt(card.value)}</p>
+                  <p className="text-xs font-semibold opacity-60 mt-0.5">{card.label}</p>
+                </div>
+              ))}
             </div>
-          ) : (
-            <div className="space-y-3">
-              {filteredOrders.map(o => (
-                <div key={o.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-                  <div className="flex items-start justify-between gap-3 mb-3">
+
+            {(stats?.pending_count ?? 0) > 0 && (
+              <button onClick={() => setTab("pending")} className="w-full bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex items-center gap-3 text-amber-700 hover:bg-amber-100 transition-colors">
+                <Clock size={18} />
+                <div className="text-start flex-1">
+                  <p className="font-bold text-sm">{stats!.pending_count} عميل بانتظار موافقتك</p>
+                  <p className="text-xs opacity-70">اضغط للمراجعة والقبول أو الرفض</p>
+                </div>
+                <ChevronDown size={16} className="rotate-[270deg]" />
+              </button>
+            )}
+
+            {targets.length > 0 && (
+              <>
+                <h2 className="font-black text-gray-900 text-sm flex items-center gap-2"><Award size={16} className="text-[#103c68]" /> التارجت والبونص</h2>
+                {targets.map(t => <TargetCard key={t.id} t={t} />)}
+              </>
+            )}
+            {targets.length === 0 && (
+              <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center text-gray-400">
+                <Award size={32} className="mx-auto mb-2 opacity-20" />
+                <p className="text-sm">لا توجد أهداف مضبوطة حتى الآن</p>
+              </div>
+            )}
+
+            {(stats?.category_stats || []).length > 0 && (
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                <h3 className="font-bold text-gray-800 text-sm mb-3 flex items-center gap-2"><Package size={15} className="text-[#103c68]" /> المبيعات حسب الفئة</h3>
+                <div className="space-y-2">
+                  {stats!.category_stats.map(cat => (
+                    <div key={cat.category} className="flex items-center justify-between text-sm">
+                      <span className="text-gray-700 font-medium">{cat.category}</span>
+                      <div className="text-end">
+                        <p className="font-bold text-gray-900">{fmt(cat.total_revenue)} ﷼</p>
+                        <p className="text-xs text-gray-400">{fmt(cat.total_qty)} وحدة</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ── CLIENTS ────────────────────────────────────────────────── */}
+        {tab === "clients" && (
+          <>
+            <div className="relative">
+              <Search size={15} className="absolute top-3 end-3 text-gray-400" />
+              <input value={clientSearch} onChange={e => setClientSearch(e.target.value)}
+                placeholder="ابحث بالاسم أو الجوال أو الشركة..."
+                className="w-full border border-gray-200 rounded-xl pe-9 px-4 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#103c68]/20"
+              />
+            </div>
+            {!loading && filteredClients.length === 0 && (
+              <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center text-gray-400">
+                <Users size={36} className="mx-auto mb-2 opacity-20" />
+                <p className="text-sm font-semibold">لا يوجد عملاء مرتبطون</p>
+                <p className="text-xs mt-1">يمكن للعملاء اختيارك كمندوب من ملفهم الشخصي</p>
+              </div>
+            )}
+            {!loading && filteredClients.map(client => (
+              <div key={client.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-full bg-[#103c68]/10 flex items-center justify-center text-[#103c68] font-black text-lg flex-shrink-0">
+                    {client.name[0]}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-gray-900 truncate">{client.name}</p>
+                    <p className="text-xs text-gray-500 flex items-center gap-1"><Phone size={10} />{client.phone}</p>
+                    {client.company_name && <p className="text-xs text-gray-500 flex items-center gap-1 mt-0.5"><Building2 size={10} />{client.company_name}</p>}
+                    {client.city && <p className="text-xs text-gray-400 flex items-center gap-1"><MapPin size={10} />{client.city}</p>}
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 mt-3 pt-3 border-t border-gray-50">
+                  <div className="text-center">
+                    <p className="text-sm font-black text-gray-900">{fmt(client.order_count)}</p>
+                    <p className="text-xs text-gray-400">طلب</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-sm font-black text-[#103c68]">{fmt(client.total_revenue)} ﷼</p>
+                    <p className="text-xs text-gray-400">إجمالي الطلبات</p>
+                  </div>
+                </div>
+                <button onClick={() => viewStatement(client)}
+                  className="w-full mt-3 bg-[#103c68]/5 hover:bg-[#103c68]/10 text-[#103c68] text-sm font-bold py-2 rounded-xl transition-colors flex items-center justify-center gap-2">
+                  <FileText size={14} /> كشف حساب
+                </button>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* ── PENDING ────────────────────────────────────────────────── */}
+        {tab === "pending" && (
+          <>
+            {/* ── Orders needing rep balance approval ── */}
+            {!loading && repApprovalOrders.length > 0 && (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2 text-sm font-bold text-violet-700">
+                  <AlertCircle size={15} />
+                  طلبات تحتاج موافقتك على الرصيد ({repApprovalOrders.length})
+                </div>
+                {repApprovalOrders.map(o => {
+                  const isOpen      = !!approvalStmtOpen[o.id];
+                  const stmtLoading = !!approvalStmtLoading[o.id];
+                  const stmt        = approvalStmts[o.id];
+                  const balance     = stmt ? (stmt.summary.paid_revenue - stmt.summary.total_revenue) : null;
+                  return (
+                  <div key={o.id} className="bg-white rounded-2xl border border-violet-300 shadow-sm p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-black text-gray-900 text-sm">{o.order_number}</span>
+                          <span className="px-2 py-0.5 rounded-full text-xs font-bold border bg-violet-100 text-violet-700 border-violet-200">
+                            يحتاج موافقتك
+                          </span>
+                        </div>
+                        <p className="text-xs text-gray-600 mt-0.5 font-semibold">{o.customer_name || o.customer_phone}</p>
+                        <p className="text-xs text-gray-400">{o.product_name} × {o.quantity} {o.unit}</p>
+                        <p className="text-xs text-gray-400">{fmtDate(o.created_at)}</p>
+                      </div>
+                      <div className="text-left flex-shrink-0">
+                        <div className="font-black text-lg text-gray-900">{(o.total_with_vat || 0).toFixed(0)}</div>
+                        <div className="text-xs text-gray-400">ر.س</div>
+                      </div>
+                    </div>
+
+                    <div className="bg-violet-50 rounded-xl px-3 py-2 text-xs text-violet-700 font-medium">
+                      أرسل إليك المراجع هذا الطلب لأن رصيد العميل غير كافٍ — قرر القبول أو الرفض
+                    </div>
+
+                    {/* Account statement toggle */}
+                    <button
+                      onClick={() => toggleApprovalStmt(o.id, o.customer_phone)}
+                      className="w-full flex items-center justify-between bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-700 transition-colors">
+                      <span className="flex items-center gap-1.5"><FileText size={12} className="text-[#103c68]" /> كشف حساب العميل</span>
+                      {isOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                    </button>
+
+                    {isOpen && (
+                      <div className="rounded-xl border border-gray-100 overflow-hidden">
+                        {stmtLoading && (
+                          <div className="p-4 text-center text-xs text-gray-400 animate-pulse">جاري تحميل كشف الحساب…</div>
+                        )}
+                        {!stmtLoading && !stmt && (
+                          <div className="p-4 text-center text-xs text-red-400">تعذّر تحميل الكشف</div>
+                        )}
+                        {!stmtLoading && stmt && (
+                          <div className="p-3 space-y-2">
+                            {/* Customer summary */}
+                            <div className="grid grid-cols-2 gap-2">
+                              <div className="bg-gray-50 rounded-xl p-2 text-center">
+                                <p className="text-xs text-gray-400">إجمالي الطلبات</p>
+                                <p className="font-black text-sm text-gray-900">{fmt(stmt.summary.total_revenue)} ﷼</p>
+                              </div>
+                              <div className="bg-gray-50 rounded-xl p-2 text-center">
+                                <p className="text-xs text-gray-400">المدفوع</p>
+                                <p className="font-black text-sm text-gray-900">{fmt(stmt.summary.paid_revenue)} ﷼</p>
+                              </div>
+                            </div>
+                            {balance !== null && (
+                              <div className={`rounded-xl p-2 text-center border ${balance >= 0 ? "bg-emerald-50 border-emerald-200" : "bg-red-50 border-red-200"}`}>
+                                <p className="text-xs font-semibold mb-0.5">{balance >= 0 ? "رصيد دائن" : "رصيد مدين"}</p>
+                                <p className={`font-black text-base ${balance >= 0 ? "text-emerald-700" : "text-red-700"}`}>
+                                  {balance >= 0 ? "+" : ""}{fmt(balance)} ﷼
+                                </p>
+                              </div>
+                            )}
+                            <div className="grid grid-cols-3 gap-1 text-center">
+                              <div className="bg-blue-50 rounded-lg p-1.5">
+                                <p className="text-xs font-black text-blue-800">{stmt.summary.total_orders}</p>
+                                <p className="text-[10px] text-blue-600">إجمالي</p>
+                              </div>
+                              <div className="bg-green-50 rounded-lg p-1.5">
+                                <p className="text-xs font-black text-green-800">{stmt.summary.delivered}</p>
+                                <p className="text-[10px] text-green-600">مسلّم</p>
+                              </div>
+                              <div className="bg-red-50 rounded-lg p-1.5">
+                                <p className="text-xs font-black text-red-800">{stmt.summary.cancelled}</p>
+                                <p className="text-[10px] text-red-600">ملغي</p>
+                              </div>
+                            </div>
+                            {/* Last 3 orders */}
+                            {stmt.orders.slice(0, 3).map(ord => (
+                              <div key={ord.id} className="flex items-center justify-between text-xs py-1.5 border-t border-gray-50">
+                                <div>
+                                  <p className="font-mono font-bold text-gray-700">{ord.order_number}</p>
+                                  <p className="text-gray-400">{ord.product_name} × {ord.quantity}</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="font-bold text-gray-800">{fmt(ord.total_with_vat)} ﷼</p>
+                                  <p className="text-gray-400">{fmtDate(ord.created_at)}</p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex gap-2">
+                      <button onClick={() => repApproveOrder(o.id)}
+                        className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-1.5">
+                        <CheckCircle2 size={14} />قبول الطلب
+                      </button>
+                      <button onClick={() => repRejectOrder(o.id)}
+                        className="flex-1 bg-red-50 hover:bg-red-100 text-red-600 text-sm font-bold py-2.5 rounded-xl border border-red-200 transition-colors flex items-center justify-center gap-1.5">
+                        <XCircle size={14} />رفض
+                      </button>
+                    </div>
+                  </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* ── Pending client link requests ── */}
+            {!loading && pending.length > 0 && repApprovalOrders.length > 0 && (
+              <div className="flex items-center gap-2 text-sm font-bold text-amber-700 pt-2 border-t border-gray-100">
+                <Clock size={14} />طلبات ارتباط العملاء ({pending.length})
+              </div>
+            )}
+            {!loading && pending.length === 0 && repApprovalOrders.length === 0 && (
+              <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center text-gray-400">
+                <CheckCircle2 size={36} className="mx-auto mb-2 opacity-20" />
+                <p className="text-sm font-semibold">لا توجد موافقات معلقة</p>
+                <p className="text-xs mt-1">ستظهر هنا طلبات العملاء الجدد وطلبات الرصيد</p>
+              </div>
+            )}
+            {!loading && pending.map(pc => (
+              <div key={pc.link_id} className="bg-white rounded-2xl border border-amber-200 shadow-sm p-4">
+                <div className="flex items-start gap-3 mb-3">
+                  <div className="w-10 h-10 rounded-full bg-amber-100 flex items-center justify-center text-amber-700 font-black text-lg flex-shrink-0">
+                    {pc.name[0]}
+                  </div>
+                  <div className="flex-1">
+                    <p className="font-bold text-gray-900">{pc.name}</p>
+                    <p className="text-xs text-gray-500 flex items-center gap-1"><Phone size={10} />{pc.phone}</p>
+                    {pc.company_name && <p className="text-xs text-gray-500 flex items-center gap-1"><Building2 size={10} />{pc.company_name}</p>}
+                    <p className="text-xs text-amber-600 mt-1 font-medium">طلب الارتباط: {fmtDate(pc.linked_at)}</p>
+                    <p className="text-xs text-gray-400">تاريخ التسجيل: {fmtDate(pc.registered_at)}</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={() => approveClient(pc.link_id, "approve")}
+                    className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold py-2.5 rounded-xl transition-colors flex items-center justify-center gap-1">
+                    <CheckCircle2 size={14} /> قبول
+                  </button>
+                  <button onClick={() => approveClient(pc.link_id, "reject")}
+                    className="flex-1 bg-red-50 hover:bg-red-100 text-red-600 text-sm font-bold py-2.5 rounded-xl border border-red-200 transition-colors flex items-center justify-center gap-1">
+                    <XCircle size={14} /> رفض
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* ── ORDERS ─────────────────────────────────────────────────── */}
+        {tab === "orders" && (
+          <>
+            <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
+              {[{ key: "all", label: "الكل" }, ...Object.entries(STAGES).map(([k, v]) => ({ key: k, label: v.label }))].map(s => (
+                <button key={s.key} onClick={() => setStageFilter(s.key)}
+                  className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-bold border transition-colors ${
+                    stageFilter === s.key ? "bg-[#103c68] text-white border-[#103c68]" : "bg-white text-gray-600 border-gray-200 hover:border-[#103c68]/40"
+                  }`}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <div className="relative">
+              <Search size={15} className="absolute top-3 end-3 text-gray-400" />
+              <input value={orderSearch} onChange={e => setOrderSearch(e.target.value)}
+                placeholder="ابحث برقم الطلب أو العميل..."
+                className="w-full border border-gray-200 rounded-xl pe-9 px-4 py-2.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#103c68]/20"
+              />
+            </div>
+            {!loading && filteredOrders.length === 0 && (
+              <div className="bg-white rounded-2xl border border-gray-100 p-10 text-center text-gray-400">
+                <ShoppingCart size={36} className="mx-auto mb-2 opacity-20" />
+                <p className="text-sm font-semibold">لا توجد طلبات</p>
+              </div>
+            )}
+            {!loading && filteredOrders.map(o => {
+              const stg = STAGES[o.stage] || { label: o.stage, color: "bg-gray-100 text-gray-600 border-gray-200" };
+              const expanded = expandedOrder === o.id;
+              return (
+                <div key={o.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                  <button onClick={() => setExpandedOrder(expanded ? null : o.id)} className="w-full p-4 flex items-center gap-3 text-start">
                     <div className="flex-1 min-w-0">
-                      <div className="font-mono text-xs text-[#103c68] font-bold mb-0.5">{o.order_number}</div>
-                      <div className="font-bold text-gray-900">{o.customer_name || o.customer_phone}</div>
-                      <div className="text-sm text-gray-400">{o.product_name} × {o.quantity} {o.unit}</div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-black text-gray-900 text-sm">{o.order_number}</span>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold border ${stg.color}`}>{stg.label}</span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-0.5">{o.customer_name || o.customer_phone} · {o.product_name}</p>
+                      <p className="text-xs text-gray-400">{fmtDate(o.created_at)}</p>
                     </div>
-                    <div className="text-left flex-shrink-0 space-y-1">
-                      <div className="font-black text-lg text-gray-900">{o.total_with_vat?.toFixed(0)} ر.س</div>
-                      <StageBadge stage={o.stage} />
+                    <div className="text-end flex-shrink-0">
+                      <p className="font-black text-[#103c68]">{fmt(o.total_with_vat)} ﷼</p>
+                      <p className="text-xs text-gray-400">{fmt(o.quantity)} {o.unit}</p>
                     </div>
-                  </div>
-
-                  <div className="flex items-center gap-4 text-xs text-gray-400 flex-wrap">
-                    {o.delivery_location && <span className="flex items-center gap-1"><MapPin size={11} />{o.delivery_location}</span>}
-                    <span className="flex items-center gap-1"><Phone size={11} />{o.customer_phone}</span>
-                    <span>{new Date(o.created_at).toLocaleDateString("ar-SA")}</span>
-                  </div>
-
-                  {o.stage === "loaded" && (
-                    <div className="mt-3 bg-cyan-50 border border-cyan-100 rounded-xl px-3 py-2.5 text-xs">
-                      <div className="text-cyan-700 font-bold">🚛 الشحنة في الطريق</div>
-                      {o.vehicle_plate && <div className="text-cyan-600 mt-0.5">السيارة: {o.vehicle_plate} · السائق: {o.driver_name}</div>}
-                      {o.driver_phone && (
-                        <a href={`https://wa.me/966${o.driver_phone.replace(/^0/, "")}`} target="_blank" rel="noreferrer"
-                          className="inline-flex items-center gap-1 mt-1.5 bg-green-600 text-white px-2 py-1 rounded-lg font-bold">
-                          واتساب السائق
-                        </a>
+                    {expanded ? <ChevronUp size={16} className="text-gray-400" /> : <ChevronDown size={16} className="text-gray-400" />}
+                  </button>
+                  {expanded && (
+                    <div className="px-4 pb-4 pt-0 border-t border-gray-50 space-y-3">
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs text-gray-600">
+                        <div><span className="text-gray-400">الموقع: </span>{o.delivery_location || "—"}</div>
+                        <div><span className="text-gray-400">الدفع: </span>{o.payment_method === "transfer" ? "تحويل بنكي" : o.payment_method === "cash" ? "💵 نقداً" : "بطاقة"}</div>
+                        <div><span className="text-gray-400">سعر الوحدة: </span>{fmt(o.unit_price)} ﷼</div>
+                        <div><span className="text-gray-400">الجوال: </span>{o.customer_phone}</div>
+                      </div>
+                      {/* Cash approval action */}
+                      {o.stage === "pending_cash_approval" && (
+                        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
+                          <p className="text-xs font-bold text-amber-800 flex items-center gap-1">
+                            💵 طلب دفع نقدي — يحتاج موافقتك
+                          </p>
+                          <p className="text-xs text-amber-700">العميل {o.customer_name || o.customer_phone} يريد الدفع نقداً بمبلغ {fmt(o.total_with_vat)} ﷼</p>
+                          <div className="flex gap-2">
+                            <button onClick={() => approveCash(o.id, "approve")}
+                              className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold py-2 rounded-xl transition-colors flex items-center justify-center gap-1">
+                              <CheckCircle2 size={13} /> موافقة
+                            </button>
+                            <button onClick={() => approveCash(o.id, "reject")}
+                              className="flex-1 bg-red-50 hover:bg-red-100 text-red-600 text-xs font-bold py-2 rounded-xl border border-red-200 transition-colors flex items-center justify-center gap-1">
+                              <XCircle size={13} /> رفض
+                            </button>
+                          </div>
+                        </div>
                       )}
                     </div>
                   )}
-
-                  {o.stage === "delivered" && (
-                    <div className="mt-3 bg-green-50 border border-green-100 rounded-xl px-3 py-2 text-xs text-green-700 font-semibold flex items-center gap-1.5">
-                      <CheckCircle size={13} />تم التسليم بنجاح
-                    </div>
-                  )}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+              );
+            })}
+          </>
+        )}
 
-      {/* ══════════════════════════════════════════ NEW ORDER TAB ══════════════════════════════════════════ */}
-      {tab === "newOrder" && (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 max-w-2xl">
-          <h2 className="font-black text-gray-900 text-xl mb-5 flex items-center gap-2">
-            <Plus size={20} className="text-[#103c68]" />إنشاء طلب جديد
-          </h2>
+        {/* ── NEW ORDER ──────────────────────────────────────────────── */}
+        {tab === "newOrder" && (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+            <h2 className="font-black text-gray-900 flex items-center gap-2"><Plus size={18} className="text-[#103c68]" /> طلب جديد لعميل</h2>
 
-          {successMsg && (
-            <div className="bg-green-50 border border-green-200 text-green-700 rounded-xl px-4 py-3 mb-5 flex items-center gap-2 font-semibold text-sm">
-              <CheckCircle size={16} />{successMsg}
-            </div>
-          )}
+            {placeMsg.text && (
+              <div className={`rounded-xl p-3 flex items-center gap-2 text-sm ${
+                placeMsg.type === "success" ? "bg-emerald-50 border border-emerald-200 text-emerald-700" : "bg-red-50 border border-red-200 text-red-700"
+              }`}>
+                {placeMsg.type === "success" ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
+                {placeMsg.text}
+              </div>
+            )}
 
-          <form onSubmit={submitOrder} className="space-y-5">
-            {/* Product picker */}
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2">المنتج *</label>
-              {selectedProduct ? (
-                <div className="flex items-center justify-between bg-[#103c68]/5 border border-[#103c68]/20 rounded-xl px-4 py-3">
-                  <div>
-                    <div className="font-bold text-[#103c68]">{selectedProduct.name}</div>
-                    <div className="text-xs text-gray-500">{selectedProduct.category} · {selectedProduct.price_per_unit} ر.س/{selectedProduct.unit}</div>
-                  </div>
-                  <button type="button" onClick={() => setSelectedProduct(null)} className="text-gray-400 hover:text-gray-600">
-                    <X size={16} />
-                  </button>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">العميل *</label>
+              {clients.length === 0 ? (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-700 flex items-center gap-2">
+                  <AlertCircle size={14} /> لا يوجد عملاء مرتبطون. يمكن للعملاء اختيارك من ملفهم الشخصي.
                 </div>
               ) : (
-                <button type="button" onClick={() => setShowProdPicker(true)}
-                  className="w-full flex items-center justify-between border border-dashed border-gray-300 rounded-xl px-4 py-3 text-gray-400 hover:border-[#103c68] hover:text-[#103c68] transition-colors text-sm">
-                  <span>اختر منتجاً...</span>
-                  <ChevronDown size={15} />
-                </button>
+                <select value={form.customer_phone} onChange={e => setForm(f => ({ ...f, customer_phone: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20">
+                  <option value="">— اختر العميل —</option>
+                  {clients.map(c => <option key={c.phone} value={c.phone}>{c.name}{c.company_name ? ` (${c.company_name})` : ""} · {c.phone}</option>)}
+                </select>
               )}
             </div>
 
-            {/* Customer picker */}
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2">العميل *</label>
-              <div className="flex gap-2">
-                <div className="flex-1 relative">
-                  <Phone size={14} className="absolute end-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                  <input value={custPhone} onChange={e => setCustPhone(e.target.value)} placeholder="05xxxxxxxx" dir="ltr" required
-                    className="w-full border border-gray-200 rounded-xl pe-9 ps-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#103c68]/20 bg-gray-50" />
-                </div>
-                <button type="button" onClick={() => setShowCustPicker(true)}
-                  className="px-3 py-2.5 bg-gray-100 hover:bg-gray-200 rounded-xl text-sm font-semibold text-gray-600 flex items-center gap-1.5 transition-colors">
-                  <Users size={14} />اختر
-                </button>
-              </div>
-              <input value={custName} onChange={e => setCustName(e.target.value)} placeholder="اسم العميل (اختياري)"
-                className="w-full mt-2 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#103c68]/20 bg-gray-50" />
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">المنتج *</label>
+              <select value={form.product_id}
+                onChange={e => {
+                  const p = products.find(pr => String(pr.id) === e.target.value);
+                  setForm(f => ({ ...f, product_id: e.target.value, unit_price: p ? String(p.price_per_unit) : "" }));
+                }}
+                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20">
+                <option value="">— اختر المنتج —</option>
+                {products.map(p => <option key={p.id} value={p.id}>{p.name} · {fmt(p.price_per_unit)} ﷼/{p.unit}</option>)}
+              </select>
             </div>
 
-            {/* Qty + custom price */}
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-2">
-                  الكمية ({selectedProduct?.unit || "وحدة"}) *
-                </label>
-                <input type="number" value={qty} onChange={e => setQty(e.target.value)} required min="1" placeholder="0"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#103c68]/20 bg-gray-50" />
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">الكمية *</label>
+                <input type="number" min="1" step="0.5" value={form.quantity}
+                  onChange={e => setForm(f => ({ ...f, quantity: e.target.value }))}
+                  placeholder={selectedProduct?.load_capacity ? `حتى ${selectedProduct.load_capacity} ${selectedProduct.unit}` : "0"}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20"
+                />
               </div>
               <div>
-                <label className="block text-sm font-bold text-gray-700 mb-2">
-                  السعر/وحدة {selectedProduct && <span className="text-gray-400 font-normal">(افتراضي: {selectedProduct.price_per_unit})</span>}
-                </label>
-                <input type="number" value={customPrice} onChange={e => setCustomPrice(e.target.value)}
-                  placeholder={selectedProduct ? String(selectedProduct.price_per_unit) : "0"}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#103c68]/20 bg-gray-50" />
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">سعر الوحدة (﷼)</label>
+                <input type="number" min="0" value={form.unit_price}
+                  onChange={e => setForm(f => ({ ...f, unit_price: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20"
+                />
               </div>
             </div>
 
-            {/* Delivery location */}
+            {form.quantity && form.unit_price && (() => {
+              const sub = parseFloat(form.quantity) * parseFloat(form.unit_price);
+              const vat = sub * 0.15;
+              return (
+                <div className="bg-[#103c68]/5 rounded-xl p-3 text-xs text-gray-700 space-y-1">
+                  <div className="flex justify-between"><span>قبل الضريبة</span><span className="font-bold">{fmt(sub)} ﷼</span></div>
+                  <div className="flex justify-between"><span>ضريبة 15%</span><span className="font-bold">{fmt(vat)} ﷼</span></div>
+                  <div className="flex justify-between text-[#103c68] font-black text-sm"><span>الإجمالي</span><span>{fmt(sub + vat)} ﷼</span></div>
+                </div>
+              );
+            })()}
+
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2">موقع التسليم *</label>
-              <input value={deliveryLoc} onChange={e => setDeliveryLoc(e.target.value)} required
-                placeholder="اكتب العنوان أو الحي أو المنطقة"
-                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#103c68]/20 bg-gray-50" />
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">موقع التسليم</label>
+              <input value={form.delivery_location} onChange={e => setForm(f => ({ ...f, delivery_location: e.target.value }))}
+                placeholder="المدينة / الحي..."
+                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20"
+              />
             </div>
 
-            {/* Destination type */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">نوع الوجهة</label>
+                <select value={form.destination_type} onChange={e => setForm(f => ({ ...f, destination_type: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20">
+                  <option value="site">موقع</option>
+                  <option value="warehouse">مستودع</option>
+                  <option value="other">أخرى</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-700 block mb-1.5">طريقة الدفع</label>
+                <select value={form.payment_method} onChange={e => setForm(f => ({ ...f, payment_method: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20">
+                  <option value="transfer">تحويل بنكي</option>
+                  <option value="cash">كاش</option>
+                  <option value="credit">آجل</option>
+                </select>
+              </div>
+            </div>
+
             <div>
-              <label className="block text-sm font-bold text-gray-700 mb-2">نوع الوجهة</label>
-              <div className="flex gap-2">
-                {DEST_OPTIONS.map(d => (
-                  <button key={d} type="button" onClick={() => setDestType(d)}
-                    className={`flex-1 py-2 rounded-xl text-sm font-semibold border transition-colors
-                      ${destType === d ? "bg-[#103c68] text-white border-[#103c68]" : "bg-gray-50 text-gray-600 border-gray-200 hover:border-gray-300"}`}>
-                    {d}
-                  </button>
-                ))}
-              </div>
+              <label className="text-xs font-bold text-gray-700 block mb-1.5">ملاحظات</label>
+              <textarea rows={2} value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+                placeholder="أي تعليمات خاصة..."
+                className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20 resize-none"
+              />
             </div>
 
-            {/* Price preview */}
-            {qty && selectedProduct && (
-              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 space-y-2 text-sm">
-                <div className="flex justify-between text-gray-600">
-                  <span>المجموع قبل الضريبة</span>
-                  <span className="font-semibold">{totalBefore.toFixed(2)} ر.س</span>
-                </div>
-                <div className="flex justify-between text-gray-600">
-                  <span>ضريبة القيمة المضافة (15%)</span>
-                  <span className="font-semibold">{vat.toFixed(2)} ر.س</span>
-                </div>
-                <div className="flex justify-between text-gray-900 font-black text-base pt-2 border-t border-gray-200">
-                  <span>الإجمالي</span>
-                  <span className="text-[#103c68]">{totalWith.toFixed(2)} ر.س</span>
-                </div>
-              </div>
-            )}
-
-            <button type="submit" disabled={submitting || !selectedProduct || !custPhone || !qty || !deliveryLoc}
-              className="w-full py-3.5 bg-[#103c68] hover:bg-[#0d3158] text-white rounded-xl font-black text-base disabled:opacity-40 transition-colors flex items-center justify-center gap-2">
-              {submitting ? <><RefreshCw size={16} className="animate-spin" />جاري الإرسال...</> : <><ShoppingCart size={16} />إرسال الطلب</>}
+            <button onClick={placeOrder}
+              disabled={placing || !form.customer_phone || !form.product_id || !form.quantity}
+              className="w-full bg-[#103c68] hover:bg-[#0d2e50] disabled:opacity-50 text-white font-black py-4 rounded-2xl text-base transition-colors flex items-center justify-center gap-2 shadow-lg">
+              <Truck size={18} />{placing ? "جاري الإرسال..." : "إرسال الطلب"}
             </button>
-          </form>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
 
-      {/* ══════════════════════════════════════════ CUSTOMERS TAB ══════════════════════════════════════════ */}
-      {tab === "customers" && (
-        <div className="space-y-4">
-          {/* Add customer form */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
-            <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><Plus size={16} className="text-[#103c68]" />إضافة عميل جديد</h3>
-            {custMsg && (
-              <div className={`rounded-xl px-3 py-2.5 mb-4 text-sm flex items-center gap-2
-                ${custMsg.startsWith("❌") ? "bg-red-50 text-red-700" : "bg-green-50 text-green-700"}`}>
-                {custMsg.startsWith("❌") ? <AlertCircle size={14} /> : <CheckCircle size={14} />}{custMsg}
-              </div>
-            )}
-            <form onSubmit={submitNewCustomer} className="grid grid-cols-2 gap-3">
-              <div className="col-span-2 sm:col-span-1">
-                <label className="text-xs font-semibold text-gray-600 block mb-1">اسم العميل *</label>
-                <input value={newCustForm.name} onChange={e => setNewCustForm(p => ({ ...p, name: e.target.value }))} required
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20" />
-              </div>
-              <div className="col-span-2 sm:col-span-1">
-                <label className="text-xs font-semibold text-gray-600 block mb-1">رقم الجوال *</label>
-                <input value={newCustForm.phone} onChange={e => setNewCustForm(p => ({ ...p, phone: e.target.value }))} required dir="ltr"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20" />
-              </div>
+      {/* ── Statement Modal ─────────────────────────────────────────────── */}
+      {stmtClient && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-end sm:items-center justify-center p-4"
+          onClick={() => { setStmtClient(null); setStmtData(null); }}>
+          <div className="bg-white w-full max-w-lg rounded-3xl overflow-hidden max-h-[90vh] flex flex-col shadow-2xl"
+            onClick={e => e.stopPropagation()}>
+            <div className="bg-[#103c68] text-white px-5 py-4 flex items-center justify-between flex-shrink-0">
               <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">اسم الشركة</label>
-                <input value={newCustForm.company_name} onChange={e => setNewCustForm(p => ({ ...p, company_name: e.target.value }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20" />
+                <h3 className="font-black text-lg">كشف حساب</h3>
+                <p className="text-white/70 text-xs">{stmtClient.name}{stmtClient.company_name ? ` · ${stmtClient.company_name}` : ""}</p>
               </div>
-              <div>
-                <label className="text-xs font-semibold text-gray-600 block mb-1">الرقم الضريبي</label>
-                <input value={newCustForm.vat_number} onChange={e => setNewCustForm(p => ({ ...p, vat_number: e.target.value }))} dir="ltr"
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/20" />
-              </div>
-              <div className="col-span-2">
-                <button type="submit" disabled={addingCust}
-                  className="px-6 py-2.5 bg-[#103c68] text-white rounded-xl text-sm font-bold hover:bg-[#0d3158] disabled:opacity-50 transition-colors">
-                  {addingCust ? "جاري الإضافة..." : "إضافة العميل"}
+              <div className="flex items-center gap-2">
+                {stmtData && (
+                  <button onClick={() => exportCSV(stmtData)} className="p-2 rounded-xl bg-white/10 hover:bg-white/20 transition-colors" title="تصدير CSV">
+                    <Download size={16} />
+                  </button>
+                )}
+                <button onClick={() => { setStmtClient(null); setStmtData(null); }} className="p-2 rounded-xl bg-white/10 hover:bg-white/20 transition-colors">
+                  <X size={16} />
                 </button>
               </div>
-            </form>
-          </div>
-
-          {/* Customers list */}
-          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-            <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between gap-3">
-              <h3 className="font-bold text-gray-800">قائمة العملاء ({customers.length})</h3>
-              <div className="relative">
-                <Search size={13} className="absolute end-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                <input value={searchCust} onChange={e => setSearchCust(e.target.value)} placeholder="بحث..."
-                  className="border border-gray-200 rounded-xl pe-8 ps-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-[#103c68]/20 w-40" />
-              </div>
             </div>
-            {filteredCustomers.length === 0 ? (
-              <div className="text-center py-10 text-gray-400 text-sm">لا توجد عملاء</div>
-            ) : (
-              <div className="divide-y divide-gray-50">
-                {filteredCustomers.map(c => (
-                  <div key={c.id} className="px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-gray-50/50 group">
-                    <div className="flex items-center gap-3">
-                      <div className="w-9 h-9 rounded-full bg-[#103c68]/10 flex items-center justify-center font-bold text-[#103c68] text-sm flex-shrink-0">
-                        {c.name?.charAt(0) || "؟"}
-                      </div>
-                      <div>
-                        <div className="font-semibold text-gray-800 text-sm">{c.name}</div>
-                        <div className="text-xs text-gray-400 flex items-center gap-2">
-                          <span className="font-mono">{c.phone}</span>
-                          {c.company_name && <span className="flex items-center gap-0.5"><Building2 size={10} />{c.company_name}</span>}
+
+            {stmtLoading && (
+              <div className="flex justify-center py-12 text-gray-400">
+                <RefreshCw size={24} className="animate-spin" />
+              </div>
+            )}
+
+            {stmtData && !stmtLoading && (
+              <>
+                <div className="grid grid-cols-3 border-b border-gray-100 flex-shrink-0">
+                  {[
+                    { label: "إجمالي الطلبات", value: stmtData.summary.total_orders },
+                    { label: "مسلَّم",          value: stmtData.summary.delivered },
+                    { label: "المبيعات (﷼)",    value: fmt(stmtData.summary.total_revenue) },
+                  ].map(s => (
+                    <div key={s.label} className="text-center py-3 border-e border-gray-100 last:border-0">
+                      <p className="text-lg font-black text-gray-900">{s.value}</p>
+                      <p className="text-xs text-gray-400">{s.label}</p>
+                    </div>
+                  ))}
+                </div>
+                <div className="overflow-y-auto flex-1 p-4 space-y-2">
+                  {stmtData.orders.length === 0 && (
+                    <p className="text-center text-gray-400 text-sm py-8">لا توجد طلبات</p>
+                  )}
+                  {stmtData.orders.map(o => {
+                    const stg = STAGES[o.stage] || { label: o.stage, color: "bg-gray-100 text-gray-600 border-gray-200" };
+                    return (
+                      <div key={o.id} className="bg-gray-50 rounded-xl p-3 flex items-center justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-gray-900 truncate">{o.order_number}</p>
+                          <p className="text-xs text-gray-500 truncate">{o.product_name} · {fmt(o.quantity)} {o.unit}</p>
+                          <p className="text-xs text-gray-400">{fmtDate(o.created_at)}</p>
+                        </div>
+                        <div className="text-end flex-shrink-0">
+                          <p className="text-sm font-black text-[#103c68]">{fmt(o.total_with_vat)} ﷼</p>
+                          <span className={`inline-block text-xs px-2 py-0.5 rounded-full border font-bold mt-1 ${stg.color}`}>{stg.label}</span>
                         </div>
                       </div>
-                    </div>
-                    <button
-                      onClick={() => { setCustPhone(c.phone); setCustName(c.name); setTab("newOrder"); }}
-                      className="opacity-0 group-hover:opacity-100 text-xs text-[#103c68] font-bold hover:underline flex items-center gap-1 transition-opacity">
-                      طلب جديد <ArrowRight size={11} />
-                    </button>
-                  </div>
-                ))}
-              </div>
+                    );
+                  })}
+                </div>
+              </>
             )}
           </div>
         </div>
       )}
 
-      {/* ══════════════════════════════════════════ PRODUCT PICKER MODAL ══════════════════════════════════════════ */}
-      {showProdPicker && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h3 className="font-black text-gray-900">اختر المنتج</h3>
-              <button onClick={() => setShowProdPicker(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
-            </div>
-            <div className="px-4 pt-3 pb-2">
-              <div className="relative">
-                <Search size={14} className="absolute end-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                <input value={prodSearch} onChange={e => setProdSearch(e.target.value)} placeholder="ابحث عن منتج..."
-                  className="w-full border border-gray-200 rounded-xl pe-9 ps-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#103c68]/20" autoFocus />
-              </div>
-            </div>
-            <div className="overflow-y-auto flex-1 px-2 pb-3">
-              {filteredProducts.map(p => (
-                <button key={p.id} onClick={() => { setSelectedProduct(p); setShowProdPicker(false); setProdSearch(""); }}
-                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl hover:bg-gray-50 text-right transition-colors">
-                  <div className="w-10 h-10 rounded-xl bg-[#103c68]/10 flex items-center justify-center flex-shrink-0">
-                    <Package size={18} className="text-[#103c68]" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="font-bold text-gray-800 text-sm">{p.name}</div>
-                    <div className="text-xs text-gray-400">{p.category}</div>
-                  </div>
-                  <div className="text-left flex-shrink-0">
-                    <div className="font-black text-[#103c68] text-sm">{p.price_per_unit} ر.س</div>
-                    <div className="text-xs text-gray-400">/{p.unit}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
+      {/* ══ طلباتي (طلب للمندوب) TAB ══ */}
+      {tab === "rep_requests" && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-50 flex items-center justify-between">
+            <h2 className="font-bold text-gray-900 flex items-center gap-2">
+              <span className="text-xl">👤</span> طلباتي — تتبع الشحنات
+              {activeRepRequests.length > 0 && (
+                <span className="bg-amber-100 text-amber-700 text-xs font-bold px-2 py-0.5 rounded-full">{activeRepRequests.length} نشط</span>
+              )}
+            </h2>
+            <button onClick={() => fetch(`/api/rep-requests?rep_phone=${encodeURIComponent(repPhone)}`).then(r => r.ok ? r.json() : []).then(d => setRepRequests(Array.isArray(d) ? d : [])).catch(() => {})}
+              className="text-xs text-gray-400 hover:text-gray-600 font-semibold flex items-center gap-1">
+              🔄 تحديث
+            </button>
           </div>
-        </div>
-      )}
 
-      {/* ══════════════════════════════════════════ CUSTOMER PICKER MODAL ══════════════════════════════════════════ */}
-      {showCustPicker && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm max-h-[70vh] flex flex-col">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <h3 className="font-black text-gray-900">اختر عميلاً</h3>
-              <button onClick={() => setShowCustPicker(false)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          {repRequests.length === 0 ? (
+            <div className="text-center py-16 space-y-2">
+              <div className="text-5xl">📦</div>
+              <p className="font-semibold text-gray-500">لا توجد طلبات مرتبطة بك</p>
+              <p className="text-xs text-gray-400">يقوم مشرف الدينا والأوناش بإنشاء الطلبات وإسنادها إليك</p>
             </div>
-            <div className="overflow-y-auto flex-1 divide-y divide-gray-50 px-1 pb-2">
-              {customers.length === 0 ? (
-                <div className="text-center py-8 text-gray-400 text-sm">لا يوجد عملاء — أضف عميلاً من تبويب العملاء</div>
-              ) : customers.map(c => (
-                <button key={c.id} onClick={() => selectCustomer(c)}
-                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 text-right transition-colors">
-                  <div className="w-9 h-9 rounded-full bg-[#103c68]/10 flex items-center justify-center font-bold text-[#103c68] text-sm flex-shrink-0">
-                    {c.name?.charAt(0) || "؟"}
+          ) : (
+            <div className="divide-y divide-gray-50">
+              {repRequests.map(req => {
+                const statusMap: Record<string, { label: string; color: string; step: number }> = {
+                  pending:          { label: "⏳ بانتظار تعيين سيارة",    color: "bg-amber-100 text-amber-800",   step: 1 },
+                  vehicle_assigned: { label: "🚛 سيارة معيّنة — الفسحة",  color: "bg-blue-100 text-blue-800",     step: 2 },
+                  permit_uploaded:  { label: "📄 الفسحة صادرة — التحميل", color: "bg-purple-100 text-purple-800", step: 3 },
+                  loaded:           { label: "📦 في الطريق إليك",          color: "bg-indigo-100 text-indigo-800", step: 4 },
+                  delivered:        { label: "✅ تم التسليم",               color: "bg-green-100 text-green-800",   step: 5 },
+                  cancelled:        { label: "❌ ملغى",                     color: "bg-red-100 text-red-800",       step: 0 },
+                };
+                const st = statusMap[req.status] ?? { label: req.status, color: "bg-gray-100 text-gray-700", step: 0 };
+                return (
+                  <div key={req.id} className="p-5 space-y-3">
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-gray-900 text-base">📦 {req.product_name}</div>
+                        <div className="font-mono text-xs text-gray-400 mt-0.5">{req.request_no}</div>
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded-full font-bold flex-shrink-0 ${st.color}`}>{st.label}</span>
+                    </div>
+
+                    {/* Progress bar */}
+                    {req.status !== "cancelled" && (
+                      <div className="flex items-center gap-1">
+                        {[1,2,3,4,5].map(s => (
+                          <div key={s} className={`flex-1 h-1.5 rounded-full transition-colors ${
+                            s <= st.step ? "bg-[#103c68]" : "bg-gray-100"
+                          }`} />
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Loading locations */}
+                    {req.loading_locations?.length > 0 && (
+                      <div className="text-xs text-gray-600 bg-gray-50 rounded-xl px-3 py-2">
+                        📍 أماكن التحميل: {req.loading_locations.join(" · ")}
+                      </div>
+                    )}
+
+                    {/* Delivery location */}
+                    {req.delivery_location && (
+                      <div className="text-xs text-indigo-700 bg-indigo-50 rounded-xl px-3 py-2 break-all">
+                        🗺️ {req.delivery_location}
+                      </div>
+                    )}
+
+                    {/* Vehicle / driver (visible after vehicle_assigned) */}
+                    {(req.vehicle_plate || req.driver_name) && (
+                      <div className="flex flex-wrap gap-3 text-xs text-blue-800 bg-blue-50 rounded-xl px-3 py-2">
+                        {req.vehicle_plate && <span>🚛 {req.vehicle_plate}</span>}
+                        {req.driver_name   && <span>👨‍✈️ {req.driver_name}</span>}
+                        {req.driver_phone  && (
+                          <a href={`https://wa.me/966${req.driver_phone.replace(/^0/,"")}`} target="_blank" rel="noreferrer" className="text-green-600 underline font-bold">واتساب السائق</a>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Permit photo link */}
+                    {req.permit_photo_url && (
+                      <a href={req.permit_photo_url} target="_blank" rel="noreferrer"
+                        className="flex items-center gap-2 text-xs text-purple-700 bg-purple-50 rounded-xl px-3 py-2 font-semibold w-fit">
+                        👁️ صورة الفسحة
+                      </a>
+                    )}
+
+                    {/* Invoice photo link */}
+                    {req.invoice_photo_url && (
+                      <a href={req.invoice_photo_url} target="_blank" rel="noreferrer"
+                        className="flex items-center gap-2 text-xs text-blue-700 bg-blue-50 rounded-xl px-3 py-2 font-semibold w-fit">
+                        📄 صورة الفاتورة
+                      </a>
+                    )}
+
+                    {req.notes && <p className="text-xs text-gray-400 italic">{req.notes}</p>}
+
+                    <div className="text-xs text-gray-400 border-t border-gray-50 pt-2">
+                      {new Date(req.created_at).toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "long" })}
+                    </div>
                   </div>
-                  <div>
-                    <div className="font-semibold text-gray-800 text-sm">{c.name}</div>
-                    <div className="text-xs text-gray-400 font-mono">{c.phone}</div>
-                    {c.company_name && <div className="text-xs text-gray-400">{c.company_name}</div>}
-                  </div>
-                </button>
-              ))}
+                );
+              })}
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

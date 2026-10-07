@@ -1,9 +1,11 @@
 import { useEffect, useState, useRef } from "react";
+import { useRememberedState } from "@/hooks/useRememberedState";
 import * as XLSX from "xlsx";
 import {
   Car, Plus, Pencil, Trash2, RefreshCw, X, Save,
   FileSpreadsheet, Link2, Upload, CheckCircle2, AlertCircle,
   User, FileText, Wrench, CheckCircle, AlertTriangle,
+  Package, Send,
 } from "lucide-react";
 
 interface Vehicle {
@@ -54,6 +56,13 @@ function parseCSV(text: string): Record<string, string>[] {
   });
 }
 
+/* ── Load Request target label ── */
+function loadTarget(vehicleType: string): string {
+  if (/بلكر/i.test(vehicleType)) return "مسؤول الفسحات";
+  if (/سطحة|قلاب|لوبد|lowbed/i.test(vehicleType)) return "مشرف النقليات";
+  return "مسئول حركة البرح";
+}
+
 /* ── Import Modal ── */
 function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const [tab,      setTab]      = useState<"file" | "gsheet">("file");
@@ -100,7 +109,7 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
     const rows = preview.map(mapRow).filter(r => r.plate_number);
     if (!rows.length) { setStatus("error"); setMsg("لم يتم التعرف على عمود رقم اللوحة"); return; }
     try {
-      const r = await fetch("/api/vehicles/import", {
+      const r = await fetch("/api/fleet-vehicles/import", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rows: preview }),
       });
@@ -193,37 +202,91 @@ function ImportModal({ onClose, onDone }: { onClose: () => void; onDone: () => v
 
 /* ── Main Page ── */
 export default function Vehicles() {
-  const [rows,       setRows]       = useState<Vehicle[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [openForm,   setOpenForm]   = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
-  const [editing,    setEditing]    = useState<Vehicle | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [rows,        setRows]       = useState<Vehicle[]>([]);
+  const [loading,     setLoading]    = useState(true);
+  const [openForm,    setOpenForm]   = useState(false);
+  const [importOpen,  setImportOpen] = useState(false);
+  const [editing,     setEditing]    = useState<Vehicle | null>(null);
+  const [submitting,  setSubmitting] = useState(false);
+  const [formError,   setFormError]  = useState("");
   const [form, setForm] = useState({ plate_number: "", vehicle_type: "شاحنة نقل", status: "available", driver_name: "", notes: "" });
+  const [vehicleTypes, setVehicleTypes] = useState<{ id: number; name: string; icon: string; is_active: number }[]>([]);
+  const [typeFilter,   setTypeFilter]   = useRememberedState("vehicles-type-filter", "all");
+
+  // Load Request state
+  const [loadReqVehicle, setLoadReqVehicle] = useState<Vehicle | null>(null);
+  const [loadReqNotes,   setLoadReqNotes]   = useState("");
+  const [loadReqSending, setLoadReqSending] = useState(false);
+  const [loadReqDone,    setLoadReqDone]    = useState<{ targetLabel: string; sent: number; warn?: string } | null>(null);
 
   const load = () => {
     setLoading(true);
-    fetch("/api/vehicles").then(r => r.json()).then(setRows).finally(() => setLoading(false));
+    fetch("/api/fleet-vehicles").then(r => r.json()).then(setRows).finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    fetch("/api/vehicle-type-defs")
+      .then(r => r.json())
+      .then((data: { id: number; name: string; icon: string; is_active: number }[]) =>
+        setVehicleTypes(data.filter(t => t.is_active !== 0))
+      )
+      .catch(() => {});
+  }, []);
 
-  const openAdd  = () => { setEditing(null); setForm({ plate_number: "", vehicle_type: "شاحنة نقل", status: "available", driver_name: "", notes: "" }); setOpenForm(true); };
+  const openAdd  = () => { setEditing(null); setForm({ plate_number: "", vehicle_type: "شاحنة نقل", status: "available", driver_name: "", notes: "" }); setFormError(""); setOpenForm(true); };
   const openEdit = (v: Vehicle) => { setEditing(v); setForm({ plate_number: v.plate_number, vehicle_type: v.vehicle_type, status: v.status, driver_name: v.driver_name || "", notes: v.notes || "" }); setOpenForm(true); };
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault(); setSubmitting(true);
+    e.preventDefault();
+    if (!editing) {
+      const dup = rows.find(v => v.plate_number.trim() === form.plate_number.trim());
+      if (dup) { setFormError("رقم اللوحة مسجّل مسبقاً في دفتر السيارات"); return; }
+    }
+    setSubmitting(true);
     try {
-      if (editing) await fetch(`/api/vehicles/${editing.id}`, { method: "PUT",  headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
-      else         await fetch("/api/vehicles",               { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
-      setOpenForm(false); load();
-    } catch (err) { alert((err as Error).message); }
+      let res: Response;
+      if (editing) {
+        res = await fetch(`/api/fleet-vehicles/${encodeURIComponent(editing.plate_number)}/info`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...form, new_plate_number: form.plate_number }),
+        });
+      } else {
+        res = await fetch("/api/fleet-vehicles/create", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(form),
+        });
+      }
+      const data = await res.json();
+      if (!res.ok) { setFormError(data.error || "حدث خطأ"); return; }
+      setOpenForm(false); setFormError(""); load();
+    } catch (err) { setFormError((err as Error).message); }
     finally { setSubmitting(false); }
   };
 
-  const del = async (id: number) => {
+  const del = async (plate: string) => {
     if (!confirm("حذف هذه المركبة؟")) return;
-    await fetch(`/api/vehicles/${id}`, { method: "DELETE" }); load();
+    await fetch(`/api/fleet-vehicles/${encodeURIComponent(plate)}`, { method: "DELETE" }); load();
   };
+
+  const openLoadReq = (v: Vehicle) => { setLoadReqVehicle(v); setLoadReqNotes(""); setLoadReqDone(null); };
+  const closeLoadReq = () => { setLoadReqVehicle(null); setLoadReqNotes(""); setLoadReqDone(null); };
+
+  const sendLoadRequest = async () => {
+    if (!loadReqVehicle) return;
+    setLoadReqSending(true);
+    try {
+      const r = await fetch(`/api/fleet-vehicles/${encodeURIComponent(loadReqVehicle.plate_number)}/load-request`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: loadReqNotes }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error ?? "فشل الإرسال");
+      setLoadReqDone({ targetLabel: d.targetLabel, sent: d.sent, warn: d.warn });
+    } catch (err) { alert((err as Error).message); }
+    finally { setLoadReqSending(false); }
+  };
+
+  const filteredRows = typeFilter === "all" ? rows : rows.filter(r => r.vehicle_type === typeFilter);
 
   const statusGroups = STATUSES.map(s => ({ s, label: STATUS_AR[s], count: rows.filter(r => r.status === s).length }));
 
@@ -262,19 +325,59 @@ export default function Vehicles() {
         ))}
       </div>
 
+      {/* Type filter buttons */}
+      {vehicleTypes.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setTypeFilter("all")}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold border transition-all ${
+              typeFilter === "all"
+                ? "bg-[#103c68] text-white border-[#103c68] shadow-sm"
+                : "bg-white text-gray-600 border-gray-200 hover:border-[#103c68]/40"
+            }`}
+          >
+            الكل
+            <span className={`text-xs tabular-nums font-black ${typeFilter === "all" ? "text-white/80" : "text-gray-400"}`}>
+              {rows.length}
+            </span>
+          </button>
+          {vehicleTypes.map(t => {
+            const count = rows.filter(r => r.vehicle_type === t.name).length;
+            const active = typeFilter === t.name;
+            return (
+              <button
+                key={t.id}
+                onClick={() => setTypeFilter(t.name)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold border transition-all ${
+                  active
+                    ? "bg-[#103c68] text-white border-[#103c68] shadow-sm"
+                    : "bg-white text-gray-600 border-gray-200 hover:border-[#103c68]/40"
+                }`}
+              >
+                <span>{t.icon}</span>
+                <span>{t.name}</span>
+                <span className={`text-xs tabular-nums font-black ${active ? "text-white/80" : "text-gray-400"}`}>
+                  {count}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Grid of vehicles */}
       {loading ? (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {[1,2,3,4,5,6].map(i => <div key={i} className="h-32 bg-white rounded-2xl border border-gray-100 animate-pulse" />)}
         </div>
-      ) : rows.length === 0 ? (
+      ) : filteredRows.length === 0 ? (
         <div className="bg-white rounded-2xl border border-gray-100 p-12 text-center shadow-sm">
           <Car size={40} className="mx-auto text-gray-200 mb-3" />
-          <p className="text-gray-400">لا توجد مركبات مسجّلة</p>
+          <p className="text-gray-400">{rows.length === 0 ? "لا توجد مركبات مسجّلة" : "لا توجد مركبات من هذا النوع"}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {rows.map(v => (
+          {filteredRows.map(v => (
             <div key={v.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 hover:shadow-md transition-shadow">
               <div className="flex items-start justify-between mb-3">
                 <div>
@@ -291,12 +394,16 @@ export default function Vehicles() {
                 </div>
               )}
               {v.notes && <div className="text-xs text-gray-400 truncate mb-3">{v.notes}</div>}
-              <div className="flex gap-2 mt-3 pt-3 border-t border-gray-50">
+              <div className="flex gap-2 mt-3 pt-3 border-t border-gray-50 flex-wrap">
+                <button onClick={() => openLoadReq(v)}
+                  className="flex items-center gap-1.5 text-sm text-emerald-600 hover:bg-emerald-50 px-3 py-2 rounded-xl font-bold border border-emerald-200 transition-colors">
+                  <Package size={13} />طلب حمولة
+                </button>
                 <button onClick={() => openEdit(v)}
                   className="flex items-center gap-1.5 text-sm text-[#103c68] hover:bg-[#103c68]/10 px-3 py-2 rounded-xl font-semibold transition-colors">
                   <Pencil size={13} />تعديل
                 </button>
-                <button onClick={() => del(v.id)}
+                <button onClick={() => del(v.plate_number)}
                   className="flex items-center gap-1.5 text-sm text-red-500 hover:bg-red-50 px-3 py-2 rounded-xl font-semibold mr-auto transition-colors">
                   <Trash2 size={13} />حذف
                 </button>
@@ -321,14 +428,38 @@ export default function Vehicles() {
             <form onSubmit={handleSubmit} className="p-6 space-y-4">
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-1.5">رقم اللوحة *</label>
-                <input required value={form.plate_number} onChange={e => setForm(f => ({ ...f, plate_number: e.target.value }))}
-                  placeholder="ABC-1234" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/30 font-mono" />
+                <input required value={form.plate_number} onChange={e => {
+                  const val = e.target.value;
+                  setForm(f => ({ ...f, plate_number: val }));
+                  if (!editing) {
+                    const dup = rows.find(v => v.plate_number.trim() === val.trim());
+                    setFormError(dup ? "رقم اللوحة مسجّل مسبقاً في دفتر السيارات" : "");
+                  }
+                }}
+                  placeholder="ABC-1234"
+                  className={`w-full border rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 font-mono ${formError && !editing ? "border-red-400 focus:ring-red-300" : "border-gray-200 focus:ring-[#103c68]/30"}`} />
+                {formError && !editing && <p className="text-red-600 text-xs mt-1 font-semibold">⚠️ {formError}</p>}
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">نوع المركبة</label>
-                  <input value={form.vehicle_type} onChange={e => setForm(f => ({ ...f, vehicle_type: e.target.value }))}
-                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/30" />
+                  {vehicleTypes.length > 0 ? (
+                    <select
+                      value={form.vehicle_type}
+                      onChange={e => setForm(f => ({ ...f, vehicle_type: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/30"
+                    >
+                      {vehicleTypes.map(t => (
+                        <option key={t.id} value={t.name}>{t.icon} {t.name}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      value={form.vehicle_type}
+                      onChange={e => setForm(f => ({ ...f, vehicle_type: e.target.value }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/30"
+                    />
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1.5">الحالة</label>
@@ -349,7 +480,7 @@ export default function Vehicles() {
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/30 resize-none" />
               </div>
               <div className="flex gap-3 pt-1">
-                <button type="submit" disabled={submitting}
+                <button type="submit" disabled={submitting || (!!formError && !editing)}
                   className="flex-1 flex items-center justify-center gap-2 bg-[#103c68] text-white py-3.5 rounded-xl font-bold disabled:opacity-60">
                   <Save size={16} />{submitting ? "جاري الحفظ..." : "حفظ"}
                 </button>
@@ -362,6 +493,85 @@ export default function Vehicles() {
       )}
 
       {importOpen && <ImportModal onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); load(); }} />}
+
+      {/* ── Load Request Modal ── */}
+      {loadReqVehicle && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={closeLoadReq}>
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-6 pt-6 pb-4 bg-emerald-50 border-b border-emerald-100">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-black text-gray-900 flex items-center gap-2">
+                  <Package size={18} className="text-emerald-600" />طلب حمولة
+                </h3>
+                <button onClick={closeLoadReq} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg hover:bg-white/70">
+                  <X size={16} />
+                </button>
+              </div>
+              <div className="bg-white rounded-2xl border border-emerald-100 px-4 py-3">
+                <div className="font-black text-gray-900 text-lg font-mono">{loadReqVehicle.plate_number}</div>
+                <div className="text-sm text-gray-500">{loadReqVehicle.vehicle_type || "—"}</div>
+              </div>
+            </div>
+
+            {loadReqDone ? (
+              <div className="px-6 py-5 text-center space-y-3">
+                {loadReqDone.sent > 0 ? (
+                  <>
+                    <div className="w-14 h-14 rounded-full bg-emerald-100 flex items-center justify-center mx-auto">
+                      <CheckCircle2 size={28} className="text-emerald-600" />
+                    </div>
+                    <p className="font-black text-gray-800">تم إرسال الطلب</p>
+                    <p className="text-sm text-gray-500">
+                      أُرسل إلى <span className="font-bold text-emerald-700">{loadReqDone.targetLabel}</span>
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-14 h-14 rounded-full bg-amber-100 flex items-center justify-center mx-auto">
+                      <AlertTriangle size={28} className="text-amber-500" />
+                    </div>
+                    <p className="font-bold text-gray-700">لا يوجد {loadReqDone.targetLabel} مسجّل حالياً</p>
+                    <p className="text-xs text-gray-400">{loadReqDone.warn}</p>
+                  </>
+                )}
+                <button onClick={closeLoadReq}
+                  className="w-full py-3 bg-gray-100 rounded-xl text-sm font-semibold text-gray-700 hover:bg-gray-200 transition-colors">
+                  إغلاق
+                </button>
+              </div>
+            ) : (
+              <div className="px-6 py-5 space-y-4">
+                <div className="bg-[#103c68]/5 rounded-xl px-4 py-3 text-sm">
+                  <span className="text-gray-500">سيُرسَل الطلب إلى: </span>
+                  <span className="font-black text-[#103c68]">{loadTarget(loadReqVehicle.vehicle_type)}</span>
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-gray-700 block mb-1.5">ملاحظات (اختياري)</label>
+                  <textarea
+                    rows={2}
+                    value={loadReqNotes}
+                    onChange={e => setLoadReqNotes(e.target.value)}
+                    placeholder="أي تفاصيل إضافية..."
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-emerald-300 resize-none"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={closeLoadReq}
+                    className="flex-1 py-3 border border-gray-200 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">
+                    إلغاء
+                  </button>
+                  <button onClick={sendLoadRequest} disabled={loadReqSending}
+                    className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-sm font-bold disabled:opacity-60 flex items-center justify-center gap-2 transition-colors">
+                    {loadReqSending
+                      ? <><RefreshCw size={14} className="animate-spin" />جاري الإرسال...</>
+                      : <><Send size={14} />إرسال الطلب</>}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

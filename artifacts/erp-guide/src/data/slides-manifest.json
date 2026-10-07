@@ -1,0 +1,90 @@
+[
+  {
+    "id": "f1a2b3c4-d5e6-7890-abcd-ef1234567890",
+    "position": 1,
+    "filepath": "src/pages/slides/Slide01Cover.tsx",
+    "title": "غلاف الدليل",
+    "description": "دليل تشغيل منظومة الورشة والنقليات — شركة جيفر التجارية — م. محمد خليل غزالة — 2026",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a2b3c4d5-e6f7-8901-bcde-f12345678901",
+    "position": 2,
+    "filepath": "src/pages/slides/Slide02SystemOverview.tsx",
+    "title": "مخطط المنظومة الشاملة",
+    "description": "رسم بياني يوضح الربط بين الست وحدات: الورشة، الأسطول، الرحلات، العهدة، المصاريف، مخزون الورشة",
+    "speakerNotes": ""
+  },
+  {
+    "id": "b3c4d5e6-f7a8-9012-cdef-123456789012",
+    "position": 3,
+    "filepath": "src/pages/slides/Slide03Workshop.tsx",
+    "title": "وحدة الورشة",
+    "description": "نظام إدارة الصيانة — تسجيل الأعطال وإصدار كروت الصيانة وخصم القطع من المخزون",
+    "speakerNotes": ""
+  },
+  {
+    "id": "c4d5e6f7-a8b9-0123-defa-234567890123",
+    "position": 4,
+    "filepath": "src/pages/slides/Slide04MaintenanceCard.tsx",
+    "title": "نموذج كرت الصيانة",
+    "description": "نموذج يحاكي شكل كرت الصيانة مع جميع حقوله: رقم الكرت، السيارة، الفني، القطع، التواريخ، التوقيعات",
+    "speakerNotes": ""
+  },
+  {
+    "id": "d5e6f7a8-b9c0-1234-efab-345678901234",
+    "position": 5,
+    "filepath": "src/pages/slides/Slide05Transportation.tsx",
+    "title": "النقليات والأسطول",
+    "description": "ثلاث أعمدة تعرض وحدات إدارة السائقين والسيارات والتيدرات",
+    "speakerNotes": ""
+  },
+  {
+    "id": "e6f7a8b9-c0d1-2345-fabc-456789012345",
+    "position": 6,
+    "filepath": "src/pages/slides/Slide06Movement.tsx",
+    "title": "الحركة والرحلات",
+    "description": "خمس مراحل لدورة حياة طلب التوصيل من الاستلام حتى الإغلاق",
+    "speakerNotes": ""
+  },
+  {
+    "id": "f7a8b9c0-d1e2-3456-abcd-567890123456",
+    "position": 7,
+    "filepath": "src/pages/slides/Slide07DriverStatement.tsx",
+    "title": "نموذج كشف الاستعاضة",
+    "description": "نموذج يحاكي هيكل كشف الاستعاضة مع بنوده والمبالغ وخانات التوقيع",
+    "speakerNotes": ""
+  },
+  {
+    "id": "a8b9c0d1-e2f3-4567-bcde-678901234567",
+    "position": 8,
+    "filepath": "src/pages/slides/Slide08Settlements.tsx",
+    "title": "مصاريف السائقين والتسويات",
+    "description": "أنواع مصاريف السائقين وآلية التسوية الشهرية الإجمالية",
+    "speakerNotes": ""
+  },
+  {
+    "id": "b9c0d1e2-f3a4-5678-cdef-789012345678",
+    "position": 9,
+    "filepath": "src/pages/slides/Slide09Inventory.tsx",
+    "title": "مخزون الورشة",
+    "description": "إدارة قطع الغيار ومواد الصيانة مع الربط التلقائي بكروت الصيانة",
+    "speakerNotes": ""
+  },
+  {
+    "id": "c0d1e2f3-a4b5-6789-defa-890123456789",
+    "position": 10,
+    "filepath": "src/pages/slides/Slide10FuturePlan.tsx",
+    "title": "الخطة القادمة والتكامل الكامل",
+    "description": "خارطة الطريق: المرحلة الأولى الحالية والمرحلة الثانية القادمة، مع جدول ملخص الربط بين الوحدات",
+    "speakerNotes": ""
+  },
+  {
+    "id": "d1e2f3a4-b5c6-7890-efab-901234567890",
+    "position": 11,
+    "filepath": "src/pages/slides/Slide11ApprovalDoc.tsx",
+    "title": "وثيقة اعتماد التشغيل",
+    "description": "وثيقة رسمية قابلة للطباعة تُعتمَد وتُوقَّع من مدير العمليات والمدير العام كإقرار رسمي ببدء تشغيل المنظومة",
+    "speakerNotes": ""
+  }
+]

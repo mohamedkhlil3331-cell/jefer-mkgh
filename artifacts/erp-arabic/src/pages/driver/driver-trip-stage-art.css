@@ -1,0 +1,52 @@
+.driver-stage-art {
+  display: block;
+  width: min(100%, 320px);
+  height: auto;
+  margin-inline: auto;
+  overflow: visible;
+}
+
+.driver-permit-art {
+  display: block;
+  width: min(100%, 260px);
+  height: auto;
+  margin-inline: auto;
+  overflow: visible;
+}
+.driver-permit-letter { animation: driver-permit-reveal 3s ease-in-out infinite; }
+.driver-permit-flap { animation: driver-permit-open 3s ease-in-out infinite; transform-origin: 189px 67px; }
+.driver-permit-arm { animation: driver-permit-hand 3s ease-in-out infinite; transform-origin: 89px 91px; }
+@keyframes driver-permit-reveal {
+  0%, 14%, 100% { transform: translateY(18px); }
+  40%, 78% { transform: translateY(-18px); }
+}
+@keyframes driver-permit-open {
+  0%, 14%, 100% { transform: scaleY(1); }
+  30%, 78% { transform: scaleY(-.75); }
+}
+@keyframes driver-permit-hand {
+  0%, 14%, 100% { transform: rotate(0); }
+  38%, 75% { transform: rotate(-8deg); }
+}
+
+.driver-stage-truck { animation: driver-truck-idle 2.2s ease-in-out infinite; transform-origin: 150px 103px; }
+.driver-stage-grain { animation: driver-grain 1.2s linear infinite; }
+.driver-stage-camera { animation: driver-camera-idle 2.4s ease-in-out infinite; transform-origin: 160px 77px; }
+.driver-stage-focus { animation: driver-focus 2.4s ease-in-out infinite; transform-origin: 161px 77px; }
+.driver-stage-flash { opacity: 0; animation: driver-flash 2.4s ease-out infinite; }
+.driver-stage-worker { animation: driver-worker 1.8s ease-in-out infinite; transform-origin: 274px 101px; }
+.driver-stage-worker-near { transform-origin: 32px 101px; }
+.driver-stage-sack { animation: driver-sack 1.8s ease-in-out infinite; transform-origin: 252px 69px; }
+.driver-stage-cement { animation: driver-grain 1s linear infinite; }
+
+@keyframes driver-truck-idle { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
+@keyframes driver-grain { 0% { transform: translateY(-8px); opacity: .2; } 65% { opacity: 1; } 100% { transform: translateY(11px); opacity: 0; } }
+@keyframes driver-camera-idle { 0%,100% { transform: scale(1); } 50% { transform: scale(1.04); } }
+@keyframes driver-focus { 0%,100% { transform: scale(1); opacity: .7; } 50% { transform: scale(.88); opacity: 1; } }
+@keyframes driver-flash { 0%,74%,100% { opacity: 0; } 78% { opacity: .9; } 87% { opacity: 0; } }
+@keyframes driver-worker { 0%,100% { transform: rotate(0); } 50% { transform: rotate(-4deg); } }
+@keyframes driver-sack { 0%,100% { transform: rotate(0); } 50% { transform: rotate(11deg); } }
+
+@media (prefers-reduced-motion: reduce) {
+  .driver-stage-art *, .driver-permit-art * { animation: none !important; }
+}

@@ -98,7 +98,7 @@ export default function Employees() {
       />
 
       <Table
-        data={rows}
+        data={rows as unknown as Record<string, unknown>[]}
         keyField="id"
         loading={loading}
         columns={[
@@ -107,7 +107,7 @@ export default function Employees() {
           { key: "department", label: "القسم", render: r => (r.department as string) || "—" },
           { key: "nationality", label: "الجنسية", render: r => (r.nationality as string) || "—" },
           { key: "phone", label: "الهاتف", render: r => (r.phone as string) || "—" },
-          { key: "salary", label: "الراتب", render: r => formatCurrency(r.salary) },
+          { key: "salary", label: "الراتب", render: r => formatCurrency(r.salary as number | null) },
           { key: "iqama_end", label: "انتهاء الإقامة", render: r => (r.iqama_end as string) || "—" },
           { key: "status", label: "الحالة", render: r => <Badge status={r.status as string} /> },
           {

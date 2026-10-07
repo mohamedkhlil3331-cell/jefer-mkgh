@@ -1,0 +1,39 @@
+STRICT INSTRUCTION: SCOPED UPDATE ONLY. Implement the "Vehicle-Centric Analytics & Breakdown Management" module. Do NOT break existing user templates, the "طلبات" gateway, or client features. Preserve all historical data.
+
+Specific Requirements:
+
+1. VEHICLE-CENTRIC COST SEPARATION (فصل التكاليف):
+- Ensure ALL maintenance, spare parts, and repair expenses are explicitly bound to the `car_number` (The Vehicle's Account) as the primary cost center, NOT the driver's personal account.
+- Driver accounts should only track their individual driven KMs (for bonuses) and their specific logged diesel consumption for that trip. Even if drivers switch cars, their bonus follows their ID, while the car's expenses stay with the car.
+
+2. COMPREHENSIVE VEHICLE DASHBOARD (داش بورد السيارة):
+Build a detailed Admin view for each vehicle showcasing:
+- Total Loads/Trips completed by this vehicle.
+- Full history of Sueden/Drivers who operated it.
+- Spare Parts Inventory & Cost Ledger: Grouped by source:
+  a) Warehouse (المستودع).
+  b) Procurement (المشتريات).
+  c) Bought directly by the driver.
+  d) Roadside emergency repairs.
+- Document Compliance Tracker: Display status, Start Date, End Date, and an uploaded Image/Scan for:
+  * التأمين (Insurance) + Edit/Update functionality.
+  * الفحص الدوري (Inspection) + Edit/Update functionality.
+  * كرت التشغيل (Operating Card) + Edit/Update functionality.
+
+3. SMART BREAKDOWN REPORTING SYSTEM (نظام تبليغ الأعطال):
+- Create a breakdown reporting form for drivers/dispatchers.
+- Operational State when breakdown occurred (حالة السيارة أثناء العطل): Dropdown with (شغال / نشط / في حمولة).
+- Action/Status Taken (حالة العطل والإجراء): Dropdown with:
+  * وقف (Stop Immediately)
+  * أكمل (Continue Trip)
+  * ذهاب للورشة (Go to Workshop)
+  * إمكانية إصلاح على الطريق (Roadside Repair)
+  * طلب استدعاء الورشة المتنقلة (Call Mobile Workshop)
+- Delivery & Resolution Confirmation: Closing/resolving any breakdown ticket MUST require uploading a digital scan/photo of the original receipt/bill ("تأكيد التسليم بفاتورة").
+
+4. DATABASE SCHEMA ADDITIONS (SQLite):
+- Create `vehicle_compliance_docs` table: id, car_number, doc_type, start_date, end_date, image_url.
+- Create `vehicle_breakdowns` table: id, car_number, driver_id, operational_state, action_taken, status (Open/Resolved), invoice_image_url, created_at.
+
+5. UI/UX:
+Integrate these views seamlessly into the existing Admin and Driver portals using the high-end Deep Blue, Professional Black, and Clean White corporate theme with full Arabic RTL support.

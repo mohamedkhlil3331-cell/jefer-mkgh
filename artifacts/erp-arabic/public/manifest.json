@@ -1,0 +1,36 @@
+{
+  "name": "شركة جيفر التجارية",
+  "short_name": "جيفر",
+  "description": "منصة متكاملة لمواد البناء — توصيل سريع وتتبع لحظي لجميع مناطق المملكة",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#103c68",
+  "theme_color": "#103c68",
+  "lang": "ar",
+  "dir": "rtl",
+  "categories": ["business", "productivity"],
+  "icons": [
+    {
+      "src": "jefer-logo-new.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "jefer-logo-new.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "jefer-logo-new.png",
+      "sizes": "1512x1512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "screenshots": [],
+  "prefer_related_applications": false
+}

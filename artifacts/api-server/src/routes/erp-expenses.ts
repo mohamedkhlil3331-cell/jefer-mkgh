@@ -36,6 +36,16 @@ router.post("/fleet-expenses", (req, res) => {
   res.status(201).json({ id: result.lastInsertRowid, message: "تم تسجيل المصروف" });
 });
 
+router.put("/fleet-expenses/:id", (req, res) => {
+  const { date, car_id, expense_category, description, amount, document_number } = req.body;
+  db.prepare(`
+    UPDATE fleet_expenses SET date=?, car_id=?, expense_category=?, description=?, amount=?, document_number=?
+    WHERE id=?
+  `).run(date, car_id || null, expense_category, description || null,
+         parseFloat(amount) || 0, document_number || null, req.params.id);
+  res.json({ message: "تم التحديث" });
+});
+
 router.delete("/fleet-expenses/:id", (req, res) => {
   db.prepare("DELETE FROM fleet_expenses WHERE id=?").run(req.params.id);
   res.json({ message: "تم الحذف" });

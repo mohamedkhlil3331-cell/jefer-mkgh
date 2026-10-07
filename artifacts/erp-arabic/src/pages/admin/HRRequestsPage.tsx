@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useRememberedState } from "@/hooks/useRememberedState";
 import {
   FileText, Clock, CheckCircle, XCircle, Users, TrendingUp,
   HeartPulse, CalendarDays, LogOut, Plus, X, Check,
@@ -62,9 +63,9 @@ export default function HRRequestsPage() {
   const [requests, setRequests] = useState<HRRequest[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [filterType, setFilterType] = useState("الكل");
-  const [filterStatus, setFilterStatus] = useState("الكل");
+  const [search, setSearch] = useRememberedState("admin-hr-requests-search", "");
+  const [filterType, setFilterType] = useRememberedState("admin-hr-requests-type-filter", "الكل");
+  const [filterStatus, setFilterStatus] = useRememberedState("admin-hr-requests-status-filter", "الكل");
   const [modal, setModal] = useState<{ open: boolean; req: Partial<HRRequest> | null }>({ open: false, req: null });
   const [reviewModal, setReviewModal] = useState<{ open: boolean; req: HRRequest | null }>({ open: false, req: null });
   const [reviewNotes, setReviewNotes] = useState("");

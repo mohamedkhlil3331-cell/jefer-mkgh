@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
+import { useRememberedState } from "@/hooks/useRememberedState";
 import { useAuth } from "@/context/AuthContext";
 import {
   Wallet, Plus, CheckCircle, Clock, FileText, Download,
   ArrowUpRight, ArrowDownRight, Banknote, RefreshCw,
-  Building2, Phone, CreditCard, ExternalLink, X,
+  Building2, Phone, CreditCard, ExternalLink, X, Trash2,
 } from "lucide-react";
 
 interface Order {
@@ -44,7 +45,9 @@ export default function Account() {
   const [loading,       setLoading]       = useState(true);
   const [openTransfer,  setOpenTransfer]  = useState(false);
   const [submitting,    setSubmitting]    = useState(false);
-  const [tab,           setTab]           = useState<"orders" | "transfers">("orders");
+  const [tab,           setTab]           = useRememberedState("customer-account-tab", "orders" as "orders" | "transfers");
+  const [deletingId,    setDeletingId]    = useState<number | null>(null);
+  const [confirmId,     setConfirmId]     = useState<number | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
   const load = () => {
@@ -54,6 +57,19 @@ export default function Account() {
       .then(r => r.json()).then(setData).finally(() => setLoading(false));
   };
   useEffect(load, [user]);
+
+  const deleteOrder = async (id: number) => {
+    if (!user) return;
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/portal/orders/${id}?phone=${encodeURIComponent(user.phone)}`, { method: "DELETE" });
+      const d   = await res.json();
+      if (!res.ok) throw new Error(d.error);
+      setConfirmId(null);
+      load();
+    } catch (err) { alert((err as Error).message); }
+    finally { setDeletingId(null); }
+  };
 
   const submitTransfer = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -166,7 +182,7 @@ export default function Account() {
         </button>
 
         {/* ── Download statement ── */}
-        <a href={`/api/portal/customers/${user?.phone}/statement`} target="_blank" rel="noreferrer"
+        <a href={`/api/portal/customers/${user?.phone}/statement/print`} target="_blank" rel="noreferrer"
           className="flex items-center justify-center gap-2 bg-white border border-gray-200 text-gray-600 py-3 rounded-2xl text-sm font-medium hover:bg-gray-50 transition-colors shadow-sm">
           <Download size={15} />تحميل كشف الحساب الكامل
           <ExternalLink size={12} className="text-gray-400" />
@@ -205,12 +221,21 @@ export default function Account() {
                       {new Date(order.created_at).toLocaleDateString("ar-SA", { day: "numeric", month: "long" })}
                     </div>
                   </div>
-                  <div className="text-end flex-shrink-0">
+                  <div className="text-end flex-shrink-0 flex flex-col items-end gap-1">
                     <div className="font-black text-gray-900">{order.total_with_vat?.toFixed(2)}</div>
                     <div className="text-xs text-gray-400">ر.س</div>
-                    <span className={`mt-1 inline-block text-xs px-2 py-0.5 rounded-full font-medium ${STAGE_COLOR[order.stage] || "bg-gray-100 text-gray-600"}`}>
+                    <span className={`inline-block text-xs px-2 py-0.5 rounded-full font-medium ${STAGE_COLOR[order.stage] || "bg-gray-100 text-gray-600"}`}>
                       {STAGE_LABEL[order.stage] || order.stage}
                     </span>
+                    {order.stage === "pending" && (
+                      <button
+                        onClick={() => setConfirmId(order.id)}
+                        className="mt-1 p-1.5 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors"
+                        title="حذف الطلب"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </div>
                 </div>
                 {order.stage === "delivered" && (
@@ -221,6 +246,28 @@ export default function Account() {
                       <FileText size={12} />تحميل الفاتورة الضريبية
                       <ExternalLink size={10} />
                     </a>
+                  </div>
+                )}
+
+                {/* Inline confirm delete */}
+                {confirmId === order.id && (
+                  <div className="mt-3 pt-3 border-t border-red-100 flex items-center justify-between gap-3">
+                    <p className="text-xs text-red-600 font-semibold">هل تريد حذف هذا الطلب نهائياً؟</p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => deleteOrder(order.id)}
+                        disabled={deletingId === order.id}
+                        className="bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1.5 rounded-lg font-bold disabled:opacity-60 transition-colors"
+                      >
+                        {deletingId === order.id ? "جاري الحذف..." : "نعم، احذف"}
+                      </button>
+                      <button
+                        onClick={() => setConfirmId(null)}
+                        className="bg-gray-100 text-gray-600 text-xs px-3 py-1.5 rounded-lg font-medium"
+                      >
+                        إلغاء
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>

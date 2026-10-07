@@ -1,0 +1,9 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "MFTc1WXX0UKuALrvEIwnM"
+uri = "file://artifacts/erp-arabic/public/fleet-screenshot.jpeg"
+type = "image"
+title = "صفحة إدارة الأسطول"
+logical_id = "157d058c-1f85-4aa0-8d01-7ed10f737efa"

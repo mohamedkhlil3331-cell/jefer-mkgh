@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import { useRememberedState } from "@/hooks/useRememberedState";
 import { useAuth } from "@/context/AuthContext";
 import {
   Bell, Check, CheckCheck, RefreshCw, Info, AlertTriangle,
@@ -44,14 +45,15 @@ export default function Notifications() {
   const { user } = useAuth();
   const [notifs,   setNotifs]   = useState<Notification[]>([]);
   const [loading,  setLoading]  = useState(true);
-  const [filter,   setFilter]   = useState<"all" | "unread">("all");
+  const [filter,   setFilter]   = useRememberedState("notifications-filter", "all" as "all" | "unread");
 
   const load = () => {
     if (!user) return;
     setLoading(true);
     fetch(`/api/notifications?phone=${user.phone}`)
-      .then(r => r.json())
+      .then(r => r.ok ? r.json() : [])
       .then(d => setNotifs(Array.isArray(d) ? d : []))
+      .catch(() => {})
       .finally(() => setLoading(false));
   };
   useEffect(load, [user]);

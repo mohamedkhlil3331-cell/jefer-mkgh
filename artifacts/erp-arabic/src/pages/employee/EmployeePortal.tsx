@@ -95,7 +95,7 @@ const daysUntil = (d: string) => {
 const fmtDate = (d: string) => d ? new Date(d).toLocaleDateString("ar-SA") : "—";
 
 export default function EmployeePortal() {
-  const { user, logout } = useAuth();
+  const { user, logout, logoutAllDevices } = useAuth();
   const { dir } = useLang();
 
   const [emp, setEmp]             = useState<EmpProfile | null>(null);
@@ -106,6 +106,22 @@ export default function EmployeePortal() {
   const [showForm, setShowForm]   = useState(false);
   const [selectedCat, setSelectedCat] = useState<number | null>(null);
   const [tab, setTab]             = useState<"home"|"salary"|"requests"|"profile">("home");
+  const [loggingOutAll, setLoggingOutAll] = useState(false);
+  const [logoutAllError, setLogoutAllError] = useState("");
+
+  const handleLogoutAllDevices = async () => {
+    if (!confirm("سيتم تسجيل الخروج من جميع الأجهزة المرتبطة بهذا الحساب، بما فيها هذا الجهاز، وستحتاج إلى تسجيل الدخول من جديد. هل تريد المتابعة؟")) return;
+    setLoggingOutAll(true);
+    setLogoutAllError("");
+    try {
+      await logoutAllDevices();
+      window.location.assign("/");
+    } catch (e) {
+      setLogoutAllError((e as Error).message);
+    } finally {
+      setLoggingOutAll(false);
+    }
+  };
 
   const loadRequests = useCallback(() => {
     if (!user) return;
@@ -739,6 +755,20 @@ export default function EmployeePortal() {
               className="w-full flex items-center justify-center gap-2 py-3.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-2xl text-sm font-bold transition-colors border border-red-100">
               <LogOutIcon size={16}/>تسجيل الخروج
             </button>
+
+            <div className="rounded-2xl border border-red-100 bg-red-50 p-4 space-y-3">
+              <div>
+                <h3 className="font-bold text-red-800 text-sm">أمان الحساب</h3>
+                <p className="text-xs text-red-700 leading-5 mt-1">
+                  أنهِ جلسات الدخول على كل الأجهزة إذا فقدت جهازًا أو شككت أن حسابك مفتوح في مكان آخر.
+                </p>
+              </div>
+              {logoutAllError && <p className="text-xs text-red-700 bg-white/70 rounded-xl p-2.5">{logoutAllError}</p>}
+              <button onClick={handleLogoutAllDevices} disabled={loggingOutAll}
+                className="w-full flex items-center justify-center gap-2 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-60 text-white rounded-xl text-sm font-bold transition-colors">
+                <LogOutIcon size={15}/>{loggingOutAll ? "جاري إنهاء الجلسات..." : "تسجيل الخروج من جميع الأجهزة"}
+              </button>
+            </div>
           </div>
         )}
       </div>

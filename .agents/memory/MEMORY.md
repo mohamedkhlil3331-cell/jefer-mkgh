@@ -1,0 +1,36 @@
+- [Supabase mirror strategy](supabase-mirror.md) — STALE: pg-mirror.ts no longer exists; persistence is db-sync.ts (SQLite → object storage backup). Plain SQLite writes suffice.
+- [Express route order in driver-settlements](route-order-driver-settlements.md) — new /driver-settlements/<literal> routes must be registered BEFORE the /driver-settlements/:id routes or :id swallows them
+- [Workshop inventory transactions schema](workshop-inv-txns.md) — no unit col; join with workshop_inventory to get unit; parts linked to maintenance cards via reference_no=card_number + reason='سجل_عطل'
+- [Duplicate plate fix pattern](duplicate-plate-fix.md) — guards in db.ts run BEFORE loadFromPg so Supabase restores the row; guard must be in index.ts AFTER wrapDb() to mirror the delete back
+- [AI integration env vars need provisioning](ai-integration-provisioning.md) — routes reading AI_INTEGRATIONS_OPENAI_* env vars 503 until setupReplitAIIntegrations is called in this env, even if the code was already written
+- [Two separate vehicle-type lists](vehicle-type-lists.md) — vehicle_type_definitions (canonical fleet types) vs rental_vehicle_types (rental pricing/booking); don't assume one feeds the other
+- [SQLite corruption recovery](sqlite-corruption-recovery.md) — validate backups beyond open/pragma, and ensure bundled startup/runtime code resolves the same database path
+- [Hidden system-admin tokens](hidden-sysadmin-tokens.md) — privileged routes must accept hidden system-admin tokens as well as database sessions
+- [Single active account session](single-active-session.md) — newest login is the only session allowed to mutate; never replay unbound offline writes under a later identity
+- [Page and API permission parity](page-api-permissions.md) — align API permissions with UI guards; scope middleware to route prefixes so one router cannot block unrelated paths
+- [Intermittent login connectivity](intermittent-login-connectivity.md) — the user reports the connection error in both preview and published app; investigate both environments
+- [Trip image extraction source](trip-image-extraction.md) — pull trip data from the existing cargo image only; template regions map image areas to trip fields, and response count is always 1
+- [Fleet assignment authority](fleet-assignment-authority.md) — fleet vehicles own current branch and primary/backup driver links; legacy profile plates are historical fallback only
+- [Teidara link authority](teidara-link-authority.md) — permanent vehicle–teidara links are edited only from the fleet vehicle; preserve unresolved legacy forms until explicitly changed
+- [Invoice date acceptance](invoice-date-acceptance.md) — accept an extracted invoice date only from today or an earlier day in the current month and year
+- [Reliable mutation confirmation](reliable-mutation-confirmation.md) — data-entry UI closes only after the server returns the persisted row; retry creates only with a stable idempotency key
+- [Driver custody print cancellation](driver-custody-cancellation.md) — cancel print state only; preserve the statement, snapshots, source marks, and active custody totals
+- [Rental customer classification history](rental-customer-classification.md) — trip billing classification is snapshotted; changing a customer type affects old trips only by explicit reclassification
+- [Workspace package installs](workspace-package-installs.md) — generic Node package installer targets pnpm workspace root and fails; use pnpm filtered installs for artifact dependencies.
+- [SQLite deployment writer fencing](sqlite-writer-fencing.md) — a stale server must reject mutations and close; the new server claims backup authority before listening.
+- [Legacy uploads at publish](legacy-uploads-publish.md) — preserving the SQLite backup alone does not preserve files stored on a published server's local disk.
+- [Routing bonus continuity](routing-bonus-continuity.md) — preserve the existing tariff bonus calculation; show its saved value on new trip logs without creating a second payout.
+- [Bulker tariff accounting](bulker-tariff-accounting.md) — treat the selected tariff and completed trip as accounting snapshots; do not recalculate past trips from later order edits.
+- [Closed-month tariff snapshots](closed-month-tariff-snapshots.md) — preserve old trip tariff values outside locked trip rows before any tariff change; never backfill by updating closed-month trips.
+- [Production compute restart](production-compute-restart.md) — workspace “Restart compute” does not restart a published Autoscale backend; republishing is the documented production restart path.
+- [Stale artifact workflow listeners](stale-artifact-workflow-listeners.md) — workflow status may not reflect child processes still holding a port; inspect and stop the exact orphan before restarting.
+- [Remembered view-state isolation](remembered-view-state.md) — route/account-scoped list state must rehydrate before writing under a changed key, and its setter must stay stable.
+- [Routing map links are operational](routing-map-links.md) — named tariff locations are reusable choices; each dispatch keeps its own chosen link without affecting trip-log accounting.
+- [Rental trip customer terms](rental-trip-customer-terms.md) — customer prices override presentation only; uploaded transfers credit immediately, and confirmation locks customer edits.
+- [Password visibility and compatibility](password-visibility.md) — admin may reveal legacy plaintext passwords only; encrypted passwords require reset, while existing passwords remain valid.
+- [System review data preservation](system-review-data-preservation.md) — review the system one department at a time, understand cross-department data links, and do not risk losing existing data.
+- [Branch section scope](branch-section-scope.md) — system-wide branch filtering is deferred; do not add it to branch settings or unrelated ERP work.
+- [Customer chat access policy](customer-chat-access.md) — eligibility stays scoped; searchable contacts and job-title labels apply to all chat users.
+- [Driver diesel attribution](driver-diesel-attribution.md) — vehicle links on driver expenses are metadata; the diesel register is read-only and must not alter driver balances or vehicle net.
+- [Supplier claim print history](supplier-claim-print-history.md) — use the existing claim workflow, append reprint events, and never infer a legacy printer from the claim creator.
+- [Supplier invoice paste grid](supplier-invoice-paste.md) — keep file import; add an editable, auto-expanding clipboard grid with all invoice columns and fleet-or-external vehicle entry.

@@ -29,6 +29,119 @@ router.delete("/vehicles/:id", (req, res) => {
   res.json({ message: "تم الحذف" });
 });
 
+// ── Load Request — route to supervisor based on vehicle type ──────────────────
+router.post("/vehicles/:id/load-request", (req, res) => {
+  const vehicle = db.prepare("SELECT * FROM vehicles WHERE id=?").get(req.params.id) as
+    { id: number; plate_number: string; vehicle_type: string } | undefined;
+  if (!vehicle) return void res.status(404).json({ error: "السيارة غير موجودة" });
+
+  const type  = (vehicle.vehicle_type || "");
+  const notes = String(req.body?.notes || "").trim();
+
+  let targetLabel = "";
+  let recipients: { phone: string }[] = [];
+
+  if (/بلكر/i.test(type)) {
+    targetLabel = "مسؤول الفسحات";
+    const all = db.prepare("SELECT phone, permissions FROM users WHERE active=1").all() as
+      { phone: string; permissions: string | null }[];
+    recipients = all.filter(u => {
+      try { return (JSON.parse(u.permissions || "[]") as string[]).includes("ops_fsohat"); }
+      catch { return false; }
+    });
+  } else if (/سطحة|قلاب|لوبد|lowbed/i.test(type)) {
+    targetLabel = "مشرف النقليات";
+    recipients = db.prepare("SELECT phone FROM users WHERE role='supervisor' AND active=1").all() as
+      { phone: string }[];
+  } else {
+    targetLabel = "مسئول حركة البرح";
+    const all = db.prepare("SELECT phone, permissions FROM users WHERE active=1").all() as
+      { phone: string; permissions: string | null }[];
+    recipients = all.filter(u => {
+      try { return (JSON.parse(u.permissions || "[]") as string[]).includes("ops_bulker"); }
+      catch { return false; }
+    });
+  }
+
+  if (recipients.length === 0)
+    return void res.status(200).json({ ok: true, sent: 0, targetLabel, warn: "لا يوجد مستخدم مخصص لهذا الدور حالياً" });
+
+  const title = `طلب حمولة — ${vehicle.plate_number}`;
+  const body  = `نوع المركبة: ${type}${notes ? ` — ملاحظة: ${notes}` : ""}`;
+  const ins   = db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)");
+  recipients.forEach(r => ins.run(r.phone, title, body));
+
+  res.json({ ok: true, sent: recipients.length, targetLabel });
+});
+
+// ── Fleet Vehicles — existing profile view, or current fleet assignment for trip entry
+// The subquery collapses multiple driver_profiles rows per plate to at most one,
+// preventing duplicated vehicle cards when more than one profile shares a plate.
+// UNION appends vehicles found only in vehicle_compliance_docs (added via the
+// Compliance / Documents page) so they appear in the Trips vehicle picker too.
+router.get("/fleet-vehicles", (req, res) => {
+  const driverNameColumn = req.query.driver_source === "fleet"
+    ? "fv.driver_name"
+    : "COALESCE(dp.driver_name, fv.driver_name)";
+  const rows = db.prepare(`
+    SELECT fv.plate_number,
+           fv.vehicle_type,
+           fv.status,
+           fv.driver_phone,
+           fv.notes,
+           fv.insurance_start,
+           fv.insurance_end,
+           fv.inspection_start,
+           fv.inspection_end,
+           fv.operation_card_start,
+           fv.operation_card_end,
+            ${driverNameColumn}                       AS driver_name,
+           COALESCE(dp.phone, fv.driver_phone)        AS driver_phone_linked,
+           dp.vehicle_plate IS NOT NULL               AS has_linked_driver
+    FROM fleet_vehicles fv
+    LEFT JOIN (
+      SELECT vehicle_plate, driver_name, phone
+      FROM driver_profiles
+      WHERE vehicle_plate IS NOT NULL
+      GROUP BY vehicle_plate
+    ) dp ON dp.vehicle_plate = fv.plate_number
+
+    UNION
+
+    SELECT DISTINCT
+           vcd.car_number        AS plate_number,
+           NULL                  AS vehicle_type,
+           'available'           AS status,
+           NULL                  AS driver_phone,
+           NULL                  AS notes,
+           NULL                  AS insurance_start,
+           NULL                  AS insurance_end,
+           NULL                  AS inspection_start,
+           NULL                  AS inspection_end,
+           NULL                  AS operation_card_start,
+           NULL                  AS operation_card_end,
+           NULL                  AS driver_name,
+           NULL                  AS driver_phone_linked,
+           0                     AS has_linked_driver
+    FROM vehicle_compliance_docs vcd
+    WHERE vcd.car_number IS NOT NULL
+      AND vcd.car_number != ''
+      AND vcd.car_number NOT IN (SELECT plate_number FROM fleet_vehicles)
+
+    ORDER BY plate_number
+  `).all();
+  res.json(rows);
+});
+router.put("/fleet-vehicles/:plate", (req, res) => {
+  const { plate } = req.params;
+  const cols = ["insurance_start","insurance_end","inspection_start","inspection_end","operation_card_start","operation_card_end","driver_phone","notes"] as const;
+  const updates = cols.filter(c => req.body[c] !== undefined).map(c => `${c}=?`).join(", ");
+  if (!updates) return void res.status(400).json({ error: "لا توجد بيانات للتحديث" });
+  const vals = cols.filter(c => req.body[c] !== undefined).map(c => req.body[c] || null);
+  db.prepare(`UPDATE fleet_vehicles SET ${updates} WHERE plate_number=?`).run(...vals, plate);
+  res.json({ message: "تم التحديث" });
+});
+
 // ── Vehicles bulk import ───────────────────────────────────────────────────────
 router.post("/vehicles/import", (req, res) => {
   const rows: Record<string, string>[] = req.body?.rows ?? [];

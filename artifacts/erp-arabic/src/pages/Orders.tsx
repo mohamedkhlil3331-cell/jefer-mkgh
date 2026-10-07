@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useRememberedState } from "@/hooks/useRememberedState";
 import {
   Package, Plus, Truck, RefreshCw, X, Save,
   Phone, MapPin, User, Clock, CheckCircle, XCircle,
@@ -29,7 +30,7 @@ export default function Orders() {
   const [loading,       setLoading]       = useState(true);
   const [openAdd,       setOpenAdd]       = useState(false);
   const [dispatchOrder, setDispatchOrder] = useState<Order | null>(null);
-  const [filter,        setFilter]        = useState("");
+  const [filter,        setFilter]        = useRememberedState("orders-status-filter", "");
   const [submitting,    setSubmitting]    = useState(false);
   const [form, setForm] = useState({
     order_type: "اسمنت", quantity: "", unit: "طن",

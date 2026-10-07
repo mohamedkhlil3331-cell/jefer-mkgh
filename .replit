@@ -1,8 +1,8 @@
-modules = ["nodejs-24"]
+modules = ["nodejs-24", "python-3.11", "postgresql-16"]
 
 [deployment]
 router = "application"
-deploymentTarget = "autoscale"
+deploymentTarget = "cloudrun"
 
 [deployment.postBuild]
 args = ["pnpm", "store", "prune"]
@@ -60,34 +60,8 @@ expertMode = true
 path = "scripts/post-merge.sh"
 timeoutMs = 20000
 
-[[ports]]
-localPort = 8083
-externalPort = 3003
+[nix]
+channel = "stable-25_05"
 
-[[ports]]
-localPort = 8084
-externalPort = 4200
-
-[[ports]]
-localPort = 8085
-externalPort = 3000
-
-[[ports]]
-localPort = 8086
-externalPort = 5000
-
-[[ports]]
-localPort = 8087
-externalPort = 80
-
-[[ports]]
-localPort = 8088
-externalPort = 6000
-
-[[ports]]
-localPort = 18996
-externalPort = 6800
-
-[[ports]]
-localPort = 19689
-externalPort = 3001
+[objectStorage]
+defaultBucketID = "replit-objstore-e24f7dc6-17ef-498a-a1a0-196a18e01da2"

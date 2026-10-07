@@ -1,10 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useRememberedState } from "@/hooks/useRememberedState";
 import { Link } from "wouter";
-import { useAuth } from "@/context/AuthContext";
+import { canAccess, useAuth } from "@/context/AuthContext";
 import {
-  Users, Building2, LayoutDashboard, ClipboardCheck, Truck,
-  Package, TrendingUp, ArrowRight, Bell, Star,
+  Users, Building2, ClipboardCheck, Truck,
+  Package, TrendingUp, ArrowRight, Bell, Star, Layers,
+  Factory,
 } from "lucide-react";
+import type { BranchDashboardBranch } from "@workspace/api-client-react";
+import BranchDashboard from "@/pages/admin/BranchDashboard";
 import Catalog from "@/pages/customer/Catalog";
 import ReviewerOrders from "@/pages/reviewer/ReviewerOrders";
 import SupervisorOrders from "@/pages/supervisor/SupervisorOrders";
@@ -16,28 +20,30 @@ interface Stats {
   notifications: number; pending_transfers: number;
 }
 
+/* ─── Admin summary ──────────────────────────────────────────────────────────  */
 function AdminSummaryCards({ stats }: { stats: Stats }) {
   const cards = [
-    { label: "إجمالي الطلبات",    val: stats.total,              icon: Package,       color: "bg-[#103c68] text-white", href: "/reviewer"    },
-    { label: "طلبات معلّقة",      val: stats.pending,            icon: ClipboardCheck,color: "bg-amber-500 text-white", href: "/reviewer"    },
-    { label: "الإيرادات (ريال)",  val: stats.revenue.toFixed(0), icon: TrendingUp,    color: "bg-green-600 text-white", href: "/dashboard"   },
-    { label: "إشعارات جديدة",     val: stats.notifications,      icon: Bell,          color: "bg-red-500 text-white",   href: "/notifications"},
+    { label: "إجمالي الطلبات",    val: stats.total,                    icon: Package,        color: "bg-[#103c68] text-white", href: "/reviewer"     },
+    { label: "طلبات معلّقة",      val: stats.pending,                   icon: ClipboardCheck, color: "bg-amber-500 text-white", href: "/reviewer"     },
+    { label: "الإيرادات (ريال)",  val: (stats.revenue ?? 0).toFixed(0), icon: TrendingUp,     color: "bg-green-600 text-white" },
+    { label: "إشعارات جديدة",     val: stats.notifications,             icon: Bell,           color: "bg-red-500 text-white",   href: "/notifications" },
   ];
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
-      {cards.map(({ label, val, icon: Icon, color, href }) => (
-        <Link key={label} href={href}>
-          <div className={`${color} rounded-2xl p-4 flex items-center gap-3 cursor-pointer hover:opacity-90 transition-opacity shadow-sm`}>
+      {cards.map(({ label, val, icon: Icon, color, href }) => {
+        const card = (
+          <div className={`${color} rounded-2xl p-4 flex items-center gap-3 ${href ? "cursor-pointer hover:opacity-90" : ""} transition-opacity shadow-sm`}>
             <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
               <Icon size={17} className="text-white" />
             </div>
             <div>
-              <div className="text-lg font-black leading-none">{typeof val === "string" ? val : val.toLocaleString("ar-SA")}</div>
+              <div className="text-lg font-black leading-none">{typeof val === "string" ? val : (val ?? 0).toLocaleString("ar-SA")}</div>
               <div className="text-xs opacity-80 mt-0.5">{label}</div>
             </div>
           </div>
-        </Link>
-      ))}
+        );
+        return href ? <Link key={label} href={href}>{card}</Link> : <div key={label}>{card}</div>;
+      })}
     </div>
   );
 }
@@ -49,24 +55,31 @@ function AdminInternalHome() {
   useEffect(() => {
     fetch("/api/stats/dashboard")
       .then(r => r.json())
-      .then(setStats)
+      .then((data: { kpi?: Record<string, number> }) => {
+        const kpi = data.kpi ?? {};
+        setStats({
+          total: kpi.total_orders ?? 0,
+          pending: kpi.pending_orders ?? 0,
+          delivered: kpi.delivered_orders ?? 0,
+          revenue: kpi.revenue ?? 0,
+          notifications: kpi.notifications ?? 0,
+          pending_transfers: kpi.pending_transfers ?? 0,
+        });
+      })
       .finally(() => setLoading(false));
   }, []);
 
   const quickLinks = [
-    { href: "/dashboard",      icon: LayoutDashboard, label: "لوحة التحكم الرئيسية",  color: "bg-[#103c68]/10 text-[#103c68]"  },
-    { href: "/reviewer",       icon: ClipboardCheck,  label: "مراجعة الطلبات",          color: "bg-blue-50 text-blue-700"        },
-    { href: "/supervisor",     icon: Truck,           label: "إدارة النقليات",           color: "bg-orange-50 text-orange-700"   },
-    { href: "/reports",        icon: TrendingUp,      label: "التقارير والإحصائيات",    color: "bg-emerald-50 text-emerald-700"  },
-    { href: "/employees",      icon: Users,           label: "إدارة الموظفين",           color: "bg-purple-50 text-purple-700"   },
-    { href: "/notifications",  icon: Bell,            label: "الإشعارات",               color: "bg-red-50 text-red-700"          },
+    { href: "/reviewer",      icon: ClipboardCheck,  label: "مراجعة الطلبات",         color: "bg-blue-50 text-blue-700"       },
+    { href: "/supervisor",    icon: Truck,           label: "إدارة النقليات",          color: "bg-orange-50 text-orange-700"  },
+    { href: "/reports",       icon: TrendingUp,      label: "التقارير والإحصائيات",   color: "bg-emerald-50 text-emerald-700" },
+    { href: "/employees",     icon: Users,           label: "إدارة الموظفين",          color: "bg-purple-50 text-purple-700"  },
+    { href: "/notifications", icon: Bell,            label: "الإشعارات",              color: "bg-red-50 text-red-700"         },
   ];
 
   if (loading) return (
     <div className="space-y-3">
-      {[1, 2, 3].map(i => (
-        <div key={i} className="h-16 bg-gray-100 rounded-2xl animate-pulse" />
-      ))}
+      {[1, 2, 3].map(i => <div key={i} className="h-16 bg-gray-100 rounded-2xl animate-pulse" />)}
     </div>
   );
 
@@ -110,27 +123,87 @@ function InternalHome() {
   );
 }
 
+/* ─── Main ───────────────────────────────────────────────────────────────────  */
+type TabKey = "customer" | "internal" | "branch_all" | `branch_${number}`;
+
 export default function MainHome() {
-  const [tab, setTab] = useState<"customer" | "internal">("customer");
+  const [tab, setTab] = useRememberedState("main-home-tab", "customer" as TabKey);
+  const [branches, setBranches] = useState<BranchDashboardBranch[]>([]);
+  const { user, token } = useAuth();
+  const isAdmin = user?.role === "admin";
+  const canViewDashboard = canAccess(user, "home_dashboard");
+  const previouslyHadDashboardAccess = useRef(false);
+
+  useEffect(() => {
+    if (canViewDashboard && !previouslyHadDashboardAccess.current) setTab("branch_all");
+    if (!canViewDashboard && previouslyHadDashboardAccess.current) setTab("customer");
+    previouslyHadDashboardAccess.current = canViewDashboard;
+  }, [canViewDashboard, setTab]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    fetch("/api/company-settings")
+      .then(r => r.json())
+      .then((data: BranchDashboardBranch[]) => {
+        if (Array.isArray(data)) setBranches(data.filter(b => b.entity_name?.trim()));
+      })
+      .catch(() => {});
+  }, [isAdmin]);
+
+  const activeBranchId = tab === "branch_all"
+    ? null
+    : tab.startsWith("branch_")
+      ? Number(tab.replace("branch_", ""))
+      : null;
+  const activeBranch = activeBranchId === null
+    ? null
+    : branches.find(b => b.id === activeBranchId) ?? null;
+
+  const isBranchTab = tab === "branch_all" || tab.startsWith("branch_");
+
+  const tabBtn = (key: TabKey, label: string, Icon: React.ElementType) => (
+    <button
+      key={key}
+      onClick={() => setTab(key)}
+      className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
+        tab === key ? "bg-white text-[#103c68] shadow-sm" : "text-gray-500 hover:text-gray-700"
+      }`}
+    >
+      <Icon size={13} />{label}
+    </button>
+  );
 
   return (
     <div className="space-y-5" dir="rtl">
-      <div className="flex gap-1.5 bg-gray-100 p-1.5 rounded-2xl w-full sm:w-fit overflow-x-auto">
-        <button onClick={() => setTab("customer")}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-            tab === "customer" ? "bg-white text-[#103c68] shadow-sm" : "text-gray-500 hover:text-gray-700"
-          }`}>
-          <Users size={15} />طلبات العملاء
-        </button>
-        <button onClick={() => setTab("internal")}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-            tab === "internal" ? "bg-white text-[#103c68] shadow-sm" : "text-gray-500 hover:text-gray-700"
-          }`}>
-          <Building2 size={15} />داخل الشركة
-        </button>
+
+      {/* ── Tab bar ── */}
+      <div className="flex items-center gap-1 bg-gray-100 p-1.5 rounded-2xl w-full overflow-x-auto">
+
+        {/* Branch tabs — right side (first in RTL DOM) */}
+        {canViewDashboard && (
+          <>
+            {tabBtn("branch_all", "شامل", Layers)}
+            {isAdmin && branches.map(b =>
+              tabBtn(`branch_${b.id}` as TabKey, b.entity_name.trim(), Factory)
+            )}
+
+            {/* Divider */}
+            <div className="w-px h-5 bg-gray-300 flex-shrink-0 mx-1" />
+          </>
+        )}
+
+        {/* Main tabs */}
+        {tabBtn("customer", "طلبات العملاء", Users)}
+        {tabBtn("internal", "داخل الشركة",  Building2)}
       </div>
 
-      {tab === "customer" ? <Catalog /> : <InternalHome />}
+      {/* ── Content ── */}
+      {isBranchTab
+        ? <BranchDashboard branchId={activeBranchId} branchName={activeBranch?.entity_name} token={token} />
+        : tab === "customer"
+          ? <Catalog />
+          : <InternalHome />
+      }
     </div>
   );
 }

@@ -1,0 +1,25 @@
+STRICT INSTRUCTION: SCOPED UPDATE ONLY. Implement the following complex features comprehensively while maintaining the exact corporate theme (Deep Blue, Black, and Clean White). DO NOT rewrite the whole app.
+
+1. ORDERING & CART SYSTEM (الطلبات والدفع):
+- Cart: Update logic to support a "Shopping Cart" allowing clients to order multiple products at once.
+- Order Management: Add "Cancel" (إلغاء) and "Pause" (إيقاف مؤقت) buttons for client orders.
+- Payment Upgrades: 
+  a) Bank Transfer: Require a file/image upload for "Bank Receipt" (صورة التحويل).
+  b) Visa: Simulate successful payment, then allow clients to "Download Payment Receipt" (استخراج صورة الدفع).
+
+2. PRODUCT & OFFERS MANAGEMENT (Admin Only):
+- Truck Load (حمولة الترلة): Add a `load_capacity` field to products (editable by Admin only) to show the standard truck load count.
+- Offers System: Build a module for the Admin to create and display "Promotions/Offers" (عروض) to clients.
+
+3. SMART CAR RENTAL & GOOGLE MAPS (CRITICAL FIX):
+- Map Integration: The Google Maps Location Picker is already working in Product Requests. You MUST integrate the exact same Maps component into the Car Rental (تأجير سيارات) form for TWO fields: "موقع التحميل" (Pickup Location) and "موقع التنزيل" (Drop-off Location). 
+- Data Persistence: Save the selected Lat/Long coordinates into the `external_rentals` table and make them viewable by the Admin.
+- Lease Proposals: Add an "اقتراح إيجار" (Lease Proposal) text area for clients to send custom rental terms.
+- Vehicle Types CRUD: Allow Admin to dynamically Add, Edit, or Delete "Rental Vehicle Types".
+
+4. INVOICING & PROFILE:
+- Invoice Attachments: Allow Admin to upload a scanned "Original Invoice Image" when generating/downloading account statements.
+- Client Profile: Build a "Profile Settings" page for clients to update their personal data (phone, address, etc.).
+
+5. UI/UX CONSISTENCY:
+- Ensure the entire interface strictly follows the "Deep Blue, Professional Black, and Clean White" color palette with Arabic RTL layout.

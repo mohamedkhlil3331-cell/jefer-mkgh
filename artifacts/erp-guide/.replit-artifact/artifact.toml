@@ -1,0 +1,28 @@
+kind = "slides"
+previewPath = "/erp-guide/"
+title = "دليل تشغيل الورشة والنقليات"
+description = "بريزنتيشن تشغيلي رسمي لمنظومة الورشة والنقليات في شركة جيفر التجارية، يوثّق الربط بين وحدات الورشة والنقليات والحركة والمخزون والمصاريف، مع نماذج كرت الصيانة وكشف الاستعاضة، وخطة المستودعات القادمة."
+version = "1.0.0"
+id = "artifacts/erp-guide"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/erp-guide/" ]
+localPort = 22299
+
+[services.development]
+run = "pnpm --filter @workspace/erp-guide run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/erp-guide", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/erp-guide/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22299"
+BASE_PATH = "/erp-guide/"

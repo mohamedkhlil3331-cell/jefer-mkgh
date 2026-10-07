@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useRememberedState } from "@/hooks/useRememberedState";
 import {
   DollarSign, Plus, Trash2, RefreshCw, X, Save,
   ArrowUpRight, ArrowDownRight, Search, TrendingUp, Wallet,
@@ -17,7 +18,7 @@ export default function PettyCash() {
   const [loading,    setLoading]    = useState(true);
   const [openAdd,    setOpenAdd]    = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [custodian,  setCustodian]  = useState("");
+  const [custodian,  setCustodian]  = useRememberedState("petty-cash-custodian-filter", "");
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     custodian_name: "", transaction_type: "in",

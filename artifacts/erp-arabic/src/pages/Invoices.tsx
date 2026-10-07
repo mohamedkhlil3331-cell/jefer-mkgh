@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   FileText, Plus, Trash2, RefreshCw, X, Save,
-  Image, ExternalLink, Building2, Calendar, DollarSign,
+  Image, Calendar, Pencil,
 } from "lucide-react";
 
 interface Invoice {
@@ -26,10 +26,13 @@ export default function Invoices() {
   const [rows,       setRows]       = useState<Invoice[]>([]);
   const [loading,    setLoading]    = useState(true);
   const [openAdd,    setOpenAdd]    = useState(false);
+  const [editInv,    setEditInv]    = useState<Invoice | null>(null);
   const [imgSrc,     setImgSrc]     = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [preview,    setPreview]    = useState<string | null>(null);
-  const formRef = useRef<HTMLFormElement>(null);
+  const [editPreview, setEditPreview] = useState<string | null>(null);
+  const formRef     = useRef<HTMLFormElement>(null);
+  const editFormRef = useRef<HTMLFormElement>(null);
 
   const load = () => {
     setLoading(true);
@@ -52,6 +55,22 @@ export default function Invoices() {
     finally { setSubmitting(false); }
   };
 
+  const handleEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editFormRef.current || !editInv) return;
+    setSubmitting(true);
+    try {
+      const fd = new FormData(editFormRef.current);
+      await fetch(`/api/invoices/${editInv.id}`, { method: "PUT", body: fd });
+      setEditInv(null);
+      setEditPreview(null);
+      load();
+    } catch (err) { alert((err as Error).message); }
+    finally { setSubmitting(false); }
+  };
+
+  const closeEdit = () => { setEditInv(null); setEditPreview(null); };
+
   const del = async (id: number) => {
     if (!confirm("حذف هذه الفاتورة؟")) return;
     await fetch(`/api/invoices/${id}`, { method: "DELETE" });
@@ -60,7 +79,6 @@ export default function Invoices() {
 
   const totalAmount = rows.reduce((a, r) => a + (r.amount || 0), 0);
 
-  /* ── Totals by dept ── */
   const deptTotals = DEPARTMENTS.map(d => ({
     dept: d,
     total: rows.filter(r => r.department === d).reduce((a, r) => a + (r.amount || 0), 0),
@@ -144,7 +162,11 @@ export default function Invoices() {
                     <div className="font-black text-green-700 text-base">{fmt(inv.amount)}</div>
                     <div className="text-xs text-gray-400">ر.س</div>
                   </div>
-                  <button onClick={() => del(inv.id)} className="p-2 hover:bg-red-50 rounded-xl transition-colors">
+                  <button onClick={() => { setEditInv(inv); setEditPreview(null); }}
+                    className="p-2 hover:bg-blue-50 rounded-xl transition-colors" title="تعديل">
+                    <Pencil size={14} className="text-blue-400" />
+                  </button>
+                  <button onClick={() => del(inv.id)} className="p-2 hover:bg-red-50 rounded-xl transition-colors" title="حذف">
                     <Trash2 size={14} className="text-red-400" />
                   </button>
                 </div>
@@ -211,6 +233,67 @@ export default function Invoices() {
                   <Save size={16} />{submitting ? "جاري الحفظ..." : "حفظ الفاتورة"}
                 </button>
                 <button type="button" onClick={() => { setOpenAdd(false); setPreview(null); }}
+                  className="flex-1 bg-gray-100 text-gray-700 py-3.5 rounded-xl font-medium">إلغاء</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit modal */}
+      {editInv && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm" onClick={closeEdit}>
+          <div className="bg-white rounded-t-3xl shadow-2xl w-full max-w-lg" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h2 className="font-black text-lg flex items-center gap-2"><Pencil size={18} className="text-[#103c68]" />تعديل فاتورة #{editInv.id}</h2>
+              <button onClick={closeEdit} className="p-2 hover:bg-gray-100 rounded-xl transition-colors">
+                <X size={18} className="text-gray-500" />
+              </button>
+            </div>
+            <form ref={editFormRef} onSubmit={handleEdit} className="p-6 space-y-4 max-h-[75vh] overflow-y-auto">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">القسم *</label>
+                <select name="department" required defaultValue={editInv.department}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/30">
+                  {DEPARTMENTS.map(d => <option key={d}>{d}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">التفاصيل</label>
+                <textarea name="details" rows={3} defaultValue={editInv.details}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/30 resize-none"
+                  placeholder="وصف الفاتورة..." />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">المبلغ (ر.س)</label>
+                <input type="number" name="amount" step="0.01" min="0" defaultValue={editInv.amount}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-xl font-black text-center bg-gray-50 focus:outline-none focus:ring-2 focus:ring-[#103c68]/30" />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1.5">صورة الفاتورة</label>
+                {editInv.image_url && !editPreview && (
+                  <div className="mb-2">
+                    <p className="text-xs text-gray-400 mb-1">الصورة الحالية:</p>
+                    <img src={editInv.image_url} alt="الصورة الحالية" className="rounded-xl max-h-32 w-full object-contain border border-gray-200" />
+                  </div>
+                )}
+                <input type="file" name="invoice_image" accept="image/*"
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm bg-gray-50 file:mr-3 file:py-1 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-[#103c68] file:text-white"
+                  onChange={e => {
+                    const f = e.target.files?.[0];
+                    if (f) setEditPreview(URL.createObjectURL(f)); else setEditPreview(null);
+                  }} />
+                {editPreview && (
+                  <img src={editPreview} alt="معاينة جديدة" className="mt-2 rounded-xl max-h-40 w-full object-contain border border-gray-200" />
+                )}
+                {editInv.image_url && <p className="text-xs text-gray-400 mt-1">اتركه فارغاً للإبقاء على الصورة الحالية</p>}
+              </div>
+              <div className="flex gap-3 pt-1">
+                <button type="submit" disabled={submitting}
+                  className="flex-1 flex items-center justify-center gap-2 bg-[#103c68] text-white py-3.5 rounded-xl font-bold disabled:opacity-60">
+                  <Save size={16} />{submitting ? "جاري الحفظ..." : "حفظ التعديلات"}
+                </button>
+                <button type="button" onClick={closeEdit}
                   className="flex-1 bg-gray-100 text-gray-700 py-3.5 rounded-xl font-medium">إلغاء</button>
               </div>
             </form>

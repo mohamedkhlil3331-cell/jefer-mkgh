@@ -1,0 +1,50 @@
+STRICT INSTRUCTION: Do NOT delete, rewrite, or alter any existing code, UI designs, files, or database tables unless strictly necessary to implement the following logic. Do NOT add any extra unrequested features. Only update the authentication logic and routing based on the exact requirements below.
+
+I need to organize the Login System and Routing into specific user roles as follows:
+
+1. Employees & Administration (موظفو الشركة والإدارة):
+- Login Method: 'Username' and 'Password' only.
+- Redirection: To the Employee/Admin Dashboard.
+
+2. Clients (العملاء):
+- Login Method: 'Username' and 'Password'.
+- Redirection/Access: They have access to two specific portals:
+  a) Products Portal (بوابة المنتجات).
+  b) Transportation Portal (النقليات) specifically to request renting vehicles (Flatbed/سطحة or Dump Truck/قلاب).
+
+3. Drivers Portal (بوابة أنا سائق):
+This portal must handle TWO distinct types of logins from the same interface:
+
+  A) Vehicle Login (دخول السيارة):
+  - Login Method: 'Car Number' (Username) and 'Car Password'.
+  - Functionality: Viewing the specific car's expenses (breakdowns, spare parts, maintenance).
+  - Note: The car numbers must remain linked in the database to the previously assigned Driver Names.
+
+  B) Driver Personal Login (دخول السائق):
+  - Login Method: 'Driver ID/Number' and 'Driver Password'.
+  - Functionality: Viewing the driver's personal performance, bonuses, personal expenses, and work history across different cars they have driven.
+
+4. Database Seeding (Vehicles Credentials):
+Please ensure the following Car Numbers and Passwords are added to the database/authentication system. 
+Format: [Car Number : Password]
+- 1908 : 1909
+- 1909 : 1911
+- 1912 : 1915
+- 1988 : 1992
+- 5847 : 5852
+- 5848 : 5854
+- 1446 : 1453
+- 1447 : 1455
+- 9159 : 9168
+- 9254 : 9264
+- 9171 : 9182
+- 2262 : 2274
+- 2264 : 2277
+- 2265 : 2279
+- 2268 : 2283
+- 6214 : 6230
+- 9878 : 9895
+- 6374 : 6392
+- 6375 : 6394
+
+Execute this update carefully without breaking the existing structure.

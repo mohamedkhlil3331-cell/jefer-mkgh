@@ -1,5 +1,5 @@
 kind = "web"
-previewPath = "/erp/"
+previewPath = "/"
 title = "نظام ERP الإداري"
 version = "1.0.0"
 id = "artifacts/erp-arabic"
@@ -11,7 +11,7 @@ version = "1.0.0"
 
 [[services]]
 name = "web"
-paths = [ "/erp/" ]
+paths = [ "/" ]
 localPort = 25982
 
 [services.development]
@@ -28,4 +28,4 @@ to = "/index.html"
 
 [services.env]
 PORT = "25982"
-BASE_PATH = "/erp/"
+BASE_PATH = "/"

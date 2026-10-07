@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>دليل نظام MKGH — الدليل الشامل</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@300;400;600;700;900&display=swap');
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Cairo',sans-serif;background:#f0f4f8;color:#1a202c;font-size:15px;line-height:1.8}
+  .cover{background:linear-gradient(135deg,#1e3a5f 0%,#2d6a4f 100%);color:#fff;padding:80px 60px;text-align:center;min-height:100vh;display:flex;flex-direction:column;justify-content:center;align-items:center;page-break-after:always}
+  .cover h1{font-size:3rem;font-weight:900;margin-bottom:16px;text-shadow:0 2px 8px rgba(0,0,0,.3)}
+  .cover h2{font-size:1.4rem;font-weight:300;opacity:.85;margin-bottom:40px}
+  .cover .badge{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:50px;padding:10px 30px;display:inline-block;font-size:1rem;margin:8px}
+  .cover .meta{margin-top:60px;opacity:.6;font-size:.9rem}
+
+  .toc{background:#fff;max-width:900px;margin:40px auto;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.08);padding:40px 50px;page-break-after:always}
+  .toc h2{font-size:1.6rem;font-weight:700;color:#1e3a5f;margin-bottom:24px;padding-bottom:12px;border-bottom:3px solid #1e3a5f}
+  .toc ol{padding-right:20px}
+  .toc li{margin:8px 0;font-size:1rem}
+  .toc a{color:#2d6a4f;text-decoration:none;font-weight:600}
+  .toc a:hover{text-decoration:underline}
+  .toc .sub{padding-right:24px;font-size:.9rem;color:#555}
+
+  .section{background:#fff;max-width:900px;margin:32px auto;border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,.08);padding:40px 50px;page-break-inside:avoid}
+  .section-break{page-break-after:always}
+  h2.sec-title{font-size:1.8rem;font-weight:900;color:#1e3a5f;margin-bottom:8px;display:flex;align-items:center;gap:12px}
+  h2.sec-title .icon{font-size:2rem}
+  .sec-sub{color:#64748b;font-size:.95rem;margin-bottom:28px;padding-bottom:16px;border-bottom:2px solid #e2e8f0}
+  h3{font-size:1.2rem;font-weight:700;color:#2d6a4f;margin:28px 0 12px;display:flex;align-items:center;gap:8px}
+  h3 .dot{width:10px;height:10px;background:#2d6a4f;border-radius:50%;display:inline-block;flex-shrink:0}
+  h4{font-size:1rem;font-weight:700;color:#1e3a5f;margin:20px 0 8px}
+  p{margin:8px 0;color:#374151}
+
+  .role-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;margin:20px 0}
+  .role-card{border-radius:12px;padding:20px;border:2px solid transparent}
+  .role-card.admin{background:#fef3c7;border-color:#f59e0b}
+  .role-card.reviewer{background:#dbeafe;border-color:#3b82f6}
+  .role-card.supervisor{background:#d1fae5;border-color:#10b981}
+  .role-card.warehouse{background:#ede9fe;border-color:#8b5cf6}
+  .role-card.driver{background:#fee2e2;border-color:#ef4444}
+  .role-card.rep{background:#fce7f3;border-color:#ec4899}
+  .role-card.workshop{background:#ffedd5;border-color:#f97316}
+  .role-card.purchasing{background:#f0fdf4;border-color:#22c55e}
+  .role-card.customer{background:#f0f9ff;border-color:#0ea5e9}
+  .role-card h4{margin:0 0 8px;font-size:1rem}
+  .role-card .phone{font-size:.8rem;color:#555;font-family:monospace;background:rgba(0,0,0,.06);padding:2px 8px;border-radius:6px;display:inline-block;margin:4px 0}
+  .role-card .desc{font-size:.85rem;color:#444;margin-top:8px}
+
+  .workflow-steps{display:flex;flex-direction:column;gap:0}
+  .workflow-step{display:flex;gap:20px;margin-bottom:0}
+  .step-line{display:flex;flex-direction:column;align-items:center;width:50px;flex-shrink:0}
+  .step-num{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.1rem;flex-shrink:0;z-index:1}
+  .step-line-bar{width:3px;flex:1;min-height:30px}
+  .step-content{flex:1;padding:0 0 32px}
+  .step-title{font-weight:700;font-size:1.1rem;margin-bottom:6px}
+  .step-who{font-size:.85rem;background:#f1f5f9;padding:3px 10px;border-radius:20px;display:inline-block;margin-bottom:8px;color:#475569}
+  .step-actions{list-style:none;padding:0}
+  .step-actions li{font-size:.92rem;padding:6px 0;color:#374151;display:flex;gap:8px}
+  .step-actions li::before{content:"◀";color:#94a3b8;flex-shrink:0}
+  .result-box{background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px 14px;margin-top:8px;font-size:.9rem;color:#166534}
+  .result-box::before{content:"✅ النتيجة: ";font-weight:700}
+
+  .s1 .step-num{background:#1e3a5f;color:#fff} .s1 .step-line-bar{background:#1e3a5f}
+  .s2 .step-num{background:#2563eb;color:#fff} .s2 .step-line-bar{background:#2563eb}
+  .s3 .step-num{background:#10b981;color:#fff} .s3 .step-line-bar{background:#10b981}
+  .s4 .step-num{background:#8b5cf6;color:#fff} .s4 .step-line-bar{background:#8b5cf6}
+  .s5 .step-num{background:#f97316;color:#fff} .s5 .step-line-bar{background:#f97316}
+  .s6 .step-num{background:#ef4444;color:#fff} .s6 .step-line-bar{background:#ef4444}
+  .s7 .step-num{background:#0ea5e9;color:#fff} .s7 .step-line-bar{background:#0ea5e9}
+  .s8 .step-num{background:#059669;color:#fff} .s8 .step-line-bar{background:#059669}
+
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:.9rem}
+  th{background:#1e3a5f;color:#fff;padding:10px 14px;text-align:right;font-weight:600}
+  td{padding:9px 14px;border-bottom:1px solid #e2e8f0;vertical-align:top}
+  tr:nth-child(even) td{background:#f8fafc}
+  tr:hover td{background:#f0f9ff}
+
+  .action-list{list-style:none;padding:0;margin:10px 0}
+  .action-list li{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:.92rem}
+  .action-list li:last-child{border-bottom:none}
+  .action-badge{font-size:.75rem;font-weight:700;padding:2px 8px;border-radius:20px;flex-shrink:0;height:fit-content;margin-top:2px}
+  .badge-blue{background:#dbeafe;color:#1d4ed8}
+  .badge-green{background:#d1fae5;color:#065f46}
+  .badge-orange{background:#ffedd5;color:#9a3412}
+  .badge-red{background:#fee2e2;color:#991b1b}
+  .badge-purple{background:#ede9fe;color:#6d28d9}
+  .badge-gray{background:#f1f5f9;color:#475569}
+
+  .info-box{border-radius:10px;padding:14px 18px;margin:16px 0;font-size:.92rem}
+  .info-box.tip{background:#fffbeb;border-right:4px solid #f59e0b;color:#78350f}
+  .info-box.warn{background:#fef2f2;border-right:4px solid #ef4444;color:#7f1d1d}
+  .info-box.note{background:#eff6ff;border-right:4px solid #3b82f6;color:#1e3a8a}
+  .info-box.success{background:#f0fdf4;border-right:4px solid #22c55e;color:#14532d}
+  .info-box strong{font-weight:700}
+
+  .page-block{background:#f8fafc;border-radius:10px;padding:20px;margin:16px 0}
+  .page-block h4{color:#1e3a5f;margin:0 0 12px}
+
+  @media print {
+    .cover{min-height:100vh}
+    .section{box-shadow:none;margin:0;border-radius:0;padding:30px}
+    .no-print{display:none}
+  }
+
+  .divider{height:2px;background:linear-gradient(90deg,#1e3a5f,#2d6a4f,transparent);margin:30px 0;border-radius:2px}
+</style>
+</head>
+<body>
+
+<!-- ████ COVER ████ -->
+<div class="cover">
+  <div style="font-size:4rem;margin-bottom:20px">🏗️</div>
+  <h1>دليل نظام MKGH</h1>
+  <h2>النظام الإداري المتكامل للخرسانة والمواد الإنشائية</h2>
+  <div>
+    <span class="badge">📦 إدارة الطلبات</span>
+    <span class="badge">🚛 إدارة الأسطول</span>
+    <span class="badge">🔧 الورشة والمشتريات</span>
+    <span class="badge">👥 الموارد البشرية</span>
+    <span class="badge">💰 المالية والتقارير</span>
+  </div>
+  <div class="meta">
+    <p>يُغطّي هذا الدليل كل حركة في النظام — ما تفعله وما يحدث نتيجةً لها</p>
+    <p style="margin-top:8px">إصدار يوليو ٢٠٢٦</p>
+  </div>
+</div>
+
+<!-- ████ TABLE OF CONTENTS ████ -->
+<div class="toc">
+  <h2>📋 فهرس المحتويات</h2>
+  <ol>
+    <li><a href="#roles">الأدوار والصلاحيات — من يدخل على إيه؟</a></li>
+    <li><a href="#login">تسجيل الدخول</a></li>
+    <li><a href="#order-workflow">دورة حياة الطلب الكاملة (٦ خطوات)</a>
+      <ol class="sub">
+        <li>العميل يضع الطلب</li>
+        <li>المراجع يوافق على الدفع</li>
+        <li>المشرف يُعيّن مركبة وسائق</li>
+        <li>المستودع يُصدر فاتورة التحميل</li>
+        <li>السائق يؤكد التحميل</li>
+        <li>السائق يؤكد التسليم</li>
+      </ol>
+    </li>
+    <li><a href="#customer">بوابة العميل</a></li>
+    <li><a href="#reviewer">بوابة المراجع</a></li>
+    <li><a href="#supervisor">بوابة المشرف</a></li>
+    <li><a href="#warehouse">بوابة المستودع</a></li>
+    <li><a href="#driver">بوابة السائق</a></li>
+    <li><a href="#rep">بوابة المندوب</a></li>
+    <li><a href="#fleet">إدارة الأسطول — دفتر السيارات</a></li>
+    <li><a href="#drivers-manage">إدارة السائقين</a></li>
+    <li><a href="#workshop">الورشة وصيانة المركبات</a></li>
+    <li><a href="#inventory">مخزون قطع الغيار</a></li>
+    <li><a href="#purchasing">المشتريات والتوريد</a></li>
+    <li><a href="#hr">الموارد البشرية والموظفين</a></li>
+    <li><a href="#finance">المالية والتقارير</a></li>
+    <li><a href="#admin">الإدارة والإعدادات</a></li>
+    <li><a href="#notifications">الإشعارات</a></li>
+  </ol>
+</div>
+
+<!-- ████ SECTION 1: ROLES ████ -->
+<div class="section section-break" id="roles">
+  <h2 class="sec-title"><span class="icon">👥</span> ١. الأدوار والصلاحيات</h2>
+  <p class="sec-sub">النظام يعرف ٩ أدوار — كل دور يرى صفحات مختلفة وله صلاحيات محددة</p>
+
+  <div class="role-grid">
+    <div class="role-card admin">
+      <h4>🔑 مدير (Admin)</h4>
+      <div class="phone">0500000000 / admin123</div>
+      <div class="desc">يرى كل شيء — يقدر يعدّل أي طلب في أي مرحلة، يدير المستخدمين، الإعدادات، التقارير الكاملة</div>
+    </div>
+    <div class="role-card reviewer">
+      <h4>📋 مراجع (Reviewer)</h4>
+      <div class="phone">0500000001 / 123456</div>
+      <div class="desc">يراجع الطلبات والحوالات البنكية — يوافق أو يرفض. لا يقدر يعيّن سيارات</div>
+    </div>
+    <div class="role-card supervisor">
+      <h4>🚛 مشرف نقليات (Supervisor)</h4>
+      <div class="phone">0500000002 / 123456</div>
+      <div class="desc">يُعيّن السيارات والسائقين للطلبات المعتمدة — يدير جدول الرحلات والتسويات</div>
+    </div>
+    <div class="role-card warehouse">
+      <h4>🏭 مستودع (Warehouse)</h4>
+      <div class="phone">0500000003 / 123456</div>
+      <div class="desc">يُصدر فواتير التحميل ويُدير المخزون — يضغط "تم التحميل"</div>
+    </div>
+    <div class="role-card driver">
+      <h4>🚗 سائق (Driver)</h4>
+      <div class="phone">0500000004 / 123456</div>
+      <div class="desc">يرى طلباته المُعيّنة — يُسجّل التحميل والتسليم ويرفع صور</div>
+    </div>
+    <div class="role-card rep">
+      <h4>🤝 مندوب (Rep)</h4>
+      <div class="phone">0500000005 / 123456</div>
+      <div class="desc">يتابع طلبات عملائه — يوافق على الطلبات الآجلة ويرى أرباحه</div>
+    </div>
+    <div class="role-card workshop">
+      <h4>🔧 مدير الورشة (Workshop)</h4>
+      <div class="phone">0500000006 / 123456</div>
+      <div class="desc">يُدير أوامر الصيانة وتقارير الأعطال وبطاقات الصيانة</div>
+    </div>
+    <div class="role-card purchasing">
+      <h4>🛒 مسئول المشتريات (Purchasing)</h4>
+      <div class="phone">0500000007 / 123456</div>
+      <div class="desc">يعتمد ويستلم طلبات الشراء — يُحدّث مخزون قطع الغيار</div>
+    </div>
+    <div class="role-card customer">
+      <h4>👤 عميل (Customer)</h4>
+      <div class="phone">0555555555 / 123456</div>
+      <div class="desc">يتصفح الكتالوج، يضع طلبات، يرفع إيصالات الدفع، يتابع طلباته</div>
+    </div>
+  </div>
+
+  <div class="info-box note">
+    <strong>ملاحظة:</strong> المدير يقدر يُعدّل صلاحيات أي مستخدم من صفحة "المستخدمون" — يقدر يُفعّل أو يُعطّل أي صلاحية بشكل مستقل
+  </div>
+</div>
+
+<!-- ████ SECTION 2: LOGIN ████ -->
+<div class="section" id="login">
+  <h2 class="sec-title"><span class="icon">🔐</span> ٢. تسجيل الدخول</h2>
+  <p class="sec-sub">شاشة موحّدة لكل الأدوار — النظام يوجّهك تلقائياً لمنطقتك</p>
+
+  <ul class="action-list">
+    <li>
+      <span class="action-badge badge-blue">إدخال</span>
+      <div><strong>اكتب رقم الجوال + كلمة المرور</strong> ← النظام يتحقق من البيانات ويُنشئ جلسة آمنة</div>
+    </li>
+    <li>
+      <span class="action-badge badge-green">نتيجة</span>
+      <div>يُوجَّه كل دور تلقائياً لصفحته الرئيسية: المدير ← لوحة التحكم | العميل ← الكتالوج | المشرف ← لوحة التوزيع</div>
+    </li>
+    <li>
+      <span class="action-badge badge-red">خطأ</span>
+      <div>لو البيانات غلط ← رسالة "رقم الجوال أو كلمة المرور غير صحيحة" — الحساب لا يُقفَل تلقائياً</div>
+    </li>
+  </ul>
+
+  <div class="info-box tip">
+    <strong>💡 تسجيل عميل جديد:</strong> العميل يضغط "تسجيل حساب جديد" ← يملأ بياناته ← الطلب يُرسَل للمدير للاعتماد أولاً قبل أن يتمكن من الدخول
+  </div>
+</div>
+
+<!-- ████ SECTION 3: ORDER WORKFLOW ████ -->
+<div class="section section-break" id="order-workflow">
+  <h2 class="sec-title"><span class="icon">📦</span> ٣. دورة حياة الطلب الكاملة</h2>
+  <p class="sec-sub">كل طلب يمر بـ ٦ مراحل إلزامية — كل مرحلة لها صاحب وإجراء محدد</p>
+
+  <div class="workflow-steps">
+
+    <!-- Step 1 -->
+    <div class="workflow-step s1">
+      <div class="step-line">
+        <div class="step-num">١</div>
+        <div class="step-line-bar"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-title">📤 وضع الطلب</div>
+        <div class="step-who">👤 العميل</div>
+        <ul class="step-actions">
+          <li>يختار المنتج (أسمنت / بلك / مواد إنشاء) وكميته من الكتالوج</li>
+          <li>يُحدد موقع التسليم (من السجل أو خريطة)</li>
+          <li>يختار طريقة الدفع: تحويل بنكي / نقدي / آجل</li>
+          <li>يُرفق صورة الحوالة البنكية (عند الدفع بالتحويل)</li>
+          <li>يضغط "تأكيد الطلب"</li>
+        </ul>
+        <div class="result-box">يُنشأ الطلب برقم MKGH+timestamp (مثل MKGH20260701143022). الحالة: <strong>pending</strong>. تُرسَل إشعارات فورية للمراجعين</div>
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div class="workflow-step s2">
+      <div class="step-line">
+        <div class="step-num">٢</div>
+        <div class="step-line-bar"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-title">✅ تأكيد الدفع</div>
+        <div class="step-who">📋 المراجع</div>
+        <ul class="step-actions">
+          <li>يفتح الطلب ويُراجع بيانات الحوالة والمبلغ</li>
+          <li>يضغط "تأكيد الدفع" بعد التحقق من التحويل البنكي</li>
+          <li>أو يضغط "رفض" مع كتابة السبب</li>
+          <li>للطلبات الآجلة: يُحيل الطلب للمندوب أولاً لاعتماده</li>
+        </ul>
+        <div class="result-box">عند القبول: الحالة تصبح <strong>payment_confirmed</strong> — تُرسَل إشعارات للمشرف ليُعيّن سيارة</div>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div class="workflow-step s3">
+      <div class="step-line">
+        <div class="step-num">٣</div>
+        <div class="step-line-bar"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-title">🚛 تعيين سيارة وسائق</div>
+        <div class="step-who">🚛 مشرف النقليات</div>
+        <ul class="step-actions">
+          <li>يرى الطلب في قائمة "في انتظار التعيين"</li>
+          <li>يختار سيارة متاحة من قائمة الأسطول (السيارات المشغولة لا تظهر)</li>
+          <li>يختار السائق المناسب</li>
+          <li>يُحدد التعريفة (بناءً على المسافة ونوع السيارة)</li>
+          <li>يضغط "تعيين"</li>
+        </ul>
+        <div class="result-box">الحالة: <strong>vehicle_assigned</strong>. السيارة تُحجَز وتصبح "مشغولة". السائق يستقبل إشعاراً بالطلب</div>
+      </div>
+    </div>
+
+    <!-- Step 4 -->
+    <div class="workflow-step s4">
+      <div class="step-line">
+        <div class="step-num">٤</div>
+        <div class="step-line-bar"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-title">🧾 إصدار فاتورة التحميل</div>
+        <div class="step-who">🏭 المستودع</div>
+        <ul class="step-actions">
+          <li>يرى الطلب في قائمة "جاهز للتحميل"</li>
+          <li>يُراجع تفاصيل البضاعة والوزن</li>
+          <li>يضغط "إصدار فاتورة" — تُنشأ فاتورة رسمية بضريبة ١٥٪</li>
+          <li>يطبع أمر التحميل للسائق</li>
+        </ul>
+        <div class="result-box">الحالة: <strong>invoiced</strong>. الفاتورة تُحسب تلقائياً: المبلغ قبل الضريبة + ضريبة ١٥٪ + الإجمالي</div>
+      </div>
+    </div>
+
+    <!-- Step 5 -->
+    <div class="workflow-step s5">
+      <div class="step-line">
+        <div class="step-num">٥</div>
+        <div class="step-line-bar"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-title">📸 تأكيد التحميل</div>
+        <div class="step-who">🚗 السائق</div>
+        <ul class="step-actions">
+          <li>يضغط "تأكيد التحميل" على تطبيقه</li>
+          <li>يلتقط صورة الحمولة المُحمَّلة ويرفعها</li>
+        </ul>
+        <div class="result-box">الحالة: <strong>loaded</strong>. العميل والمندوب يُتاح لهم رقم لوحة السيارة + رقم هاتف السائق + رابط WhatsApp مباشر</div>
+      </div>
+    </div>
+
+    <!-- Step 6 -->
+    <div class="workflow-step s6">
+      <div class="step-line">
+        <div class="step-num">٦</div>
+        <div class="step-line-bar"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-title">🏁 تأكيد التسليم</div>
+        <div class="step-who">🚗 السائق</div>
+        <ul class="step-actions">
+          <li>يضغط "تم التسليم" عند الوصول لموقع العميل</li>
+        </ul>
+        <div class="result-box">الحالة: <strong>delivered</strong>. السيارة تُحرَّر وتصبح "متاحة" مجدداً. العميل يقدر يُقيّم الطلب وتحميل فاتورة ضريبة القيمة المضافة</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="divider"></div>
+
+  <h3><span class="dot"></span> حالات الطوارئ في الطلب</h3>
+  <table>
+    <tr><th>الإجراء</th><th>من يفعله</th><th>ما يحدث</th></tr>
+    <tr><td>إلغاء الطلب</td><td>المدير</td><td>الطلب يُحذَف، السيارة تُحرَّر إن كانت مُعيَّنة</td></tr>
+    <tr><td>تعديل الطلب</td><td>المدير</td><td>يقدر يُعدّل أي حقل في أي مرحلة (admin-edit)</td></tr>
+    <tr><td>تقرير عطل</td><td>السائق</td><td>يُنشئ تقرير عطل مرتبط بالطلب، يُشعر مدير الورشة</td></tr>
+    <tr><td>رفض الطلب</td><td>المراجع</td><td>الطلب يتوقف، يُرسَل إشعار للعميل بالسبب</td></tr>
+  </table>
+</div>
+
+<!-- ████ SECTION 4: CUSTOMER ████ -->
+<div class="section" id="customer">
+  <h2 class="sec-title"><span class="icon">👤</span> ٤. بوابة العميل</h2>
+  <p class="sec-sub">الصفحات التي يراها العميل فقط</p>
+
+  <h3><span class="dot"></span> الكتالوج (الصفحة الرئيسية)</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">تصفح</span><div>يتصفح المنتجات مع الأسعار والتقييمات — يضغط على المنتج ليرى التفاصيل</div></li>
+    <li><span class="action-badge badge-green">طلب</span><div>يضغط "اطلب الآن" ← ينتقل لخطوات الطلب التفصيلية</div></li>
+    <li><span class="action-badge badge-blue">بحث</span><div>يبحث بالاسم أو التصنيف — النتائج تُصفَّى فوراً</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> طلباتي</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض</span><div>يرى كل طلباته مع حالة كل واحد (pending / payment_confirmed / loaded / delivered)</div></li>
+    <li><span class="action-badge badge-purple">مرحلة loaded</span><div>يظهر له: لوحة السيارة، رقم السائق، رابط WhatsApp مباشر</div></li>
+    <li><span class="action-badge badge-green">مرحلة delivered</span><div>زر "تقييم" + زر "تحميل فاتورة ضريبة القيمة المضافة"</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> كشف الحساب</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض</span><div>يرى إجمالي مشترياته، المدفوع، المتبقي، وسجل كل المعاملات</div></li>
+    <li><span class="action-badge badge-green">طباعة</span><div>زر "طباعة" ← كشف حساب رسمي قابل للطباعة بشعار الشركة</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> رفع الحوالات البنكية</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-orange">رفع</span><div>يرفع صورة إيصال التحويل البنكي ← يُرسَل للمراجع للتأكيد</div></li>
+    <li><span class="action-badge badge-gray">حالة</span><div>يرى حالة كل حوالة: pending / confirmed / rejected</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 5: REVIEWER ████ -->
+<div class="section" id="reviewer">
+  <h2 class="sec-title"><span class="icon">📋</span> ٥. بوابة المراجع</h2>
+  <p class="sec-sub">نقطة التحقق من الدفع قبل أي تحريك للبضاعة</p>
+
+  <h3><span class="dot"></span> الطلبات المعلّقة (Pending)</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-green">تأكيد الدفع</span><div>يراجع الحوالة البنكية وصورتها ← يضغط "تأكيد" ← الطلب ينتقل لمرحلة "بانتظار السيارة"</div></li>
+    <li><span class="action-badge badge-red">رفض</span><div>يكتب سبب الرفض ← يضغط "رفض" ← العميل يستقبل إشعاراً بالسبب</div></li>
+    <li><span class="action-badge badge-purple">إحالة للمندوب</span><div>الطلبات الآجلة ← يُحيلها للمندوب المسؤول لاعتماد حد الائتمان</div></li>
+    <li><span class="action-badge badge-orange">نقدي</span><div>طلبات الدفع النقدي ← يضغط "اعتماد نقدي" بعد التأكد من استلام النقد</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> الحوالات البنكية</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض</span><div>قائمة بكل الحوالات المرفوعة من العملاء مع صورة الإيصال</div></li>
+    <li><span class="action-badge badge-green">تأكيد</span><div>يضغط "تأكيد الحوالة" ← تُسجَّل في سجل المدفوعات ويُحدَّث رصيد العميل</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 6: SUPERVISOR ████ -->
+<div class="section" id="supervisor">
+  <h2 class="sec-title"><span class="icon">🚛</span> ٦. بوابة المشرف</h2>
+  <p class="sec-sub">مركز تعيين السيارات وتنسيق الرحلات</p>
+
+  <h3><span class="dot"></span> لوحة التوزيع</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض</span><div>بطاقات الطلبات المعتمدة في انتظار سيارة — مع تفاصيل الكمية والموقع</div></li>
+    <li><span class="action-badge badge-green">تعيين</span><div>يختار سيارة متاحة + سائق ← يحدد التعريفة ← يضغط "تعيين" ← الطلب ينتقل لمرحلة vehicle_assigned</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> حالة الأسطول</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">مراقبة</span><div>يرى كل السيارات: متاحة (أخضر) / مشغولة (أحمر) / في الصيانة (رمادي)</div></li>
+    <li><span class="action-badge badge-purple">تعيين سائق دائم</span><div>يربط سائقاً بسيارة بشكل دائم من هذه الشاشة</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> الرحلات النشطة</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">متابعة</span><div>يرى كل الرحلات الجارية حالياً مع حالتها (loaded / في الطريق)</div></li>
+    <li><span class="action-badge badge-orange">تنبيه التوقف</span><div>تنبيه تلقائي إذا توقفت سيارة لأكثر من ١٠ دقائق دون تسليم</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> تسويات السائقين</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-green">إنشاء تسوية</span><div>يُحدد مبالغ السائق المستحقة عن الرحلات المنتهية ← يُنشئ تسوية للدفع</div></li>
+    <li><span class="action-badge badge-blue">عرض السجل</span><div>سجل كل التسويات السابقة مع التواريخ والمبالغ</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 7: WAREHOUSE ████ -->
+<div class="section" id="warehouse">
+  <h2 class="sec-title"><span class="icon">🏭</span> ٧. بوابة المستودع</h2>
+  <p class="sec-sub">إدارة عمليات التحميل وإصدار الفواتير</p>
+
+  <h3><span class="dot"></span> قائمة أوامر التحميل</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض</span><div>الطلبات التي عُيِّنت لها سيارة وجاهزة للتحميل</div></li>
+    <li><span class="action-badge badge-purple">إصدار فاتورة</span><div>يضغط "إصدار فاتورة تحميل" ← تُنشأ فاتورة بضريبة ١٥٪ ← الحالة تصبح invoiced</div></li>
+    <li><span class="action-badge badge-green">طباعة</span><div>يطبع أمر التحميل ← يُعطيه للسائق لاصطحابه</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> إدارة المخزون (المستودع)</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">مستويات المخزون</span><div>يرى الكميات الحالية لكل منتج في كل فرع</div></li>
+    <li><span class="action-badge badge-green">استلام بضاعة</span><div>يسجل كميات الوارد الجديد ← يُحدَّث المخزون تلقائياً</div></li>
+    <li><span class="action-badge badge-orange">تنبيهات النفاد</span><div>تنبيه أحمر عند اقتراب أي صنف من الحد الأدنى للمخزون</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 8: DRIVER ████ -->
+<div class="section" id="driver">
+  <h2 class="sec-title"><span class="icon">🚗</span> ٨. بوابة السائق</h2>
+  <p class="sec-sub">واجهة مُحسَّنة للجوال — بسيطة وسريعة</p>
+
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض طلباتي</span><div>يرى كل الطلبات المُعيَّنة له مع التفاصيل: العميل، الموقع، البضاعة</div></li>
+    <li><span class="action-badge badge-green">تأكيد التحميل</span><div>يضغط "تم التحميل" + يرفع صورة ← الحالة تصبح loaded ← العميل يُشعَر</div></li>
+    <li><span class="action-badge badge-green">تأكيد التسليم</span><div>يضغط "تم التسليم" ← الحالة تصبح delivered ← السيارة تتحرر</div></li>
+    <li><span class="action-badge badge-red">تقرير عطل</span><div>يضغط "إبلاغ عن عطل" ← يكتب الوصف ويرفع صورة ← إشعار فوري لمدير الورشة</div></li>
+    <li><span class="action-badge badge-blue">وثائقي</span><div>يرى حالة وثائقه (رخصة القيادة / الإقامة / البطاقة الصحية) وتواريخ انتهائها</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 9: REP ████ -->
+<div class="section" id="rep">
+  <h2 class="sec-title"><span class="icon">🤝</span> ٩. بوابة المندوب</h2>
+  <p class="sec-sub">متابعة العملاء والطلبات الآجلة</p>
+
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">طلبات عملائي</span><div>يرى كل طلبات العملاء المرتبطين به — مع حالة كل طلب</div></li>
+    <li><span class="action-badge badge-green">اعتماد آجل</span><div>المراجع يُحيل له الطلبات الآجلة ← يُراجع حد الائتمان ← يوافق أو يرفض</div></li>
+    <li><span class="action-badge badge-blue">كشف حساب العميل</span><div>يرى رصيد كل عميل والمستحقات عليه</div></li>
+    <li><span class="action-badge badge-purple">أهدافي</span><div>يرى أهداف المبيعات الشهرية ومدى تحقيقها</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 10: FLEET ████ -->
+<div class="section section-break" id="fleet">
+  <h2 class="sec-title"><span class="icon">🚛</span> ١٠. دفتر السيارات (Fleet Management)</h2>
+  <p class="sec-sub">سجل شامل لكل مركبات الشركة ووثائقها</p>
+
+  <h3><span class="dot"></span> قائمة المركبات</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض</span><div>جدول بكل المركبات: اللوحة، النوع، الحالة (متاح / مشغول / صيانة)، السائق المرتبط</div></li>
+    <li><span class="action-badge badge-green">إضافة مركبة</span><div>يملأ بيانات المركبة (اللوحة، نوع السيارة، السعة) ← تُضاف للنظام وتصبح متاحة للتعيين</div></li>
+    <li><span class="action-badge badge-orange">تعديل</span><div>تعديل أي بيانات للمركبة — النوع، الحالة، السائق المرتبط</div></li>
+    <li><span class="action-badge badge-red">حذف</span><div>إزالة المركبة من النظام (تأكيد مطلوب)</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> وثائق الامتثال</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض الوثائق</span><div>يرى وثائق كل مركبة: التأمين، الفحص الدوري، بطاقة التشغيل — مع تاريخ الانتهاء</div></li>
+    <li><span class="action-badge badge-orange">رفع وثيقة</span><div>يرفع ملف PDF/صورة للوثيقة الجديدة مع تاريخ البداية والانتهاء</div></li>
+    <li><span class="action-badge badge-red">تنبيه الانتهاء</span><div>النظام يُنبّه تلقائياً عند اقتراب انتهاء أي وثيقة (٣٠ يوم مسبقاً)</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> تحليلات المركبة</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-purple">لوحة التحليل</span><div>لكل مركبة: عدد الرحلات، إجمالي الإيراد، تكاليف الصيانة، سجل السائقين</div></li>
+    <li><span class="action-badge badge-blue">سجل الأعطال</span><div>كل تقارير الأعطال المرتبطة بهذه المركبة مع تواريخها وتكاليف الإصلاح</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 11: DRIVERS ████ -->
+<div class="section" id="drivers-manage">
+  <h2 class="sec-title"><span class="icon">🧑‍✈️</span> ١١. إدارة السائقين</h2>
+  <p class="sec-sub">ملفات السائقين ووثائقهم</p>
+
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">قائمة السائقين</span><div>كل السائقين مع حالة وثائقهم (الإقامة / رخصة القيادة / البطاقة الصحية)</div></li>
+    <li><span class="action-badge badge-green">إضافة سائق</span><div>يُدخل بيانات السائق ← يُنشأ ملف كامل</div></li>
+    <li><span class="action-badge badge-orange">ربط بمستخدم</span><div>يربط ملف السائق بحسابه في النظام ← يُتاح له تسجيل الدخول كـ driver</div></li>
+    <li><span class="action-badge badge-red">تنبيه وثائق</span><div>النظام يُبرز السائقين الذين وثائقهم منتهية أو قريبة من الانتهاء بلون أحمر/أصفر</div></li>
+    <li><span class="action-badge badge-blue">طلبات الوثائق</span><div>السائق يطلب تجديد وثيقة ← المسؤول يتابع ويُحدّث</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 12: WORKSHOP ████ -->
+<div class="section section-break" id="workshop">
+  <h2 class="sec-title"><span class="icon">🔧</span> ١٢. الورشة وصيانة المركبات</h2>
+  <p class="sec-sub">إدارة أعمال الصيانة من لحظة البلاغ حتى الإغلاق</p>
+
+  <h3><span class="dot"></span> تقارير الأعطال</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-orange">استلام بلاغ</span><div>السائق يرفع بلاغ عطل ← يظهر فوراً لمدير الورشة مع صورة العطل ووصفه</div></li>
+    <li><span class="action-badge badge-green">إنشاء أمر عمل</span><div>من البلاغ ← يضغط "إنشاء أمر عمل" ← ينتقل تلقائياً لصفحة أوامر العمل مع بيانات المركبة</div></li>
+    <li><span class="action-badge badge-blue">تحديد الجهة</span><div>يُحدد المسؤول: السائق (إهمال) / المركبة (تآكل طبيعي) / الشركة</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> أوامر العمل (Work Orders)</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-green">إنشاء أمر عمل</span><div>يُدخل: المركبة، وصف العمل، قطع الغيار المطلوبة، مصدر التكلفة (مخزون / خارجي)</div></li>
+    <li><span class="action-badge badge-purple">مصدر التكلفة</span><div><strong>inventory:</strong> يخصم قطع الغيار من مخزون الورشة تلقائياً | <strong>vehicle:</strong> يُضيف التكلفة لسجل المركبة</div></li>
+    <li><span class="action-badge badge-blue">تتبع الحالة</span><div>open ← in_progress ← done — كل تحديث يُسجَّل بالتاريخ والوقت</div></li>
+    <li><span class="action-badge badge-green">إغلاق الأمر</span><div>يُدخل التكلفة الفعلية ← يضغط "إتمام" ← الأمر يُغلَق والتكاليف تُسجَّل في سجل المركبة</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> بطاقات الصيانة الدورية</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض</span><div>سجل كامل لكل عمليات الصيانة الوقائية لكل مركبة</div></li>
+    <li><span class="action-badge badge-green">إضافة بطاقة</span><div>يُسجّل: نوع الصيانة، الكيلومترات، التاريخ، قطع الغيار المستخدمة</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 13: INVENTORY ████ -->
+<div class="section" id="inventory">
+  <h2 class="sec-title"><span class="icon">📦</span> ١٣. مخزون قطع الغيار</h2>
+  <p class="sec-sub">رقابة دقيقة على كل قطعة في الورشة</p>
+
+  <h3><span class="dot"></span> إدارة المخزون</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">قائمة القطع</span><div>كل قطع الغيار مع: الكمية الحالية، الحد الأدنى، متوسط التكلفة، الوحدة</div></li>
+    <li><span class="action-badge badge-green">إضافة صنف جديد</span><div>يُدخل اسم القطعة، وحدة القياس، الحد الأدنى ← يُضاف للمخزون بكمية صفر</div></li>
+    <li><span class="action-badge badge-orange">تعديل الكميات</span><div>تعديل يدوي للمخزون مع سبب التعديل (توالف / جرد / تصحيح)</div></li>
+    <li><span class="action-badge badge-red">تنبيه النفاد</span><div>عند الوصول للحد الأدنى ← تنبيه أحمر لمدير الورشة والمشتريات لرفع طلب شراء</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> سجل الحركات</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض الحركات</span><div>كل عملية صرف أو استلام مع: التاريخ، رقم أمر العمل، الكمية، المرجع</div></li>
+    <li><span class="action-badge badge-purple">تصدير Excel</span><div>يُصدر المخزون الكامل أو سجل الحركات لملف Excel</div></li>
+    <li><span class="action-badge badge-green">استيراد Excel</span><div>يرفع ملف Excel لإضافة أصناف جديدة بالجملة</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 14: PURCHASING ████ -->
+<div class="section" id="purchasing">
+  <h2 class="sec-title"><span class="icon">🛒</span> ١٤. المشتريات والتوريد</h2>
+  <p class="sec-sub">دورة الشراء من الطلب حتى الاستلام وإضافة المخزون</p>
+
+  <div class="workflow-steps">
+    <div class="workflow-step s1">
+      <div class="step-line"><div class="step-num">١</div><div class="step-line-bar"></div></div>
+      <div class="step-content">
+        <div class="step-title">رفع طلب شراء</div>
+        <div class="step-who">🔧 مدير الورشة</div>
+        <ul class="step-actions">
+          <li>يُدخل: اسم القطعة، الكمية، التكلفة التقديرية، السبب</li>
+          <li>يضغط "رفع طلب شراء"</li>
+        </ul>
+        <div class="result-box">يُنشأ طلب الشراء بحالة pending ← إشعار لمسؤول المشتريات</div>
+      </div>
+    </div>
+    <div class="workflow-step s2">
+      <div class="step-line"><div class="step-num">٢</div><div class="step-line-bar"></div></div>
+      <div class="step-content">
+        <div class="step-title">اعتماد الطلب</div>
+        <div class="step-who">🛒 مسؤول المشتريات</div>
+        <ul class="step-actions">
+          <li>يراجع الطلب وسببه والتكلفة</li>
+          <li>يوافق (approved) أو يرفض مع سبب</li>
+        </ul>
+        <div class="result-box">عند القبول: الحالة تصبح approved — الورشة تُشعَر</div>
+      </div>
+    </div>
+    <div class="workflow-step s3">
+      <div class="step-line"><div class="step-num">٣</div></div>
+      <div class="step-content">
+        <div class="step-title">تسجيل الاستلام</div>
+        <div class="step-who">🛒 مسؤول المشتريات</div>
+        <ul class="step-actions">
+          <li>يُدخل الكمية المستلمة فعلياً والسعر الفعلي</li>
+          <li>يضغط "تسجيل استلام"</li>
+        </ul>
+        <div class="result-box">الكمية تُضاف لمخزون الورشة تلقائياً — متوسط التكلفة المرجّح يُحدَّث</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ████ SECTION 15: HR ████ -->
+<div class="section" id="hr">
+  <h2 class="sec-title"><span class="icon">👥</span> ١٥. الموارد البشرية والموظفين</h2>
+  <p class="sec-sub">إدارة الكوادر البشرية وطلباتهم</p>
+
+  <h3><span class="dot"></span> ملفات الموظفين</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">قائمة الموظفين</span><div>كل الموظفين مع: المسمى الوظيفي، القسم، تاريخ التعيين، الراتب، حالة الوثائق</div></li>
+    <li><span class="action-badge badge-green">إضافة موظف</span><div>يُدخل بيانات الموظف الكاملة ← يُنشأ ملف رسمي في النظام</div></li>
+    <li><span class="action-badge badge-orange">تعديل</span><div>تحديث الراتب، القسم، المسمى، الوثائق</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> طلبات الموارد البشرية</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">أنواع الطلبات</span><div>إجازة سنوية / مرضية / طارئة / سلفة / شهادة عمل / غيرها</div></li>
+    <li><span class="action-badge badge-green">رفع طلب</span><div>الموظف يرفع طلبه من بوابة الموظف ← يُشعَر المدير</div></li>
+    <li><span class="action-badge badge-purple">اعتماد/رفض</span><div>المدير يوافق أو يرفض مع إضافة ملاحظة ← الموظف يُشعَر بالنتيجة</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> بوابة الموظف (Self-Service)</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">راتبي</span><div>يرى تفاصيل راتبه الشهري والخصومات والبدلات</div></li>
+    <li><span class="action-badge badge-green">طلباتي</span><div>يرفع طلباته ويتابع حالتها</div></li>
+    <li><span class="action-badge badge-orange">مصروفاتي</span><div>يرفع مصروفات العهدة (Petty Cash) ← المحاسب يعتمدها ويصرفها</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 16: FINANCE ████ -->
+<div class="section" id="finance">
+  <h2 class="sec-title"><span class="icon">💰</span> ١٦. المالية والتقارير</h2>
+  <p class="sec-sub">الرقابة المالية والتحليلات الشاملة</p>
+
+  <h3><span class="dot"></span> التقارير المالية</h3>
+  <table>
+    <tr><th>التقرير</th><th>يعرض</th><th>يُصدَّر</th></tr>
+    <tr><td>تقرير المبيعات</td><td>إجمالي الإيرادات حسب الفترة والمنتج والعميل</td><td>Excel / طباعة</td></tr>
+    <tr><td>كشف حساب العميل</td><td>كل معاملات عميل محدد والرصيد</td><td>PDF مطبوع</td></tr>
+    <tr><td>تقرير الرحلات</td><td>تكلفة كل رحلة، التعريفة، صافي الربح</td><td>Excel</td></tr>
+    <tr><td>فاتورة ضريبة القيمة المضافة</td><td>فاتورة رسمية بضريبة ١٥٪</td><td>PDF</td></tr>
+    <tr><td>تقرير مصروفات الورشة</td><td>تكاليف الصيانة حسب المركبة والفترة</td><td>Excel</td></tr>
+    <tr><td>تقرير السائقين</td><td>الرحلات، التسويات، المدفوعات لكل سائق</td><td>Excel</td></tr>
+  </table>
+
+  <h3><span class="dot"></span> الإعدادات المالية</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-purple">نسبة ضريبة القيمة المضافة</span><div>مُعيَّنة ١٥٪ (المعدل السعودي) — تُطبَّق تلقائياً على كل الفواتير</div></li>
+    <li><span class="action-badge badge-blue">أسعار الكيلومتر</span><div>إعداد سعر الكيلومتر لكل نوع مركبة — يُستخدم لحساب التعريفة تلقائياً</div></li>
+    <li><span class="action-badge badge-orange">معاملات الطريق</span><div>معاملات مضاعفة التعريفة لطرق محددة (مثل القصيم-المدينة)</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 17: ADMIN ████ -->
+<div class="section" id="admin">
+  <h2 class="sec-title"><span class="icon">⚙️</span> ١٧. الإدارة والإعدادات</h2>
+  <p class="sec-sub">صلاحيات المدير الكاملة</p>
+
+  <h3><span class="dot"></span> إدارة المستخدمين</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-green">إنشاء مستخدم</span><div>يحدد الدور، رقم الجوال، كلمة المرور ← يُنشأ الحساب فوراً</div></li>
+    <li><span class="action-badge badge-purple">تخصيص الصلاحيات</span><div>لكل مستخدم: تُفعَّل/تُعطَّل صلاحيات محددة (مستقلة عن الدور)</div></li>
+    <li><span class="action-badge badge-orange">إيقاف الحساب</span><div>يُوقف حساب مستخدم مؤقتاً دون حذفه — يمنعه من تسجيل الدخول</div></li>
+    <li><span class="action-badge badge-blue">اعتماد التسجيل</span><div>طلبات التسجيل الجديدة تظهر للمدير ← يوافق ← يُتاح للعميل الدخول</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> إعدادات الشركة</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">بيانات الشركة</span><div>اسم الشركة، العنوان، الشعار، بيانات الاتصال — تظهر في الفواتير والتقارير</div></li>
+    <li><span class="action-badge badge-orange">إعدادات الفاتورة</span><div>تخصيص رأس وتذييل الفواتير، شروط الدفع، ملاحظات إضافية</div></li>
+    <li><span class="action-badge badge-green">نقاط التحميل</span><div>يُدير المصانع والمستودعات (نقاط التحميل) — الاسم، المدينة، الإحداثيات</div></li>
+    <li><span class="action-badge badge-purple">أنواع المركبات</span><div>يُعرّف أنواع المركبات (سطحة / بلكر / ونش / دين) وسعتها وأنواع البضاعة</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> سجل النظام (Audit Log)</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">عرض</span><div>كل الإجراءات المنفَّذة: من فعلها، متى، على أي سجل — سجل لا يُحذَف</div></li>
+    <li><span class="action-badge badge-orange">تصفية</span><div>بحث حسب المستخدم، نوع الإجراء، الفترة الزمنية</div></li>
+  </ul>
+
+  <h3><span class="dot"></span> المكتبة القانونية</h3>
+  <ul class="action-list">
+    <li><span class="action-badge badge-blue">الأنظمة السعودية</span><div>مكتبة الأنظمة واللوائح ذات الصلة بالشركة</div></li>
+    <li><span class="action-badge badge-purple">الجلسات القضائية</span><div>تتبع جلسات المخالفات المرورية وقضايا الشركة</div></li>
+  </ul>
+</div>
+
+<!-- ████ SECTION 18: NOTIFICATIONS ████ -->
+<div class="section" id="notifications">
+  <h2 class="sec-title"><span class="icon">🔔</span> ١٨. نظام الإشعارات</h2>
+  <p class="sec-sub">كل حدث مهم يُولّد إشعاراً للجهة المعنية</p>
+
+  <table>
+    <tr><th>الحدث</th><th>من يُشعَر</th><th>وقت الإشعار</th></tr>
+    <tr><td>طلب جديد من عميل</td><td>المراجعون + المدير</td><td>فوري</td></tr>
+    <tr><td>تأكيد الدفع</td><td>المشرف</td><td>فوري</td></tr>
+    <tr><td>تعيين سيارة وسائق</td><td>السائق + المستودع</td><td>فوري</td></tr>
+    <tr><td>السيارة محمَّلة</td><td>العميل + المندوب</td><td>فوري</td></tr>
+    <tr><td>تم التسليم</td><td>العميل + المدير</td><td>فوري</td></tr>
+    <tr><td>رفع حوالة بنكية</td><td>المراجعون</td><td>فوري</td></tr>
+    <tr><td>بلاغ عطل</td><td>مدير الورشة</td><td>فوري</td></tr>
+    <tr><td>طلب شراء جديد</td><td>مسؤول المشتريات</td><td>فوري</td></tr>
+    <tr><td>انتهاء وثيقة مركبة (٣٠ يوم)</td><td>المدير</td><td>يومي</td></tr>
+    <tr><td>انتهاء رخصة سائق (٣٠ يوم)</td><td>المدير</td><td>يومي</td></tr>
+    <tr><td>توقف سيارة أثناء الرحلة</td><td>المشرف</td><td>بعد ١٠ دقائق توقف</td></tr>
+    <tr><td>طلب شراء مُعتمَد</td><td>مدير الورشة</td><td>فوري</td></tr>
+    <tr><td>مخزون نازل عن الحد الأدنى</td><td>مدير الورشة</td><td>عند التحديث</td></tr>
+  </table>
+
+  <div class="info-box success">
+    <strong>الإشعارات داخلية:</strong> تظهر في جرس الإشعارات داخل النظام — لا تحتاج اتصالاً بالإنترنت الخارجي
+  </div>
+</div>
+
+<!-- ████ QUICK REFERENCE ████ -->
+<div class="section">
+  <h2 class="sec-title"><span class="icon">⚡</span> مرجع سريع — الحالات والمعاني</h2>
+  <p class="sec-sub">كل الحالات الموجودة في النظام وما تعنيه</p>
+
+  <h3><span class="dot"></span> حالات الطلب</h3>
+  <table>
+    <tr><th>الحالة (بالنظام)</th><th>المعنى</th><th>من يغيّرها</th></tr>
+    <tr><td>pending</td><td>🟡 معلّق — بانتظار مراجعة الدفع</td><td>تلقائي عند الطلب</td></tr>
+    <tr><td>payment_confirmed</td><td>🔵 مؤكد الدفع — بانتظار سيارة</td><td>المراجع</td></tr>
+    <tr><td>vehicle_assigned</td><td>🟢 سيارة مُعيَّنة — بانتظار التحميل</td><td>المشرف</td></tr>
+    <tr><td>invoiced</td><td>🟣 تم التفويت — جاهز للتحميل</td><td>المستودع</td></tr>
+    <tr><td>loaded</td><td>🚛 في الطريق — السيارة محمّلة</td><td>السائق</td></tr>
+    <tr><td>delivered</td><td>✅ تم التسليم — منتهي</td><td>السائق</td></tr>
+    <tr><td>cancelled</td><td>❌ ملغي</td><td>المدير</td></tr>
+  </table>
+
+  <h3><span class="dot"></span> حالات المركبة</h3>
+  <table>
+    <tr><th>الحالة</th><th>المعنى</th></tr>
+    <tr><td>available</td><td>✅ متاحة — يمكن تعيينها لطلب</td></tr>
+    <tr><td>busy</td><td>🚛 مشغولة — في رحلة حالية</td></tr>
+    <tr><td>maintenance</td><td>🔧 في الصيانة — غير متاحة</td></tr>
+  </table>
+
+  <h3><span class="dot"></span> أرقام الطلبات</h3>
+  <div class="info-box note">
+    <strong>تنسيق رقم الطلب:</strong> MKGH + السنة + الشهر + اليوم + الساعة + الدقيقة + الثانية<br>
+    <strong>مثال:</strong> MKGH20260701143022 = طلب بتاريخ 1 يوليو 2026 الساعة 2:30:22 م
+  </div>
+</div>
+
+<!-- ████ FOOTER ████ -->
+<div style="text-align:center;padding:40px 20px;color:#94a3b8;font-size:.85rem">
+  <div style="font-size:2rem;margin-bottom:12px">🏗️</div>
+  <strong>MKGH Logistics Platform</strong><br>
+  دليل النظام الشامل — إصدار يوليو ٢٠٢٦<br>
+  <span style="margin-top:8px;display:block">لأي استفسار عن التشغيل — يُرجى التواصل مع فريق الدعم التقني</span>
+</div>
+
+</body>
+</html>

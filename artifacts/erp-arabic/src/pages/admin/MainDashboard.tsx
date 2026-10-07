@@ -112,7 +112,7 @@ export default function MainDashboard() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">لوحة التحكم الرئيسية</h1>
+          <h1 className="text-2xl font-bold text-gray-900">المؤشرات الشاملة — جميع الفروع</h1>
           <p className="text-sm text-gray-500 mt-0.5">{today}</p>
         </div>
         <div className="flex gap-2">
@@ -164,7 +164,7 @@ export default function MainDashboard() {
           label="الإيرادات (ريال)" icon={DollarSign} color="bg-green-600"
           value={kpi.revenue.toLocaleString("ar-SA", { minimumFractionDigits: 2 })}
           sub="شامل 15% ضريبة"
-          href="/erp/invoices"
+          href="/invoices"
         />
         <KpiCard
           label="السيارات المتاحة" icon={Truck} color="bg-orange-500"
@@ -259,7 +259,7 @@ export default function MainDashboard() {
 
       {/* Charts Row 2 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Link href="/erp/invoices">
+        <Link href="/invoices">
           <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100 cursor-pointer hover:shadow-md hover:border-green-100 transition-all">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold text-gray-800">منحنى الإيرادات</h3>
@@ -320,7 +320,7 @@ export default function MainDashboard() {
                 <div className="font-bold text-sm">{String(v.plate_number)}</div>
                 <div className="text-xs mt-0.5">{String(v.vehicle_type || "")}</div>
                 <div className="text-xs font-medium mt-1">{VEHICLE_STATUS_LABEL[v.status as string] || String(v.status)}</div>
-                {v.driver_name && <div className="text-xs mt-0.5 opacity-70">{String(v.driver_name)}</div>}
+                {v.driver_name != null && <div className="text-xs mt-0.5 opacity-70">{String(v.driver_name)}</div>}
               </div>
             ))}
           </div>

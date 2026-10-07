@@ -6,6 +6,7 @@ import {
   FileSpreadsheet, Link2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
+import { useRememberedState } from "@/hooks/useRememberedState";
 
 interface Employee {
   id: number;
@@ -89,8 +90,8 @@ function fmt(v: number) { return v.toLocaleString("ar-SA"); }
 export default function EmployeesPage() {
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
-  const [filterStatus, setFilterStatus] = useState("الكل");
+  const [search, setSearch] = useRememberedState("admin-employees-search", "");
+  const [filterStatus, setFilterStatus] = useRememberedState("admin-employees-status-filter", "الكل");
   const [modal, setModal] = useState<{ open: boolean; emp: Partial<Employee> }>({ open: false, emp: {} });
   const [saving, setSaving] = useState(false);
   const [delId, setDelId] = useState<number | null>(null);

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useRememberedState } from "@/hooks/useRememberedState";
 import {
   Fuel, Plus, Trash2, RefreshCw, X, Save, Car, Calendar,
   DollarSign, Hash, Filter, TrendingDown, FileText,
@@ -30,7 +31,7 @@ export default function FleetExpenses() {
   const [loading,    setLoading]    = useState(true);
   const [openAdd,    setOpenAdd]    = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [filterCat,  setFilterCat]  = useState("الكل");
+  const [filterCat,  setFilterCat]  = useRememberedState("fleet-expenses-category-filter", "الكل");
   const [form, setForm] = useState({
     date: new Date().toISOString().slice(0, 10),
     car_id: "", expense_category: "وقود",

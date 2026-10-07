@@ -1,0 +1,94 @@
+@import 'tailwindcss';
+
+@theme inline {
+  --color-primary: var(--slide-primary);
+  --color-accent: var(--slide-accent);
+  --color-bg: var(--slide-bg);
+  --color-text: var(--slide-text);
+  --color-muted: var(--slide-muted);
+  --color-surface: var(--slide-surface);
+  --font-display: var(--font-display-family);
+  --font-body: var(--font-body-family);
+}
+
+:root {
+  --slide-primary: #103c68;
+  --slide-accent: #0eb5cb;
+  --slide-bg: #f0f4f8;
+  --slide-text: #0f2744;
+  --slide-muted: #64748b;
+  --slide-surface: #ffffff;
+  --font-display-family: 'Tajawal', sans-serif;
+  --font-body-family: 'Tajawal', sans-serif;
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--slide-bg);
+  color: var(--slide-text);
+  font-family: var(--font-display-family);
+}
+
+.slide {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.slide-viewer {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* ── Approval document print styles ── */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  /* Hide slide nav / viewer chrome */
+  nav,
+  header,
+  [class*="nav"],
+  [class*="toolbar"],
+  [class*="controls"] {
+    display: none !important;
+  }
+
+  html, body, #root {
+    background: #fff !important;
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  .approval-slide {
+    background: #fff !important;
+    height: auto !important;
+    min-height: unset !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  .approval-paper {
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 !important;
+    width: 100% !important;
+    min-height: unset !important;
+    padding: 12mm 16mm !important;
+  }
+
+  @page {
+    size: A4 portrait;
+    margin: 0;
+  }
+}

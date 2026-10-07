@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo } from "react";
+import { useRememberedState } from "@/hooks/useRememberedState";
 import {
   BarChart3, TrendingUp, DollarSign, ShoppingCart, Users, Package,
   RefreshCw, Download, FileText, CheckCircle, Clock, Truck,
@@ -30,8 +31,8 @@ function fmtSAR(n: number) { return `${n.toLocaleString("ar-SA", { minimumFracti
 export default function ReportsPage() {
   const [orders,    setOrders]    = useState<Order[]>([]);
   const [loading,   setLoading]   = useState(true);
-  const [tab,       setTab]       = useState<"overview" | "products" | "customers" | "pipeline">("overview");
-  const [dateFilter, setDateFilter] = useState<"all" | "month" | "week">("month");
+  const [tab,       setTab]       = useRememberedState<"overview" | "products" | "customers" | "pipeline">("admin-reports-active-tab", "overview");
+  const [dateFilter, setDateFilter] = useRememberedState<"all" | "month" | "week">("admin-reports-date-filter", "month");
 
   const load = () => {
     setLoading(true);

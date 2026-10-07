@@ -47,3 +47,7 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+artifacts/data/erp.db-shm
+artifacts/data/erp.db-wal
+artifacts/data/erp.db
+artifacts/api-server/data/erp.db*
