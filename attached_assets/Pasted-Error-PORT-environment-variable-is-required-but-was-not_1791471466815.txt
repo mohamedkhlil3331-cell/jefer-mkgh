@@ -1,0 +1,24 @@
+Error: PORT environment variable is required but was not provided.
+    at file:///home/u175712871/domains/jefer-mkgh1.com/hbuilds/versions/01a11c00-1bea-7021-8a48-9e5ba5f36175/nodejs/artifacts/api-server/dist/index.mjs:126562:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:647:26)
+Error: PORT environment variable is required but was not provided.
+    at file:///home/u175712871/domains/jefer-mkgh1.com/hbuilds/versions/01a11c00-1bea-7021-8a48-9e5ba5f36175/nodejs/artifacts/api-server/dist/index.mjs:126562:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:647:26)
+Error: PORT environment variable is required but was not provided.
+    at file:///home/u175712871/domains/jefer-mkgh1.com/hbuilds/versions/01a11c00-1bea-7021-8a48-9e5ba5f36175/nodejs/artifacts/api-server/dist/index.mjs:126562:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:647:26)
+Error: PORT environment variable is required but was not provided.
+    at file:///home/u175712871/domains/jefer-mkgh1.com/hbuilds/versions/01a11c00-1bea-7021-8a48-9e5ba5f36175/nodejs/artifacts/api-server/dist/index.mjs:126562:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:647:26)
+Error: PORT environment variable is required but was not provided.
+    at file:///home/u175712871/domains/jefer-mkgh1.com/hbuilds/versions/01a11c00-1bea-7021-8a48-9e5ba5f36175/nodejs/artifacts/api-server/dist/index.mjs:126562:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:647:26)
+Error: PORT environment variable is required but was not provided.
+    at file:///home/u175712871/domains/jefer-mkgh1.com/hbuilds/versions/01a11c00-1bea-7021-8a48-9e5ba5f36175/nodejs/artifacts/api-server/dist/index.mjs:126562:9
+    at ModuleJob.run (node:internal/modules/esm/module_job:343:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:647:26)
