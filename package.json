@@ -5,10 +5,10 @@
   "license": "MIT",
   "scripts": {
     "preinstall": "sh -c 'rm -f package-lock.json yarn.lock; case \"$npm_config_user_agent\" in pnpm/*) ;; *) echo \"Use pnpm instead\" >&2; exit 1 ;; esac'",
-    "build": "pnpm run typecheck && pnpm -r --if-present run build",
-    "hostinger:build": "BASE_PATH=/ VITE_SITE_ANALYTICS=1 pnpm --filter @workspace/erp-arabic run build && pnpm --filter @workspace/api-server run build",
+    "build": "node \"$npm_execpath\" run typecheck && node \"$npm_execpath\" -r --if-present run build",
+    "hostinger:build": "BASE_PATH=/ VITE_SITE_ANALYTICS=1 node \"$npm_execpath\" --filter @workspace/erp-arabic run build && node \"$npm_execpath\" --filter @workspace/api-server run build",
     "typecheck:libs": "tsc --build",
-    "typecheck": "pnpm run typecheck:libs && pnpm -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
+    "typecheck": "node \"$npm_execpath\" run typecheck:libs && node \"$npm_execpath\" -r --filter \"./artifacts/**\" --filter \"./scripts\" --if-present run typecheck"
   },
   "private": true,
   "devDependencies": {

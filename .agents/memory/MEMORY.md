@@ -17,7 +17,7 @@
 - [Driver custody print cancellation](driver-custody-cancellation.md) — cancel print state only; preserve the statement, snapshots, source marks, and active custody totals
 - [Rental customer classification history](rental-customer-classification.md) — trip billing classification is snapshotted; changing a customer type affects old trips only by explicit reclassification
 - [Workspace package installs](workspace-package-installs.md) — generic Node package installer targets pnpm workspace root and fails; use pnpm filtered installs for artifact dependencies.
-- [pnpm catalog compatibility](pnpm-catalog-compatibility.md) — `catalog:` references require pnpm 9.5+; check the active version and workspace root before adding duplicate catalog entries.
+- [pnpm catalog compatibility](pnpm-catalog-compatibility.md) — pin pnpm ≥9.5 and reuse `npm_execpath` in scripts; Hostinger may route nested calls to an uncached Corepack version.
 - [SQLite deployment writer fencing](sqlite-writer-fencing.md) — a stale server must reject mutations and close; the new server claims backup authority before listening.
 - [Legacy uploads at publish](legacy-uploads-publish.md) — preserving the SQLite backup alone does not preserve files stored on a published server's local disk.
 - [Routing bonus continuity](routing-bonus-continuity.md) — preserve the existing tariff bonus calculation; show its saved value on new trip logs without creating a second payout.
