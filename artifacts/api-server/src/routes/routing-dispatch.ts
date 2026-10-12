@@ -58,7 +58,12 @@ function validatePermitImageUrl(raw: unknown): string | null | false {
   return raw;
 }
 
-type RoutingCargoItem = { cargo_type: string; quantity: number };
+type RoutingCargoItem = {
+  product_id: number | null;
+  cargo_type: string;
+  quantity: number;
+  unit: string;
+};
 type RoutingAttachment = {
   kind: "supervisor_permit" | "fsohat_permit" | "driver_invoice";
   url: string;
@@ -76,11 +81,28 @@ function parseCargoItems(raw: unknown): RoutingCargoItem[] | false {
   const items: RoutingCargoItem[] = [];
   for (const entry of value) {
     if (!entry || typeof entry !== "object") return false;
-    const cargoType = typeof entry.cargo_type === "string" ? entry.cargo_type.trim() : "";
+    const requestedName = typeof entry.cargo_type === "string" ? entry.cargo_type.trim() : "";
     const quantity = Number(entry.quantity);
-    if (!cargoType || cargoType.length > 120 || !Number.isFinite(quantity) || quantity <= 0) return false;
-    if (items.some(item => item.cargo_type.toLocaleLowerCase() === cargoType.toLocaleLowerCase())) return false;
-    items.push({ cargo_type: cargoType, quantity });
+    if (!requestedName || requestedName.length > 120 || !Number.isFinite(quantity) || quantity <= 0) return false;
+    const hasProductId = entry.product_id != null && entry.product_id !== "";
+    const productId = hasProductId ? Number(entry.product_id) : null;
+    if (hasProductId && (!Number.isSafeInteger(productId) || Number(productId) <= 0)) return false;
+    const product = productId == null ? undefined : db.prepare(
+      "SELECT id, name, unit FROM products WHERE id=? AND active=1"
+    ).get(productId) as { id: number; name: string; unit: string | null } | undefined;
+    if (productId != null && !product) return false;
+    if (productId != null && !Number.isSafeInteger(quantity)) return false;
+    const cargoType = product?.name || requestedName;
+    if (items.some(item =>
+      (productId != null && item.product_id === productId) ||
+      item.cargo_type.toLocaleLowerCase() === cargoType.toLocaleLowerCase()
+    )) return false;
+    items.push({
+      product_id: product?.id ?? null,
+      cargo_type: cargoType,
+      quantity,
+      unit: product?.unit || (typeof entry.unit === "string" && entry.unit.trim() ? entry.unit.trim() : "حبة"),
+    });
   }
   return items;
 }
@@ -391,7 +413,7 @@ router.post("/routing-dispatches", requireRoutingSupervisor, permitUpload.single
 router.get("/routing-dispatch-trips", (_req, res) => {
   const rows = db.prepare(`
     SELECT t.id, t.supply_request_id, t.vehicle_plate, t.driver_name, t.driver_phone,
-           t.status, t.created_at, t.delivered_at,
+           t.status, t.created_at, t.delivered_at, t.cargo_items_json,
            sr.product_name, sr.warehouse_name, sr.destination_division,
             sr.routing_dispatch_id, sr.driver_expense, sr.rental, sr.notes AS sr_notes,
             sr.requested_by, sr.warehouse_id,
@@ -407,8 +429,16 @@ router.get("/routing-dispatch-trips", (_req, res) => {
     WHERE sr.routing_dispatch_id IS NOT NULL
     ORDER BY t.created_at DESC
     LIMIT 500
-  `).all();
-  res.json(rows);
+  `).all() as Array<Record<string, unknown>>;
+  res.json(rows.map(row => {
+    let cargoItems: unknown[] = [];
+    try {
+      const parsed = JSON.parse(String(row.cargo_items_json || "[]"));
+      if (Array.isArray(parsed)) cargoItems = parsed;
+    } catch {}
+    const { cargo_items_json: _cargoItemsJson, ...trip } = row;
+    return { ...trip, cargo_items: cargoItems };
+  }));
 });
 
 /* ── Cancel a routing-dispatch trip ─────────────────────────────────────── */
@@ -494,6 +524,14 @@ router.put("/routing-dispatch-trips/:id", requireRoutingSupervisor, (req, res) =
 
   const body = req.body as Record<string, unknown>;
   const text = (key: string) => typeof body[key] === "string" ? String(body[key]).trim() : "";
+  const parsedCargoItems = body.cargo_items === undefined ? null : parseCargoItems(body.cargo_items);
+  if (parsedCargoItems === false) return void res.status(400).json({ error: "قائمة المنتجات والكميات غير صالحة" });
+  const cargoType = parsedCargoItems
+    ? parsedCargoItems[0]?.cargo_type || ""
+    : text("cargo_type");
+  const cargoItemsJson = parsedCargoItems
+    ? (parsedCargoItems.length ? JSON.stringify(parsedCargoItems) : null)
+    : null;
   const plate = text("vehicle_plate");
   const loading = text("loading_place");
   const unloading = text("unloading_place");
@@ -576,7 +614,7 @@ router.put("/routing-dispatch-trips/:id", requireRoutingSupervisor, (req, res) =
         tariff_id=?, loading_place=?, unloading_place=?,
         tariff_loading_place=?, tariff_unloading_place=?,
         override_loading_place=?, override_unloading_place=?,
-        customer_name=?, customer_type=?, rep_name=?, rep_phone=?, cargo_type=?,
+         customer_name=?, customer_type=?, rep_name=?, rep_phone=?, cargo_type=?,
         driver_expense=?, rental=?, notes=?, route_type=?,
          permit_image_url=COALESCE(?,permit_image_url),
          loading_location_name=?, loading_location_url=?,
@@ -586,7 +624,7 @@ router.put("/routing-dispatch-trips/:id", requireRoutingSupervisor, (req, res) =
       tariffId, effectiveLoading, effectiveUnloading, loading, unloading,
       text("override_loading_place") || null, text("override_unloading_place") || null,
       text("customer_name") || null, text("customer_type") || null,
-      text("rep_name") || null, text("rep_phone") || null, text("cargo_type") || null,
+       text("rep_name") || null, text("rep_phone") || null, cargoType || null,
        amounts[0], amounts[1], text("notes") || null, routeType, permitUrl ?? null,
        loadingLocation?.name ?? null, loadingLocation?.url ?? null,
        unloadingLocation?.name ?? null, unloadingLocation?.url ?? null,
@@ -602,10 +640,16 @@ router.put("/routing-dispatch-trips/:id", requireRoutingSupervisor, (req, res) =
     `).run(
       text("product_name") || `${effectiveLoading} ← ${effectiveUnloading}`,
       effectiveLoading, destination, warehouseId, amounts[0], amounts[1],
-      text("cargo_type") || null, text("customer_name") || null, text("customer_type") || null,
+       cargoType || null, text("customer_name") || null, text("customer_type") || null,
       text("rep_name") || null, text("rep_phone") || null, text("notes") || null,
       permitUrl ?? null, trip.routing_dispatch_id,
     );
+    if (parsedCargoItems) {
+      db.prepare(`
+        UPDATE supply_request_trips SET cargo_items_json=?, updated_at=datetime('now')
+        WHERE supply_request_id=? AND status NOT IN ('completed','cancelled','rejected')
+      `).run(cargoItemsJson, trip.supply_request_id);
+    }
     db.prepare(`
       UPDATE supply_request_trips SET
         vehicle_plate=?, driver_name=?, driver_phone=?,

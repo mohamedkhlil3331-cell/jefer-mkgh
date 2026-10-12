@@ -44,7 +44,7 @@ interface Trip {
   image_url?: string;
   permit_image_url?: string | null;
   fsohat_image_url?: string | null;
-  routing_cargo_items?: { cargo_type: string; quantity?: number | null; sort_order?: number }[];
+  routing_cargo_items?: { product_id?: number | null; cargo_type: string; quantity?: number | null; unit?: string | null; sort_order?: number }[];
   routing_attachments?: { kind: string; url: string; file_name?: string; sort_order?: number }[];
   invoice_data_source?: string | null;
   invoice_data_status?: string | null;
@@ -411,7 +411,7 @@ function TripsContent({ user }: { user: User | null }) {
         driverName: trip.driver_name,
         driverPhone: trip.driver_phone,
         cargoSummary: trip.routing_cargo_items?.length
-          ? trip.routing_cargo_items.map(item => `${item.cargo_type}${item.quantity != null ? ` — ${item.quantity}` : ""}`).join("، ")
+          ? trip.routing_cargo_items.map(item => `${item.cargo_type}${item.quantity != null ? ` — ${item.quantity} ${item.unit || ""}` : ""}`).join("، ")
           : trip.material_type,
         images,
         attachmentWarnings,
@@ -2138,7 +2138,7 @@ function TripsContent({ user }: { user: User | null }) {
                               <div className="min-w-32 space-y-0.5 text-[10px] text-gray-600">
                                 {row.routing_cargo_items.map((item, index) => (
                                   <div key={`${item.cargo_type}-${index}`}>
-                                    {item.cargo_type}{item.quantity != null ? ` — ${item.quantity}` : ""}
+                                    {item.cargo_type}{item.quantity != null ? ` — ${item.quantity} ${item.unit || ""}` : ""}
                                   </div>
                                 ))}
                               </div>

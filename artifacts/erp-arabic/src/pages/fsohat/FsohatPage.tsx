@@ -18,7 +18,7 @@ interface SupplyTrip {
   warehouse_name: string; destination_division: string | null;
   permit_image_url?: string | null;
   invoice_image: string | null; cargo_type: string | null; reference_no: string | null;
-  cargo_items?: { cargo_type: string; quantity?: number | null; sort_order?: number }[];
+  cargo_items?: { product_id?: number | null; cargo_type: string; quantity?: number | null; unit?: string | null; sort_order?: number }[];
   attachments?: { kind: string; url: string; file_name?: string; sort_order?: number }[];
   priority: string; created_at: string;
 }
@@ -544,7 +544,7 @@ export default function FsohatPage() {
                 {r.driver_phone   && <span>📞 {r.driver_phone}</span>}
                 {r.cargo_items?.length
                   ? r.cargo_items.map((item, index) => (
-                    <span key={`${item.cargo_type}-${index}`}>📦 {item.cargo_type}{item.quantity != null ? ` — ${item.quantity}` : ""}</span>
+                    <span key={`${item.cargo_type}-${index}`}>📦 {item.cargo_type}{item.quantity != null ? ` — ${item.quantity} ${item.unit || ""}` : ""}</span>
                   ))
                   : r.cargo_type && <span>📦 نوع الحمولة: <strong>{r.cargo_type}</strong></span>}
                 {refLabel         && <span className="text-indigo-600 font-semibold">🔖 رقم المرجع: {refLabel}</span>}

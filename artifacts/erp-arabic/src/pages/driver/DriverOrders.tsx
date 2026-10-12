@@ -78,7 +78,7 @@ interface DriverTrip {
   cargo_type?: string | null; reference_no?: string | null;
   rep_name?: string | null; rep_phone?: string | null;
   customer_name?: string | null; customer_type?: string | null;
-  cargo_items?: { cargo_type: string; quantity?: number | null; sort_order?: number }[];
+  cargo_items?: { product_id?: number | null; cargo_type: string; quantity?: number | null; unit?: string | null; sort_order?: number }[];
   attachments?: { kind: string; url: string; file_name?: string; sort_order?: number }[];
   created_at: string;
   /* joined from warehouses */
@@ -1814,7 +1814,7 @@ export default function DriverOrders({ hideRequestUi = false, onRefresh }: { hid
                       <div className="flex flex-wrap gap-3 text-xs text-gray-600 mt-1">
                         {sr.cargo_items?.length
                           ? sr.cargo_items.map((item, index) => (
-                            <span key={`${item.cargo_type}-${index}`}>📦 {item.cargo_type}{item.quantity != null ? ` — ${item.quantity}` : ""}</span>
+                            <span key={`${item.cargo_type}-${index}`}>📦 {item.cargo_type}{item.quantity != null ? ` — ${item.quantity} ${item.unit || ""}` : ""}</span>
                           ))
                           : sr.cargo_type && <span>📦 نوع الحمولة: <strong>{sr.cargo_type}</strong></span>}
                         {sr.rep_name && <span>👤 المندوب: <strong>{sr.rep_name}</strong></span>}

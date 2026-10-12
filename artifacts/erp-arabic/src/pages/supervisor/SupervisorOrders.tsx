@@ -82,6 +82,13 @@ interface Order {
   rep_phone?: string | null;
   sla_status?: { stage: string; elapsed_minutes: number; limit_minutes: number; percent: number; status: "ok" | "warning" | "breached" };
 }
+type RoutingCargoItem = {
+  product_id: number | null;
+  cargo_type: string;
+  quantity: number;
+  unit: string;
+};
+interface RoutingProduct { id: number; name: string; unit: string; active: number }
 
 interface SupplyReq {
   id: number; product_name: string; requested_qty: number; unit: string;
@@ -267,6 +274,7 @@ export default function SupervisorOrders() {
     id: number; supply_request_id: number;
     vehicle_plate: string | null; driver_name: string | null; driver_phone: string | null;
     status: string; created_at: string; delivered_at: string | null;
+     cargo_items: RoutingCargoItem[];
     product_name: string; warehouse_name: string | null; destination_division: string | null;
     routing_dispatch_id: number; driver_expense: number; rental: number;
     sr_notes: string | null; requested_by: string | null;
@@ -288,7 +296,7 @@ export default function SupervisorOrders() {
   const [editMyForm,     setEditMyForm]     = useState({
     tariff_id: "", loading_place: "", unloading_place: "",
     override_loading_place: "", override_unloading_place: "", warehouse_id: "",
-    product_name: "", cargo_type: "", destination_division: "", customer_name: "", customer_type: "rental",
+     product_name: "", cargo_type: "", cargo_items: [] as RoutingCargoItem[], destination_division: "", customer_name: "", customer_type: "rental",
     rep_name: "", rep_phone: "", driver_expense: "0", rental: "0",
     route_type: "direct" as "direct" | "via_fusahat",
     vehicle_plate: "", driver_name: "", driver_phone: "", notes: "",
@@ -382,6 +390,7 @@ export default function SupervisorOrders() {
       }
       const body = {
         ...editMyForm,
+        cargo_items: editMyForm.cargo_items,
         tariff_id: editMyForm.tariff_id ? Number(editMyForm.tariff_id) : null,
         tariff_loading_place: editMyForm.loading_place,
         tariff_unloading_place: editMyForm.unloading_place,
@@ -473,7 +482,8 @@ export default function SupervisorOrders() {
   const [routeBranchError, setRouteBranchError] = useState("");
   const [routeCustomers,     setRouteCustomers]     = useState<{id:number;name:string;phone?:string;customer_type:"rental"|"company"}[]>([]);
   const [routeReps,          setRouteReps]          = useState<{id:number;name:string;phone:string}[]>([]);
-  const [routeCargoTypes,    setRouteCargoTypes]    = useState<{id:number;name:string}[]>([]);
+  const [routeProducts,      setRouteProducts]      = useState<RoutingProduct[]>([]);
+  const [routeProductsError, setRouteProductsError] = useState("");
   /* ── Routing form selected values (__ prefix = special sentinel) ── */
   const [routeUnloadingSel,   setRouteUnloadingSel]  = useState("");
   const [routeUnloadingCustom,setRouteUnloadingCustom]=useState("");
@@ -488,9 +498,10 @@ export default function SupervisorOrders() {
   const [routeRepCustom,      setRouteRepCustom]     = useState("");
   const [routeRepPhone,       setRouteRepPhone]      = useState("");
   const [routeCargoSel,       setRouteCargoSel]      = useState("");
-  const [routeCargoCustom,    setRouteCargoCustom]   = useState("");
   const [routeCargoQty,       setRouteCargoQty]      = useState("");
-  const [routeCargoItems,     setRouteCargoItems]    = useState<{cargo_type:string;quantity:number}[]>([]);
+  const [routeCargoItems,     setRouteCargoItems]    = useState<RoutingCargoItem[]>([]);
+  const [editCargoProductId,  setEditCargoProductId] = useState("");
+  const [editCargoQuantity,   setEditCargoQuantity]  = useState("");
   const [routePermitFiles,    setRoutePermitFiles]   = useState<File[]>([]);
   const pendingTariffs = allTariffs.filter(t => t.status === "pending");
   const tariffs        = allTariffs.filter(t => t.status === "approved");
@@ -691,13 +702,22 @@ export default function SupervisorOrders() {
       fetch("/api/warehouses").then(r => r.json()),
       fetch("/api/trip-customers").then(r => r.json()),
       fetch("/api/reps").then(r => r.json()),
-      fetch("/api/routing-cargo-types").then(r => r.ok ? r.json() : []),
-    ]).then(([wh, cu, rp, cargo]) => {
+    ]).then(([wh, cu, rp]) => {
       setRouteWarehouses(Array.isArray(wh) ? wh : []);
       setRouteCustomers(Array.isArray(cu) ? cu : []);
       setRouteReps(Array.isArray(rp) ? rp : []);
-      setRouteCargoTypes(Array.isArray(cargo) ? cargo : []);
     }).catch(() => {});
+    fetch("/api/products")
+      .then(r => {
+        if (!r.ok) throw new Error("تعذر تحميل المنتجات");
+        return r.json();
+      })
+      .then((products: RoutingProduct[]) => {
+        if (!Array.isArray(products)) throw new Error("قائمة المنتجات غير صالحة");
+        setRouteProducts(products.filter(product => product.active !== 0));
+        setRouteProductsError("");
+      })
+      .catch(() => setRouteProductsError("تعذر تحميل قائمة المنتجات"));
     fetch("/api/fleet-vehicles-list")
       .then(r => {
         if (!r.ok) throw new Error("تعذر تحميل فروع السيارات");
@@ -1350,49 +1370,28 @@ export default function SupervisorOrders() {
     setRouteCustomerCustom("");
   };
 
-  const saveRouteCargoType = async (old?: {id:number;name:string}) => {
-    const name = old ? prompt("تعديل نوع الحمولة", old.name)?.trim() : routeCargoCustom.trim();
-    if (!name) return;
-    const r = await fetch(old ? `/api/routing-cargo-types/${old.id}` : "/api/routing-cargo-types", {
-      method: old ? "PUT" : "POST", headers: authHdr(),
-      body: JSON.stringify({ name }),
-    });
-    if (!r.ok) { alert((await r.json().catch(() => ({}))).error || "تعذر حفظ نوع الحمولة"); return; }
-    const saved = await r.json() as { id:number;name:string };
-    setRouteCargoTypes(prev => [...prev.filter(c => c.id !== saved.id), saved].sort((a,b) => a.name.localeCompare(b.name, "ar")));
-    setRouteCargoSel(saved.name);
-    setRouteCargoCustom("");
-  };
-
   const addRouteCargoItem = () => {
-    const cargoType = routeCargoSel.trim();
+    const productId = Number(routeCargoSel);
+    const product = routeProducts.find(item => item.id === productId);
     const quantity = Number(routeCargoQty);
-    if (!cargoType || cargoType === "__custom__") {
-      setRouteSentMsg("اختر نوع الحمولة أولاً");
+    if (!product) {
+      setRouteSentMsg("اختر منتجًا من القائمة أولاً");
       return;
     }
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      setRouteSentMsg("أدخل كمية صحيحة لنوع الحمولة");
+    if (!Number.isSafeInteger(quantity) || quantity <= 0) {
+      setRouteSentMsg("أدخل كمية صحيحة من القطع");
       return;
     }
-    if (routeCargoItems.some(item => item.cargo_type.toLocaleLowerCase() === cargoType.toLocaleLowerCase())) {
-      setRouteSentMsg("نوع الحمولة مضاف بالفعل");
+    if (routeCargoItems.some(item => item.product_id === product.id)) {
+      setRouteSentMsg("المنتج مضاف بالفعل");
       return;
     }
-    setRouteCargoItems(prev => [...prev, { cargo_type: cargoType, quantity }]);
+    setRouteCargoItems(prev => [...prev, {
+      product_id: product.id, cargo_type: product.name, quantity, unit: product.unit || "حبة",
+    }]);
     setRouteCargoSel("");
     setRouteCargoQty("");
     setRouteSentMsg(null);
-  };
-
-  const deleteRouteCargoType = async (cargo: {id:number;name:string}) => {
-    if (!confirm(`حذف "${cargo.name}" من قائمة الاختيارات؟ لن تُمس الرحلات السابقة.`)) return;
-    const r = await fetch(`/api/routing-cargo-types/${cargo.id}`, {
-      method: "DELETE", headers: { Authorization: `Bearer ${localStorage.getItem("mkgh_token") || ""}` },
-    });
-    if (!r.ok) { alert("تعذر حذف نوع الحمولة"); return; }
-    setRouteCargoTypes(prev => prev.filter(c => c.id !== cargo.id));
-    setRouteCargoSel("");
   };
 
   const sendRouting = async (routeType: "via_fusahat" | "direct") => {
@@ -1419,14 +1418,11 @@ export default function SupervisorOrders() {
     if (routeCustomerSel === "__custom__") {
       setRouteSentMsg("أضف العميل الجديد أولاً، ثم أرسل التوجيه"); return;
     }
-    if (routeCargoSel === "__custom__") {
-      setRouteSentMsg("أضف نوع الحمولة الجديد أولاً، ثم أرسل التوجيه"); return;
+    if (routeCargoSel && !routeCargoItems.some(item => String(item.product_id) === routeCargoSel)) {
+      setRouteSentMsg("أضف المنتج والكمية لكل سيارة إلى قائمة الحمولة أولاً"); return;
     }
-    if (routeCargoSel && !routeCargoItems.some(item => item.cargo_type === routeCargoSel)) {
-      setRouteSentMsg("أضف نوع الحمولة والكمية إلى قائمة الرحلة أولاً"); return;
-    }
-    if (routeCargoItems.some(item => !Number.isFinite(item.quantity) || item.quantity <= 0)) {
-      setRouteSentMsg("تحقق من كميات أنواع الحمولة"); return;
+    if (routeCargoItems.some(item => !Number.isSafeInteger(item.quantity) || item.quantity <= 0)) {
+      setRouteSentMsg("تحقق من كميات المنتجات"); return;
     }
     if (routePermitFiles.length > 20 || routePermitFiles.some(file =>
       !["image/jpeg","image/png","image/webp","application/pdf"].includes(file.type) || file.size > 15 * 1024 * 1024
@@ -1453,7 +1449,7 @@ export default function SupervisorOrders() {
       customer_type: routeCustomerType,
       rep_name: selectedRep?.name || (routeRepSel === "__custom__" ? routeRepCustom.trim() : ""),
       rep_phone: selectedRep?.phone || (routeRepSel === "__custom__" ? routeRepPhone.trim() : ""),
-      cargo_type: routeCargoItems[0]?.cargo_type || "",
+       cargo_type: routeCargoItems[0]?.cargo_type || "",
       cargo_items: JSON.stringify(routeCargoItems),
       loading_location_name: loadingLocation.name.trim(),
       loading_location_url: loadingLocation.url.trim(),
@@ -1493,7 +1489,7 @@ export default function SupervisorOrders() {
         setRouteUnloadingLocationCustom({ name: "", url: "" });
         setRouteCustomerSel(""); setRouteCustomerCustom("");
         setRouteRepSel(""); setRouteRepCustom("");
-        setRouteRepPhone(""); setRouteCargoSel(""); setRouteCargoCustom("");
+        setRouteRepPhone(""); setRouteCargoSel("");
         setRouteCargoQty(""); setRouteCargoItems([]); setRoutePermitFiles([]);
         setTimeout(() => setRouteSentMsg(null), 4000);
       } else {
@@ -5675,47 +5671,34 @@ export default function SupervisorOrders() {
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div className="space-y-1.5">
-                          <label className="block text-sm font-bold text-gray-700">نوع الحمولة</label>
+                          <label className="block text-sm font-bold text-gray-700">المنتج والكمية لكل سيارة</label>
                           <div className="flex gap-2">
                             <select value={routeCargoSel} onChange={e => setRouteCargoSel(e.target.value)}
                               className="flex-1 min-w-0 border border-gray-200 rounded-xl px-2.5 py-2 text-sm bg-white">
-                              <option value="">— بدون تحديد —</option>
-                              {routeCargoTypes.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                              <option value="__custom__">+ إضافة نوع جديد...</option>
+                              <option value="">— اختر منتجًا —</option>
+                              {routeProducts.map(product => <option key={product.id} value={String(product.id)}>{product.name} — {product.unit || "حبة"}</option>)}
                             </select>
-                            {routeCargoTypes.find(c => c.name === routeCargoSel) && (
-                              <>
-                                <button type="button" onClick={() => saveRouteCargoType(routeCargoTypes.find(c => c.name === routeCargoSel)!)}
-                                  className="text-sm text-blue-600" title="تعديل النوع">تعديل</button>
-                                <button type="button" onClick={() => deleteRouteCargoType(routeCargoTypes.find(c => c.name === routeCargoSel)!)}
-                                  className="text-sm text-red-600" title="حذف النوع من القائمة">حذف</button>
-                              </>
-                            )}
                           </div>
-                          {routeCargoSel === "__custom__" && (
-                            <div className="flex gap-2">
-                              <input value={routeCargoCustom} onChange={e => setRouteCargoCustom(e.target.value)}
-                                placeholder="اكتب نوع الحمولة" className="min-w-0 flex-1 border border-blue-200 rounded-xl px-2.5 py-2 text-sm" />
-                              <button type="button" onClick={() => saveRouteCargoType()} disabled={!routeCargoCustom.trim()}
-                                className="text-sm font-bold text-blue-700 disabled:opacity-40">إضافة</button>
-                            </div>
-                          )}
+                          {routeProductsError && <p className="text-xs font-semibold text-red-600">{routeProductsError}</p>}
                           <div className="flex gap-2">
-                            <input type="number" min="0.01" step="any" value={routeCargoQty}
-                              onChange={e => setRouteCargoQty(e.target.value)} placeholder="الكمية"
+                            <input type="number" min="1" step="1" value={routeCargoQty}
+                              onChange={e => setRouteCargoQty(e.target.value)} placeholder="الكمية لكل سيارة"
                               className="min-w-0 flex-1 border border-gray-200 rounded-xl px-2.5 py-2 text-sm"
-                              disabled={!routeCargoSel || routeCargoSel === "__custom__"} />
+                              disabled={!routeCargoSel} />
                             <button type="button" onClick={addRouteCargoItem}
-                              disabled={!routeCargoSel || routeCargoSel === "__custom__" || !routeCargoQty}
+                              disabled={!routeCargoSel || !routeCargoQty}
                               className="rounded-xl bg-blue-50 px-3 py-2 text-sm font-bold text-blue-700 disabled:opacity-40">
                               إضافة للحمولة
                             </button>
                           </div>
+                          {routeCargoSel && routeProducts.find(product => String(product.id) === routeCargoSel) && (
+                            <p className="text-[11px] text-gray-500">الوحدة: {routeProducts.find(product => String(product.id) === routeCargoSel)?.unit || "حبة"} · الكمية تُطبق على كل سيارة</p>
+                          )}
                           {routeCargoItems.length > 0 && (
                             <ul className="space-y-1 rounded-xl bg-gray-50 p-2 text-sm">
                               {routeCargoItems.map((item, index) => (
                                 <li key={`${item.cargo_type}-${index}`} className="flex items-center justify-between gap-2">
-                                  <span>{item.cargo_type} — {item.quantity}</span>
+                                  <span>{item.cargo_type} — {item.quantity} {item.unit || "حبة"} لكل سيارة</span>
                                   <button type="button" onClick={() => setRouteCargoItems(prev => prev.filter((_, i) => i !== index))}
                                     className="text-red-600">إزالة</button>
                                 </li>
@@ -5907,6 +5890,7 @@ export default function SupervisorOrders() {
                                           warehouse_id: trip.warehouse_id == null ? "" : String(trip.warehouse_id),
                                           product_name: trip.product_name || "",
                                           cargo_type: trip.cargo_type || "",
+                                          cargo_items: trip.cargo_items || [],
                                           destination_division: trip.destination_division || "",
                                           customer_name: trip.customer_name || "",
                                           customer_type: trip.customer_type || "rental",
@@ -5922,6 +5906,8 @@ export default function SupervisorOrders() {
                                         });
                                         setEditMyPermitFile(null);
                                         setEditMyPermitError("");
+                                        setEditCargoProductId("");
+                                        setEditCargoQuantity("");
                                       }}
                                       className="rounded-lg border border-blue-200 bg-blue-50 p-2 text-blue-600 hover:bg-blue-100"
                                       title="تعديل بيانات التوجيه"
@@ -6028,13 +6014,62 @@ export default function SupervisorOrders() {
                           </div>
                         );
                       })}
+                      <div className="space-y-2 rounded-xl border border-blue-100 bg-blue-50/50 p-3 sm:col-span-2 lg:col-span-3">
+                        <label className="block text-xs font-bold text-gray-700">المنتج والكمية لكل سيارة</label>
+                        <div className="flex flex-col gap-2 sm:flex-row">
+                          <select value={editCargoProductId} onChange={e => setEditCargoProductId(e.target.value)}
+                            className="min-w-0 flex-1 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm">
+                            <option value="">اختر منتجًا</option>
+                            {routeProducts.map(product => <option key={product.id} value={String(product.id)}>{product.name} — {product.unit || "حبة"}</option>)}
+                          </select>
+                          <input type="number" min="1" step="1" value={editCargoQuantity}
+                            onChange={e => setEditCargoQuantity(e.target.value)} placeholder="الكمية لكل سيارة"
+                            className="w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm sm:w-40" />
+                          <button type="button" onClick={() => {
+                            const product = routeProducts.find(item => String(item.id) === editCargoProductId);
+                            const quantity = Number(editCargoQuantity);
+                            if (!product || !Number.isSafeInteger(quantity) || quantity <= 0) {
+                              setEditMyPermitError("اختر منتجًا وأدخل كمية صحيحة لكل سيارة");
+                              return;
+                            }
+                            if (editMyForm.cargo_items.some(item => item.product_id === product.id)) {
+                              setEditMyPermitError("المنتج مضاف بالفعل");
+                              return;
+                            }
+                            setEditMyForm(form => ({
+                              ...form,
+                              cargo_items: [...form.cargo_items, {
+                                product_id: product.id, cargo_type: product.name, quantity, unit: product.unit || "حبة",
+                              }],
+                              cargo_type: form.cargo_items.length ? form.cargo_type : product.name,
+                            }));
+                            setEditCargoProductId("");
+                            setEditCargoQuantity("");
+                            setEditMyPermitError("");
+                          }} className="rounded-xl bg-blue-700 px-4 py-2 text-sm font-bold text-white">
+                            إضافة منتج
+                          </button>
+                        </div>
+                        {editMyForm.cargo_items.length > 0 && (
+                          <ul className="space-y-1 rounded-lg bg-white p-2 text-sm">
+                            {editMyForm.cargo_items.map((item, index) => (
+                              <li key={`${item.product_id ?? item.cargo_type}-${index}`} className="flex items-center justify-between gap-2">
+                                <span>{item.cargo_type} — {item.quantity} {item.unit || "حبة"} لكل سيارة</span>
+                                <button type="button" onClick={() => setEditMyForm(form => ({
+                                  ...form,
+                                  cargo_items: form.cargo_items.filter((_, itemIndex) => itemIndex !== index),
+                                }))} className="text-red-600">إزالة</button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <p className="text-[11px] text-gray-500">تظهر الحمولة للسائق والفسوحات، وتُضاف للمستودع بعد اعتماد الاستلام.</p>
+                      </div>
                       {[
                         ["loading_place", "مكان التحميل"],
                         ["unloading_place", "مكان التنزيل"],
                         ["override_loading_place", "فرع / تحميل بديل"],
                         ["override_unloading_place", "فرع / تنزيل بديل"],
-                        ["product_name", "اسم المادة"],
-                        ["cargo_type", "نوع الحمولة"],
                         ["destination_division", "الفرعية / وجهة التوجيه"],
                         ["customer_name", "العميل"],
                         ["rep_name", "اسم المندوب"],

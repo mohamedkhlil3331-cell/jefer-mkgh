@@ -178,12 +178,12 @@ function finalizeWarehouseRequest(
 
   const children = db.prepare(`
     SELECT id, status, vehicle_plate, driver_name, driver_phone, driver_loading_image,
-           permit_image_url, invoice_image_url, reference_no
+           permit_image_url, invoice_image_url, reference_no, cargo_items_json
     FROM supply_request_trips WHERE supply_request_id=?
   `).all(sr.id) as {
     id: number; status: string; vehicle_plate: string | null; driver_name: string | null;
     driver_phone: string | null; driver_loading_image: string | null; permit_image_url: string | null;
-    invoice_image_url: string | null; reference_no: string | null;
+    invoice_image_url: string | null; reference_no: string | null; cargo_items_json: string | null;
   }[];
   const eligible = children.filter(t => ["delivered_to_warehouse", "pending_warehouse_approval"].includes(t.status));
   const unfinished = children.some(t =>
@@ -200,18 +200,74 @@ function finalizeWarehouseRequest(
   `).run(sr.id, ...acceptedStatuses).changes;
   if (claimed !== 1) return { success: false, missing: false, conflict: true, undelivered: false };
 
-  const inventoryQuantity = sr.routing_dispatch_id ? eligible.length : sr.requested_qty;
-  if (sr.warehouse_id && inventoryQuantity > 0) {
-    const existing = db.prepare(
-      "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=?"
-    ).get(sr.warehouse_id, sr.product_name) as { id: number } | undefined;
-    if (existing) {
-      db.prepare("UPDATE warehouse_items SET quantity=quantity+?, last_updated=datetime('now') WHERE id=?")
-        .run(inventoryQuantity, existing.id);
+  if (sr.warehouse_id) {
+    const routingProducts = new Map<number, { name: string; unit: string; quantity: number }>();
+    if (sr.routing_dispatch_id) {
+      for (const trip of eligible) {
+        for (const cargo of readRoutingCargoItems(trip.cargo_items_json)) {
+          let productId = cargo.product_id || null;
+          let product = productId
+            ? db.prepare("SELECT id, name, unit FROM products WHERE id=?").get(productId) as
+              { id: number; name: string; unit: string | null } | undefined
+            : undefined;
+          if (!product) {
+            product = db.prepare(
+              "SELECT id, name, unit FROM products WHERE lower(trim(name))=lower(trim(?)) LIMIT 1"
+            ).get(cargo.cargo_type) as { id: number; name: string; unit: string | null } | undefined;
+            productId = product?.id ?? null;
+          }
+          if (!productId || !product || !cargo.quantity) continue;
+          const current = routingProducts.get(productId);
+          routingProducts.set(productId, {
+            name: product.name,
+            unit: product.unit || cargo.unit || "حبة",
+            quantity: (current?.quantity || 0) + cargo.quantity,
+          });
+        }
+      }
+    }
+
+    if (routingProducts.size) {
+      for (const [productId, product] of routingProducts) {
+        const existing = db.prepare(
+          "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_id=?"
+        ).get(sr.warehouse_id, productId) as { id: number } | undefined;
+        if (existing) {
+          db.prepare("UPDATE warehouse_items SET quantity=quantity+?, unit=?, last_updated=datetime('now') WHERE id=?")
+            .run(product.quantity, product.unit, existing.id);
+        } else {
+          const unlinked = db.prepare(
+            "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=? AND product_id IS NULL LIMIT 1"
+          ).get(sr.warehouse_id, product.name) as { id: number } | undefined;
+          if (unlinked) {
+            db.prepare("UPDATE warehouse_items SET product_id=?, quantity=quantity+?, unit=?, last_updated=datetime('now') WHERE id=?")
+              .run(productId, product.quantity, product.unit, unlinked.id);
+          } else {
+            db.prepare(
+              "INSERT INTO warehouse_items (warehouse_id, product_name, product_id, quantity, unit, min_stock) VALUES (?,?,?,?,?,0)"
+            ).run(sr.warehouse_id, product.name, productId, product.quantity, product.unit);
+          }
+        }
+        const stock = db.prepare(
+          "SELECT COALESCE(SUM(quantity),0) AS total FROM warehouse_items WHERE product_id=?"
+        ).get(productId) as { total: number };
+        db.prepare("UPDATE products SET stock=? WHERE id=?").run(stock.total, productId);
+      }
     } else {
-      db.prepare(
-        "INSERT INTO warehouse_items (warehouse_id, product_name, quantity, unit, min_stock, max_stock) VALUES (?,?,?,?,0,0)"
-      ).run(sr.warehouse_id, sr.product_name, inventoryQuantity, sr.unit || "وحدة");
+      const inventoryQuantity = sr.routing_dispatch_id ? eligible.length : sr.requested_qty;
+      if (inventoryQuantity > 0) {
+        const existing = db.prepare(
+          "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=?"
+        ).get(sr.warehouse_id, sr.product_name) as { id: number } | undefined;
+        if (existing) {
+          db.prepare("UPDATE warehouse_items SET quantity=quantity+?, last_updated=datetime('now') WHERE id=?")
+            .run(inventoryQuantity, existing.id);
+        } else {
+          db.prepare(
+            "INSERT INTO warehouse_items (warehouse_id, product_name, quantity, unit, min_stock, max_stock) VALUES (?,?,?,?,0,0)"
+          ).run(sr.warehouse_id, sr.product_name, inventoryQuantity, sr.unit || "وحدة");
+        }
+      }
     }
   }
 
@@ -485,7 +541,13 @@ router.put("/supply-requests/:id/assign-vehicle", (req, res) => {
 // ── رحلات طلبات التوريد (supply_request_trips) ────────────────────────────────
 
 /** GET trips — for driver (by driver_phone) or supervisor (by supply_request_id) or active only */
-type RoutingCargoItem = { cargo_type: string; quantity?: number | null; sort_order?: number };
+type RoutingCargoItem = {
+  cargo_type: string;
+  quantity?: number | null;
+  sort_order?: number;
+  product_id?: number | null;
+  unit?: string | null;
+};
 type RoutingTripAttachment = {
   kind: "supervisor_permit" | "fsohat_permit" | "driver_invoice" | string;
   url: string;
@@ -503,7 +565,16 @@ function readRoutingCargoItems(raw: unknown): RoutingCargoItem[] {
       if (!item || typeof item.cargo_type !== "string" || !item.cargo_type.trim()) return [];
       const quantity = item.quantity == null ? null : Number(item.quantity);
       if (quantity !== null && (!Number.isFinite(quantity) || quantity <= 0)) return [];
-      return [{ cargo_type: item.cargo_type.trim(), quantity, sort_order: Number(item.sort_order ?? index) }];
+      const productId = Number.isSafeInteger(Number(item.product_id)) && Number(item.product_id) > 0
+        ? Number(item.product_id)
+        : null;
+      return [{
+        cargo_type: item.cargo_type.trim(),
+        quantity,
+        sort_order: Number(item.sort_order ?? index),
+        product_id: productId,
+        unit: typeof item.unit === "string" && item.unit.trim() ? item.unit.trim() : null,
+      }];
     });
   } catch { return []; }
 }
@@ -1299,11 +1370,12 @@ router.put("/supply-requests/:id/approve", (req, res) => {
     if (sr.status !== "pending_warehouse_approval") return { conflict: true as const };
 
     const children = db.prepare(`
-      SELECT id, status, vehicle_plate, driver_name, driver_phone, driver_loading_image,
+    SELECT id, status, vehicle_plate, driver_name, driver_phone, driver_loading_image, cargo_items_json,
              permit_image_url, invoice_image_url, reference_no
       FROM supply_request_trips WHERE supply_request_id=?
     `).all(sr.id) as {
-      id: number; status: string; vehicle_plate: string | null; driver_name: string | null;
+    id: number; status: string; vehicle_plate: string | null; driver_name: string | null;
+    cargo_items_json: string | null;
       driver_phone: string | null; driver_loading_image: string | null; permit_image_url: string | null;
       invoice_image_url: string | null; reference_no: string | null;
     }[];
@@ -1321,20 +1393,76 @@ router.put("/supply-requests/:id/approve", (req, res) => {
     `).run(sr.id).changes;
     if (claimed !== 1) return { conflict: true as const };
 
-    const inventoryQuantity = sr.routing_dispatch_id ? eligible.length : sr.requested_qty;
-    if (sr.warehouse_id && inventoryQuantity > 0) {
-      const existing = db.prepare(
-        "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=?"
-      ).get(sr.warehouse_id, sr.product_name) as { id: number } | undefined;
-      if (existing) {
-        db.prepare("UPDATE warehouse_items SET quantity=quantity+?, last_updated=datetime('now') WHERE id=?")
-          .run(inventoryQuantity, existing.id);
-      } else {
-        db.prepare(
-          "INSERT INTO warehouse_items (warehouse_id, product_name, quantity, unit, min_stock, max_stock) VALUES (?,?,?,?,0,0)"
-        ).run(sr.warehouse_id, sr.product_name, inventoryQuantity, sr.unit || "وحدة");
+  if (sr.warehouse_id) {
+    const routingProducts = new Map<number, { name: string; unit: string; quantity: number }>();
+    if (sr.routing_dispatch_id) {
+      for (const trip of eligible) {
+        for (const cargo of readRoutingCargoItems(trip.cargo_items_json)) {
+          let productId = cargo.product_id || null;
+          let product = productId
+            ? db.prepare("SELECT id, name, unit FROM products WHERE id=?").get(productId) as
+              { id: number; name: string; unit: string | null } | undefined
+            : undefined;
+          if (!product) {
+            product = db.prepare(
+              "SELECT id, name, unit FROM products WHERE lower(trim(name))=lower(trim(?)) LIMIT 1"
+            ).get(cargo.cargo_type) as { id: number; name: string; unit: string | null } | undefined;
+            productId = product?.id ?? null;
+          }
+          if (!productId || !product || !cargo.quantity) continue;
+          const current = routingProducts.get(productId);
+          routingProducts.set(productId, {
+            name: product.name,
+            unit: product.unit || cargo.unit || "حبة",
+            quantity: (current?.quantity || 0) + cargo.quantity,
+          });
+        }
       }
     }
+
+    if (routingProducts.size) {
+      for (const [productId, product] of routingProducts) {
+        const existing = db.prepare(
+          "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_id=?"
+        ).get(sr.warehouse_id, productId) as { id: number } | undefined;
+        if (existing) {
+          db.prepare("UPDATE warehouse_items SET quantity=quantity+?, unit=?, last_updated=datetime('now') WHERE id=?")
+            .run(product.quantity, product.unit, existing.id);
+        } else {
+          const unlinked = db.prepare(
+            "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=? AND product_id IS NULL LIMIT 1"
+          ).get(sr.warehouse_id, product.name) as { id: number } | undefined;
+          if (unlinked) {
+            db.prepare("UPDATE warehouse_items SET product_id=?, quantity=quantity+?, unit=?, last_updated=datetime('now') WHERE id=?")
+              .run(productId, product.quantity, product.unit, unlinked.id);
+          } else {
+            db.prepare(
+              "INSERT INTO warehouse_items (warehouse_id, product_name, product_id, quantity, unit, min_stock) VALUES (?,?,?,?,?,0)"
+            ).run(sr.warehouse_id, product.name, productId, product.quantity, product.unit);
+          }
+        }
+        const stock = db.prepare(
+          "SELECT COALESCE(SUM(quantity),0) AS total FROM warehouse_items WHERE product_id=?"
+        ).get(productId) as { total: number };
+        db.prepare("UPDATE products SET stock=? WHERE id=?").run(stock.total, productId);
+      }
+    } else {
+      const inventoryQuantity = sr.routing_dispatch_id ? eligible.length : sr.requested_qty;
+      if (inventoryQuantity > 0) {
+        const existing = db.prepare(
+          "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=?"
+        ).get(sr.warehouse_id, sr.product_name) as { id: number } | undefined;
+        if (existing) {
+          db.prepare("UPDATE warehouse_items SET quantity=quantity+?, last_updated=datetime('now') WHERE id=?")
+            .run(inventoryQuantity, existing.id);
+        } else {
+          db.prepare(
+            "INSERT INTO warehouse_items (warehouse_id, product_name, quantity, unit, min_stock, max_stock) VALUES (?,?,?,?,0,0)"
+          ).run(sr.warehouse_id, sr.product_name, inventoryQuantity, sr.unit || "وحدة");
+        }
+      }
+    }
+  }
 
     db.prepare(`
       UPDATE supply_request_trips SET status='completed', updated_at=datetime('now')

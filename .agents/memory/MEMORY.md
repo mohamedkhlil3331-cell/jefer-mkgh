@@ -22,6 +22,7 @@
 - [SQLite deployment writer fencing](sqlite-writer-fencing.md) — a stale server must reject mutations and close; the new server claims backup authority before listening.
 - [Legacy uploads at publish](legacy-uploads-publish.md) — preserving the SQLite backup alone does not preserve files stored on a published server's local disk.
 - [Routing bonus continuity](routing-bonus-continuity.md) — preserve the existing tariff bonus calculation; show its saved value on new trip logs without creating a second payout.
+- [Routing cargo quantities](routing-cargo-quantities.md) — routing cargo comes from catalog products; entered quantity applies to each truck and is preserved through clearance, driver views, and warehouse receipt.
 - [Bulker tariff accounting](bulker-tariff-accounting.md) — treat the selected tariff and completed trip as accounting snapshots; do not recalculate past trips from later order edits.
 - [Closed-month tariff snapshots](closed-month-tariff-snapshots.md) — preserve old trip tariff values outside locked trip rows before any tariff change; never backfill by updating closed-month trips.
 - [Production compute restart](production-compute-restart.md) — workspace “Restart compute” does not restart a published Autoscale backend; republishing is the documented production restart path.
