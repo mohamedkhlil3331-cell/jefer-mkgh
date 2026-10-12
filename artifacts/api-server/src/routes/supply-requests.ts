@@ -650,7 +650,7 @@ function listTripAttachments(row: Record<string, unknown>): RoutingTripAttachmen
 }
 
 router.get("/supply-request-trips", (req, res) => {
-  const { driver_phone, supply_request_id, active_only } = req.query;
+  const { driver_phone, supply_request_id, active_only, warehouse_id } = req.query;
   let sql = `
     SELECT t.id, t.supply_request_id, t.vehicle_plate, t.driver_name, t.driver_phone,
            t.status, t.driver_loading_image, t.permit_number, t.loaded_at, t.delivered_at,
@@ -680,6 +680,7 @@ router.get("/supply-request-trips", (req, res) => {
   const params: unknown[] = [];
   if (driver_phone)       { sql += " AND t.driver_phone=?";                         params.push(driver_phone); }
   if (supply_request_id)  { sql += " AND t.supply_request_id=?";                   params.push(supply_request_id); }
+  if (warehouse_id)       { sql += " AND sr.warehouse_id=?";                        params.push(warehouse_id); }
   if (active_only === "1") { sql += " AND t.status NOT IN ('completed','rejected')"; }
   if (req.query.include_archived !== "1") { sql += " AND (t.archived_at IS NULL)"; }
   sql += " ORDER BY t.created_at DESC";

@@ -28,8 +28,13 @@ interface SupplyRequest {
   vehicle_plate?: string; driver_name?: string; driver_phone?: string;
   invoice_image?: string; driver_loading_image?: string;
   cargo_type?: string; redirect_location?: string;
-  parent_id?: number; warehouse_id?: number; warehouse_name?: string;
+  parent_id?: number; warehouse_id?: number; warehouse_name?: string; routing_dispatch_id?: number | null;
   batch_id?: string; notes?: string;
+}
+interface RoutingTripStatus {
+  id: number; supply_request_id: number; vehicle_plate?: string | null;
+  driver_name?: string | null; driver_phone?: string | null; status: string;
+  routing_dispatch_id?: number | null;
 }
 interface TrailerConfig {
   id: number; name: string; product_category: string; trailer_capacity: number; min_threshold: number; approved_qty: number; unit: string;
@@ -95,6 +100,7 @@ export default function WarehouseManagerDashboard() {
   const [warehouse, setWarehouse] = useState<WarehouseInfo | null>(null);
   const [items, setItems] = useState<WarehouseItem[]>([]);
   const [requests, setRequests] = useState<SupplyRequest[]>([]);
+  const [routingTrips, setRoutingTrips] = useState<RoutingTripStatus[]>([]);
   const [trailerConfigs, setTrailerConfigs] = useState<TrailerConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [timeFilter, setTimeFilter] = useRememberedState("warehouse-manager-time-filter", "month" as TimeFilter);
@@ -312,9 +318,10 @@ export default function WarehouseManagerDashboard() {
 
       if (myWh) {
         setWarehouse(myWh);
-        const [whData, reqs, configs, settings, wOrders, vts, prods, repsData] = await Promise.all([
+        const [whData, reqs, tripRows, configs, settings, wOrders, vts, prods, repsData] = await Promise.all([
           fetch(`/api/warehouses/${myWh.id}`).then(r => r.json()),
           fetch(`/api/supply-requests?warehouse_id=${myWh.id}`).then(r => r.json()),
+          fetch(`/api/supply-request-trips?warehouse_id=${myWh.id}&active_only=1`).then(r => r.json()),
           fetch("/api/trailer-configs").then(r => r.json()),
           fetch("/api/invoice-settings").then(r => r.json()),
           fetch(`/api/warehouses/${myWh.id}/orders`).then(r => r.json()),
@@ -324,6 +331,7 @@ export default function WarehouseManagerDashboard() {
         ]);
         setItems(Array.isArray(whData.items) ? whData.items : []);
         setRequests(Array.isArray(reqs) ? reqs : []);
+        setRoutingTrips(Array.isArray(tripRows) ? tripRows.filter((trip: RoutingTripStatus) => trip.routing_dispatch_id) : []);
         setTrailerConfigs(Array.isArray(configs) ? configs : []);
         setAutoRep(settings?.auto_replenishment === 1);
         setWarehouseOrders(Array.isArray(wOrders) ? wOrders : []);
@@ -350,6 +358,12 @@ export default function WarehouseManagerDashboard() {
   const activeTrips      = useMemo(() => requests.filter(r =>
     ["pending_permit","supervisor_assigned","in_transit","loaded","delivered_to_warehouse","pending_warehouse_approval"].includes(r.status)
   ), [requests]);
+  const activeTripCount  = useMemo(() => activeTrips.reduce(
+    (count, request) => count + (request.routing_dispatch_id
+      ? routingTrips.filter(trip => trip.supply_request_id === request.id).length
+      : 1),
+    0,
+  ), [activeTrips, routingTrips]);
   const redirectedTrips  = useMemo(() => requests.filter(r => r.status === "redirected"), [requests]);
   const completedTrips   = useMemo(() => requests.filter(r => ["received","completed"].includes(r.status)), [requests]);
   const incomingByProduct = useMemo(() => {
@@ -1495,26 +1509,32 @@ export default function WarehouseManagerDashboard() {
             <>
               {activeTrips.length > 0 && (
                 <div className="space-y-3">
-                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">رحلات نشطة ({activeTrips.length})</p>
+                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">رحلات نشطة ({activeTripCount})</p>
                   {activeTrips.map(r => {
                     const isOpen = redirectId === r.id;
                     const SC_MAP: Record<string, { label: string; color: string }> = {
                       pending_permit:             { label: "بانتظار مسؤل الفسوحات 📋",  color: "bg-amber-100 text-amber-700"   },
                       supervisor_assigned:        { label: "✅ تم تعيين السيارة",          color: "bg-blue-100 text-blue-700"    },
+                      assigned:                   { label: "بانتظار الفسح 📋",             color: "bg-amber-100 text-amber-700"   },
                       in_transit:                 { label: "في الطريق 🚛",               color: "bg-indigo-100 text-indigo-700" },
-                      loaded:                     { label: "جارٍ التحميل 📦",            color: "bg-cyan-100 text-cyan-700"    },
+                      loaded:                     { label: "تم التحميل — في الطريق 📦", color: "bg-cyan-100 text-cyan-700"    },
                       delivered_to_warehouse:     { label: "وصل المستودع 🏁",            color: "bg-teal-100 text-teal-700"    },
                       pending_warehouse_approval: { label: "بانتظار الموافقة ⏳",         color: "bg-purple-100 text-purple-700" },
                     };
                     const sc = SC_MAP[r.status] || { label: r.status, color: "bg-gray-100 text-gray-600" };
-                    const hasVehicleInfo = !!(r.vehicle_plate || r.driver_name || r.driver_phone);
+                    const vehicleTrips = r.routing_dispatch_id
+                      ? routingTrips.filter(trip => trip.supply_request_id === r.id)
+                      : [];
+                    const hasVehicleInfo = !vehicleTrips.length && !!(r.vehicle_plate || r.driver_name || r.driver_phone);
                     return (
                       <div key={r.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${r.status === "supervisor_assigned" && hasVehicleInfo ? "border-blue-200" : "border-blue-100"}`}>
                         <div className="p-4">
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex-1">
                               <div className="flex items-center gap-2 flex-wrap mb-1">
-                                <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${sc.color}`}>{sc.label}</span>
+                                  <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${sc.color}`}>
+                                    {vehicleTrips.length ? "حالة كل سيارة أدناه" : sc.label}
+                                  </span>
                               </div>
                               <div className="font-bold text-gray-900">{r.product_name}</div>
                               <div className="text-sm text-gray-500">{r.requested_qty?.toLocaleString("ar-SA")} {r.unit}</div>
@@ -1541,6 +1561,23 @@ export default function WarehouseManagerDashboard() {
                                     </span>
                                   )}
                                   {r.cargo_type && <span className="text-gray-500">📦 {r.cargo_type}</span>}
+                                </div>
+                              )}
+                              {vehicleTrips.length > 0 && (
+                                <div className="mt-2 space-y-1.5 rounded-xl border border-blue-100 bg-blue-50/60 p-2.5">
+                                  <div className="text-[11px] font-bold text-gray-500">حالة سيارات التوجيه</div>
+                                  {vehicleTrips.map(trip => {
+                                    const tripStatus = SC_MAP[trip.status] || { label: trip.status, color: "bg-gray-100 text-gray-600" };
+                                    return (
+                                      <div key={trip.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white px-3 py-2 text-xs">
+                                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                                          {trip.vehicle_plate && <span className="font-bold text-blue-800">🚛 {trip.vehicle_plate}</span>}
+                                          {trip.driver_name && <span className="text-gray-600">👤 {trip.driver_name}</span>}
+                                        </div>
+                                        <span className={`rounded-full px-2 py-1 font-bold ${tripStatus.color}`}>{tripStatus.label}</span>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
