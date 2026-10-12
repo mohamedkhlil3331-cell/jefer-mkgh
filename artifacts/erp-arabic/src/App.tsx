@@ -57,6 +57,7 @@ import CompanySettingsPage from "@/pages/admin/CompanySettingsPage";
 import RepTargetsPage from "@/pages/admin/RepTargetsPage";
 import WarehouseManagerDashboard from "@/pages/warehouse/WarehouseManagerDashboard";
 import AIChatWidget from "@/components/AIChatWidget";
+import FloatingCalculator from "@/components/FloatingCalculator";
 import VehicleExpenses from "@/pages/vehicle/VehicleExpenses";
 import VehicleTypeDefsPage from "@/pages/admin/VehicleTypeDefsPage";
 import BulkerSupervisorPage from "@/pages/supervisor/BulkerSupervisorPage";
@@ -404,6 +405,7 @@ function App() {
                 <WouterRouter base={base}>
                   <SiteAnalyticsTracker />
                   <AuthGate />
+                  <FloatingCalculator />
                 </WouterRouter>
               </CartProvider>
             </AuthProvider>

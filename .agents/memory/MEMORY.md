@@ -40,3 +40,4 @@
 - [GitHub CLI authentication](github-cli-auth.md) — Replit's GitHub API connection does not authenticate shell `git push`; configure Git transport credentials separately without exposing or persisting the token in Git config.
 - [Automatic GitHub push preference](git-push-preference.md) — after requested work is verified, push assistant-made changes for this project to the configured GitHub branch.
 - [Hostinger destination](hostinger-direction.md) — the user plans to move this project's hosting, storage, and traffic data to Hostinger later.
+- [ERP calculator independence](calculator-independence.md) — keep calculator operations client-only and separate from ERP business data, APIs, and workflows.
