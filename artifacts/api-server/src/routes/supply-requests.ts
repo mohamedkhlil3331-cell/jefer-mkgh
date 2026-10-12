@@ -155,6 +155,119 @@ type WarehouseFinalizationResult = {
   undelivered: boolean;
 };
 
+function updateRoutingRequestAggregateStatus(requestId: number): void {
+  const trips = db.prepare(
+    "SELECT status FROM supply_request_trips WHERE supply_request_id=?"
+  ).all(requestId) as { status: string }[];
+  if (!trips.length) return;
+
+  const resolved = trips.every(t => ["completed", "cancelled", "rejected"].includes(t.status));
+  const allArrived = trips.every(t =>
+    ["delivered_to_warehouse", "pending_warehouse_approval", "completed", "cancelled", "rejected"].includes(t.status)
+  );
+  if (resolved) {
+    db.prepare("UPDATE supply_requests SET status='completed', updated_at=datetime('now') WHERE id=? AND status NOT IN ('cancelled','rejected')").run(requestId);
+  } else if (allArrived) {
+    db.prepare("UPDATE supply_requests SET status='delivered_to_warehouse', updated_at=datetime('now') WHERE id=? AND status NOT IN ('cancelled','rejected')").run(requestId);
+  }
+}
+
+function finalizeRoutingTrip(tripId: number, acceptedStatuses: string[]): { success: boolean; missing?: boolean; conflict?: boolean; notRouting?: boolean } {
+  const trip = db.prepare(`
+    SELECT t.id, t.supply_request_id, t.status, t.vehicle_plate, t.cargo_items_json,
+           sr.warehouse_id, sr.routing_dispatch_id, sr.product_name, sr.unit
+    FROM supply_request_trips t
+    JOIN supply_requests sr ON sr.id=t.supply_request_id
+    WHERE t.id=?
+  `).get(tripId) as {
+    id: number; supply_request_id: number; status: string; vehicle_plate: string | null;
+    cargo_items_json: string | null; warehouse_id: number | null; routing_dispatch_id: number | null;
+    product_name: string; unit: string;
+  } | undefined;
+  if (!trip) return { success: false, missing: true };
+  if (!trip.routing_dispatch_id || !trip.warehouse_id) return { success: false, notRouting: true };
+  if (!acceptedStatuses.includes(trip.status)) return { success: false, conflict: true };
+
+  const claimed = db.prepare(`
+    UPDATE supply_request_trips SET status='completed', updated_at=datetime('now')
+    WHERE id=? AND status IN (${acceptedStatuses.map(() => "?").join(",")})
+  `).run(trip.id, ...acceptedStatuses).changes;
+  if (claimed !== 1) return { success: false, conflict: true };
+
+  const cargoItems = readRoutingCargoItems(trip.cargo_items_json);
+  const products = new Map<number, { name: string; unit: string; quantity: number }>();
+  for (const cargo of cargoItems) {
+    let productId = cargo.product_id || null;
+    let product = productId
+      ? db.prepare("SELECT id, name, unit FROM products WHERE id=?").get(productId) as
+        { id: number; name: string; unit: string | null } | undefined
+      : undefined;
+    if (!product) {
+      product = db.prepare(
+        "SELECT id, name, unit FROM products WHERE lower(trim(name))=lower(trim(?)) LIMIT 1"
+      ).get(cargo.cargo_type) as { id: number; name: string; unit: string | null } | undefined;
+      productId = product?.id ?? null;
+    }
+    if (!productId || !product || !cargo.quantity) continue;
+    const current = products.get(productId);
+    products.set(productId, {
+      name: product.name,
+      unit: product.unit || cargo.unit || "حبة",
+      quantity: (current?.quantity || 0) + cargo.quantity,
+    });
+  }
+
+  if (products.size) {
+    for (const [productId, product] of products) {
+      const existing = db.prepare(
+        "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_id=?"
+      ).get(trip.warehouse_id, productId) as { id: number } | undefined;
+      if (existing) {
+        db.prepare("UPDATE warehouse_items SET quantity=quantity+?, unit=?, last_updated=datetime('now') WHERE id=?")
+          .run(product.quantity, product.unit, existing.id);
+      } else {
+        const unlinked = db.prepare(
+          "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=? AND product_id IS NULL LIMIT 1"
+        ).get(trip.warehouse_id, product.name) as { id: number } | undefined;
+        if (unlinked) {
+          db.prepare("UPDATE warehouse_items SET product_id=?, quantity=quantity+?, unit=?, last_updated=datetime('now') WHERE id=?")
+            .run(productId, product.quantity, product.unit, unlinked.id);
+        } else {
+          db.prepare(
+            "INSERT INTO warehouse_items (warehouse_id, product_name, product_id, quantity, unit, min_stock) VALUES (?,?,?,?,?,0)"
+          ).run(trip.warehouse_id, product.name, productId, product.quantity, product.unit);
+        }
+      }
+      const stock = db.prepare(
+        "SELECT COALESCE(SUM(quantity),0) AS total FROM warehouse_items WHERE product_id=?"
+      ).get(productId) as { total: number };
+      db.prepare("UPDATE products SET stock=? WHERE id=?").run(stock.total, productId);
+    }
+  } else if (trip.product_name) {
+    const existing = db.prepare(
+      "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=?"
+    ).get(trip.warehouse_id, trip.product_name) as { id: number } | undefined;
+    if (existing) {
+      db.prepare("UPDATE warehouse_items SET quantity=quantity+1, last_updated=datetime('now') WHERE id=?").run(existing.id);
+    } else {
+      db.prepare(
+        "INSERT INTO warehouse_items (warehouse_id, product_name, quantity, unit, min_stock, max_stock) VALUES (?,?,1,?,0,0)"
+      ).run(trip.warehouse_id, trip.product_name, trip.unit || "وحدة");
+    }
+  }
+
+  if (trip.vehicle_plate) {
+    db.prepare("UPDATE fleet_vehicles SET status='available' WHERE plate_number=?").run(trip.vehicle_plate);
+    db.prepare("UPDATE driver_profiles SET status='نشط' WHERE vehicle_plate=?").run(trip.vehicle_plate);
+  }
+  syncRoutingTripLog(trip.id, {
+    createIfMissing: true,
+    fallbackDate: new Date().toISOString().slice(0, 10),
+  });
+  updateRoutingRequestAggregateStatus(trip.supply_request_id);
+  return { success: true };
+}
+
 /**
  * Finalizes an arrived supply request using the same stock, trip-snapshot, and
  * vehicle-release work as the warehouse approval action. Callers must run this
@@ -371,15 +484,26 @@ router.put("/warehouse-approval-settings", requireRole(["admin", "supervisor"]),
     let skipped = 0;
     if (!requires_approval && warehouseIds.length) {
       const arrived = db.prepare(`
-        SELECT id FROM supply_requests
+        SELECT id, routing_dispatch_id, status FROM supply_requests
         WHERE warehouse_id IN (${warehouseIds.map(() => "?").join(",")})
-          AND status IN ('delivered_to_warehouse','pending_warehouse_approval')
+          AND status NOT IN ('completed','cancelled','rejected')
         ORDER BY id
-      `).all(...warehouseIds) as { id: number }[];
+      `).all(...warehouseIds) as { id: number; routing_dispatch_id: number | null; status: string }[];
       for (const request of arrived) {
-        const result = finalizeWarehouseRequest(request.id, ["delivered_to_warehouse", "pending_warehouse_approval"]);
-        if (result.success) finalized++;
-        else skipped++;
+        if (request.routing_dispatch_id) {
+          const trips = db.prepare(`
+            SELECT id FROM supply_request_trips
+            WHERE supply_request_id=? AND status IN ('delivered_to_warehouse','pending_warehouse_approval')
+          `).all(request.id) as { id: number }[];
+          for (const trip of trips) {
+            if (finalizeRoutingTrip(trip.id, ["delivered_to_warehouse", "pending_warehouse_approval"]).success) finalized++;
+            else skipped++;
+          }
+        } else if (["delivered_to_warehouse", "pending_warehouse_approval"].includes(request.status)) {
+          const result = finalizeWarehouseRequest(request.id, ["delivered_to_warehouse", "pending_warehouse_approval"]);
+          if (result.success) finalized++;
+          else skipped++;
+        }
       }
     }
     return { finalized, skipped };
@@ -681,7 +805,11 @@ router.get("/supply-request-trips", (req, res) => {
   if (driver_phone)       { sql += " AND t.driver_phone=?";                         params.push(driver_phone); }
   if (supply_request_id)  { sql += " AND t.supply_request_id=?";                   params.push(supply_request_id); }
   if (warehouse_id)       { sql += " AND sr.warehouse_id=?";                        params.push(warehouse_id); }
-  if (active_only === "1") { sql += " AND t.status NOT IN ('completed','rejected')"; }
+  if (active_only === "1") {
+    sql += req.query.include_completed === "1"
+      ? " AND t.status!='rejected'"
+      : " AND t.status NOT IN ('completed','rejected')";
+  }
   if (req.query.include_archived !== "1") { sql += " AND (t.archived_at IS NULL)"; }
   sql += " ORDER BY t.created_at DESC";
   const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
@@ -921,21 +1049,28 @@ router.put("/supply-request-trips/:id/driver-deliver", (req, res) => {
       `).run(`routing-trip:${tripId}`);
     }
 
-    const activeChildren = db.prepare(`
-      SELECT COUNT(*) AS total,
-             SUM(CASE WHEN status IN ('delivered_to_warehouse','pending_warehouse_approval','completed','cancelled','rejected') THEN 1 ELSE 0 END) AS done
-      FROM supply_request_trips WHERE supply_request_id=?
-    `).get(trip.supply_request_id) as { total: number; done: number };
     let autoFinalized = false;
-    if (activeChildren.total > 0 && activeChildren.total === activeChildren.done) {
-      const parentStatus = (!isRoutingDispatch || hasWarehouse) ? "delivered_to_warehouse" : "completed";
-      db.prepare(`
-        UPDATE supply_requests SET status=?, updated_at=datetime('now')
-        WHERE id=? AND status NOT IN ('completed','cancelled')
-      `).run(parentStatus, trip.supply_request_id);
-      if (hasWarehouse && !approvalRequired && parentStatus === "delivered_to_warehouse") {
-        const finalized = finalizeWarehouseRequest(Number(trip.supply_request_id), ["delivered_to_warehouse"]);
-        autoFinalized = finalized.success;
+    if (isRoutingDispatch && hasWarehouse) {
+      if (!approvalRequired) {
+        autoFinalized = finalizeRoutingTrip(Number(tripId), ["delivered_to_warehouse"]).success;
+      }
+      updateRoutingRequestAggregateStatus(Number(trip.supply_request_id));
+    } else {
+      const activeChildren = db.prepare(`
+        SELECT COUNT(*) AS total,
+               SUM(CASE WHEN status IN ('delivered_to_warehouse','pending_warehouse_approval','completed','cancelled','rejected') THEN 1 ELSE 0 END) AS done
+        FROM supply_request_trips WHERE supply_request_id=?
+      `).get(trip.supply_request_id) as { total: number; done: number };
+      if (activeChildren.total > 0 && activeChildren.total === activeChildren.done) {
+        const parentStatus = isRoutingDispatch ? "completed" : "delivered_to_warehouse";
+        db.prepare(`
+          UPDATE supply_requests SET status=?, updated_at=datetime('now')
+          WHERE id=? AND status NOT IN ('completed','cancelled')
+        `).run(parentStatus, trip.supply_request_id);
+        if (!isRoutingDispatch && hasWarehouse && !approvalRequired) {
+          const finalized = finalizeWarehouseRequest(Number(trip.supply_request_id), ["delivered_to_warehouse"]);
+          autoFinalized = finalized.success;
+        }
       }
     }
 
@@ -1295,15 +1430,81 @@ router.put("/supply-requests/:id/confirm-redirect-delivery", (req, res) => {
 });
 
 // ── مدير المستودع: تأكيد الاستلام (→ pending_warehouse_approval, بدون إضافة مخزون بعد) ──
+router.put("/supply-request-trips/:id/warehouse-receive", (req, res) => {
+  const tripId = Number(req.params.id);
+  if (!Number.isSafeInteger(tripId) || tripId <= 0) return void res.status(400).json({ error: "رقم الرحلة غير صحيح" });
+  const requestInfo = db.prepare(`
+    SELECT sr.routing_dispatch_id, sr.warehouse_id
+    FROM supply_request_trips t JOIN supply_requests sr ON sr.id=t.supply_request_id
+    WHERE t.id=?
+  `).get(tripId) as { routing_dispatch_id: number | null; warehouse_id: number | null } | undefined;
+  if (!requestInfo) return void res.status(404).json({ error: "الرحلة غير موجودة" });
+  if (!requestInfo.routing_dispatch_id || !requestInfo.warehouse_id) {
+    return void res.status(409).json({ error: "هذا الإجراء مخصص لرحلات التوجيه المرتبطة بمستودع" });
+  }
+  const access = routingWarehouseAccess(req, requestInfo.warehouse_id);
+  if (access === "unauthenticated") return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
+  if (access === "forbidden") return void res.status(403).json({ error: "يجب أن تكون مسؤول المستودع المعيّن لهذا الطلب" });
+
+  const receive = db.transaction(() => {
+    const trip = db.prepare("SELECT status FROM supply_request_trips WHERE id=?").get(tripId) as { status: string } | undefined;
+    if (!trip) return { missing: true as const };
+    if (trip.status !== "delivered_to_warehouse") return { conflict: true as const };
+    if (!warehouseRequiresApproval(requestInfo.warehouse_id)) {
+      const finalized = finalizeRoutingTrip(tripId, ["delivered_to_warehouse"]);
+      return finalized.success ? { completed: true as const } : { conflict: true as const };
+    }
+    const changed = db.prepare(`
+      UPDATE supply_request_trips SET status='pending_warehouse_approval', updated_at=datetime('now')
+      WHERE id=? AND status='delivered_to_warehouse'
+    `).run(tripId).changes;
+    if (changed !== 1) return { conflict: true as const };
+    syncRoutingTripLog(tripId);
+    const parent = db.prepare("SELECT supply_request_id FROM supply_request_trips WHERE id=?").get(tripId) as
+      { supply_request_id: number };
+    updateRoutingRequestAggregateStatus(parent.supply_request_id);
+    return { completed: false as const };
+  });
+  const result = receive();
+  if (result.missing) return void res.status(404).json({ error: "الرحلة غير موجودة" });
+  if (result.conflict) return void res.status(409).json({ error: "لا يمكن استلام هذه السيارة في حالتها الحالية" });
+  res.json({
+    message: result.completed
+      ? "تم استلام حمولة السيارة، وتحديث المخزون وإتاحتها ✅"
+      : "تم تأكيد استلام السيارة — بانتظار الموافقة",
+  });
+});
+
+router.put("/supply-request-trips/:id/warehouse-approve", (req, res) => {
+  const tripId = Number(req.params.id);
+  if (!Number.isSafeInteger(tripId) || tripId <= 0) return void res.status(400).json({ error: "رقم الرحلة غير صحيح" });
+  const requestInfo = db.prepare(`
+    SELECT sr.routing_dispatch_id, sr.warehouse_id
+    FROM supply_request_trips t JOIN supply_requests sr ON sr.id=t.supply_request_id
+    WHERE t.id=?
+  `).get(tripId) as { routing_dispatch_id: number | null; warehouse_id: number | null } | undefined;
+  if (!requestInfo) return void res.status(404).json({ error: "الرحلة غير موجودة" });
+  if (!requestInfo.routing_dispatch_id || !requestInfo.warehouse_id) {
+    return void res.status(409).json({ error: "هذا الإجراء مخصص لرحلات التوجيه المرتبطة بمستودع" });
+  }
+  const access = routingWarehouseAccess(req, requestInfo.warehouse_id);
+  if (access === "unauthenticated") return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
+  if (access === "forbidden") return void res.status(403).json({ error: "يجب أن تكون مسؤول المستودع المعيّن لهذا الطلب" });
+
+  const result = db.transaction(() => finalizeRoutingTrip(tripId, ["pending_warehouse_approval"]))();
+  if (result.missing) return void res.status(404).json({ error: "الرحلة غير موجودة" });
+  if (result.notRouting) return void res.status(409).json({ error: "الرحلة ليست مرتبطة بتوجيه للمستودع" });
+  if (result.conflict) return void res.status(409).json({ error: "يجب تأكيد استلام هذه السيارة قبل الموافقة" });
+  res.json({ message: "تمت الموافقة — حمولتها أضيفت للمخزون والسيارة أصبحت متاحة ✅" });
+});
+
 router.put("/supply-requests/:id/receive", (req, res) => {
   const { receive_notes } = req.body;
   const requestInfo = db.prepare("SELECT routing_dispatch_id, warehouse_id FROM supply_requests WHERE id=?")
     .get(req.params.id) as { routing_dispatch_id: number | null; warehouse_id: number | null } | undefined;
   if (!requestInfo) return void res.status(404).json({ error: "الطلب غير موجود" });
   if (requestInfo.routing_dispatch_id) {
-    const access = routingWarehouseAccess(req, requestInfo.warehouse_id);
-    if (access === "unauthenticated") return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
-    if (access === "forbidden") return void res.status(403).json({ error: "يجب أن تكون مسؤول المستودع المعيّن لهذا الطلب" });
+    return void res.status(409).json({ error: "يجب تأكيد استلام كل سيارة من سجل رحلتها بشكل مستقل" });
   }
   const receive = db.transaction(() => {
     const sr = db.prepare("SELECT status FROM supply_requests WHERE id=?").get(req.params.id) as { status: string } | undefined;
@@ -1353,9 +1554,7 @@ router.put("/supply-requests/:id/approve", (req, res) => {
     .get(req.params.id) as { routing_dispatch_id: number | null; warehouse_id: number | null } | undefined;
   if (!requestInfo) return void res.status(404).json({ error: "الطلب غير موجود" });
   if (requestInfo.routing_dispatch_id) {
-    const access = routingWarehouseAccess(req, requestInfo.warehouse_id);
-    if (access === "unauthenticated") return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
-    if (access === "forbidden") return void res.status(403).json({ error: "يجب أن تكون مسؤول المستودع المعيّن لهذا الطلب" });
+    return void res.status(409).json({ error: "يجب الموافقة على كل سيارة من سجل رحلتها بشكل مستقل" });
   }
   const approve = db.transaction(() => {
     const sr = db.prepare("SELECT * FROM supply_requests WHERE id=?").get(req.params.id) as {

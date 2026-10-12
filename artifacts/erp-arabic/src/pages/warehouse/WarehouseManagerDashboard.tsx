@@ -129,6 +129,8 @@ export default function WarehouseManagerDashboard() {
   const [receiveNotesId, setReceiveNotesId] = useState<number | null>(null);
   const [receiveNotesText, setReceiveNotesText] = useState("");
   const [approvingId, setApprovingId] = useState<number | null>(null);
+  const [receivingRoutingTripId, setReceivingRoutingTripId] = useState<number | null>(null);
+  const [approvingRoutingTripId, setApprovingRoutingTripId] = useState<number | null>(null);
   const [dispatchOrders, setDispatchOrders] = useState<DispatchOrder[]>([]);
   const [showDispatchForm, setShowDispatchForm] = useState(false);
   const [dispatchForm, setDispatchForm] = useState({
@@ -321,7 +323,7 @@ export default function WarehouseManagerDashboard() {
         const [whData, reqs, tripRows, configs, settings, wOrders, vts, prods, repsData] = await Promise.all([
           fetch(`/api/warehouses/${myWh.id}`).then(r => r.json()),
           fetch(`/api/supply-requests?warehouse_id=${myWh.id}`).then(r => r.json()),
-          fetch(`/api/supply-request-trips?warehouse_id=${myWh.id}&active_only=1`).then(r => r.json()),
+          fetch(`/api/supply-request-trips?warehouse_id=${myWh.id}&active_only=1&include_completed=1`).then(r => r.json()),
           fetch("/api/trailer-configs").then(r => r.json()),
           fetch("/api/invoice-settings").then(r => r.json()),
           fetch(`/api/warehouses/${myWh.id}/orders`).then(r => r.json()),
@@ -360,7 +362,7 @@ export default function WarehouseManagerDashboard() {
   ), [requests]);
   const activeTripCount  = useMemo(() => activeTrips.reduce(
     (count, request) => count + (request.routing_dispatch_id
-      ? routingTrips.filter(trip => trip.supply_request_id === request.id).length
+      ? routingTrips.filter(trip => trip.supply_request_id === request.id && !["completed", "cancelled", "rejected"].includes(trip.status)).length
       : 1),
     0,
   ), [activeTrips, routingTrips]);
@@ -480,6 +482,28 @@ export default function WarehouseManagerDashboard() {
       await fetch(`/api/supply-requests/${id}/approve`, { method: "PUT" });
       load();
     } finally { setApprovingId(null); }
+  };
+
+  const receiveRoutingTrip = async (tripId: number) => {
+    setReceivingRoutingTripId(tripId);
+    try {
+      const response = await fetch(`/api/supply-request-trips/${tripId}/warehouse-receive`, { method: "PUT" });
+      const result = await response.json();
+      if (!response.ok) { alert(result.error || "تعذر استلام السيارة"); return; }
+      load();
+    } catch { alert("تعذر الاتصال بالخادم"); }
+    finally { setReceivingRoutingTripId(null); }
+  };
+
+  const approveRoutingTrip = async (tripId: number) => {
+    setApprovingRoutingTripId(tripId);
+    try {
+      const response = await fetch(`/api/supply-request-trips/${tripId}/warehouse-approve`, { method: "PUT" });
+      const result = await response.json();
+      if (!response.ok) { alert(result.error || "تعذرت الموافقة على السيارة"); return; }
+      load();
+    } catch { alert("تعذر الاتصال بالخادم"); }
+    finally { setApprovingRoutingTripId(null); }
   };
 
   const editSupplyReq = async () => {
@@ -1520,6 +1544,8 @@ export default function WarehouseManagerDashboard() {
                       loaded:                     { label: "تم التحميل — في الطريق 📦", color: "bg-cyan-100 text-cyan-700"    },
                       delivered_to_warehouse:     { label: "وصل المستودع 🏁",            color: "bg-teal-100 text-teal-700"    },
                       pending_warehouse_approval: { label: "بانتظار الموافقة ⏳",         color: "bg-purple-100 text-purple-700" },
+                      completed:                  { label: "تم الاستلام — السيارة متاحة ✅", color: "bg-green-100 text-green-700" },
+                      cancelled:                  { label: "ملغاة",                         color: "bg-gray-100 text-gray-500" },
                     };
                     const sc = SC_MAP[r.status] || { label: r.status, color: "bg-gray-100 text-gray-600" };
                     const vehicleTrips = r.routing_dispatch_id
@@ -1574,14 +1600,32 @@ export default function WarehouseManagerDashboard() {
                                           {trip.vehicle_plate && <span className="font-bold text-blue-800">🚛 {trip.vehicle_plate}</span>}
                                           {trip.driver_name && <span className="text-gray-600">👤 {trip.driver_name}</span>}
                                         </div>
-                                        <span className={`rounded-full px-2 py-1 font-bold ${tripStatus.color}`}>{tripStatus.label}</span>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <span className={`rounded-full px-2 py-1 font-bold ${tripStatus.color}`}>{tripStatus.label}</span>
+                                          {trip.status === "delivered_to_warehouse" && (
+                                            <button
+                                              onClick={() => receiveRoutingTrip(trip.id)}
+                                              disabled={receivingRoutingTripId === trip.id}
+                                              className="rounded-lg bg-green-600 px-2.5 py-1.5 font-bold text-white hover:bg-green-700 disabled:opacity-50">
+                                              {receivingRoutingTripId === trip.id ? "جاري..." : "استلام السيارة"}
+                                            </button>
+                                          )}
+                                          {trip.status === "pending_warehouse_approval" && (
+                                            <button
+                                              onClick={() => approveRoutingTrip(trip.id)}
+                                              disabled={approvingRoutingTripId === trip.id}
+                                              className="rounded-lg bg-[#103c68] px-2.5 py-1.5 font-bold text-white hover:bg-[#0d3158] disabled:opacity-50">
+                                              {approvingRoutingTripId === trip.id ? "جاري..." : "موافقة السيارة"}
+                                            </button>
+                                          )}
+                                        </div>
                                       </div>
                                     );
                                   })}
                                 </div>
                               )}
                             </div>
-                            {(["in_transit","loaded","delivered_to_warehouse","pending_warehouse_approval"].includes(r.status)) && (
+                            {!r.routing_dispatch_id && (["in_transit","loaded","delivered_to_warehouse","pending_warehouse_approval"].includes(r.status)) && (
                               <div className="flex flex-col gap-1.5 flex-shrink-0">
                                 {["in_transit","loaded","delivered_to_warehouse"].includes(r.status) && (
                                   <>
