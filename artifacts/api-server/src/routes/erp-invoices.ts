@@ -1,16 +1,11 @@
 import { Router } from "express";
 import multer from "multer";
-import path from "path";
-import { UPLOADS_PATH } from "../lib/db.js";
 import db from "../lib/db.js";
+import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
 const router = Router();
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_PATH),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}${path.extname(file.originalname)}`),
-});
-const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({ storage: r2MulterStorage(name => uniqueUploadName("invoice-", name)), limits: { fileSize: 10 * 1024 * 1024 } });
 
 router.get("/invoices", (_req, res) => {
   const rows = db.prepare("SELECT * FROM invoices ORDER BY created_at DESC").all();

@@ -1,14 +1,11 @@
 import { Router } from "express";
 import multer from "multer";
-import db, { UPLOADS_PATH } from "../lib/db.js";
+import db from "../lib/db.js";
+import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
 const router = Router();
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_PATH),
-  filename:    (_req, file,  cb) => cb(null, `${Date.now()}-${file.originalname.replace(/\s+/g, "_")}`),
-});
-const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
+const upload = multer({ storage: r2MulterStorage(name => uniqueUploadName("factory-", name)), limits: { fileSize: 15 * 1024 * 1024 } });
 
 function genOrderNumber() {
   const now = new Date();

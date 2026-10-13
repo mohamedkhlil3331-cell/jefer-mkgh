@@ -4,6 +4,10 @@ import { hostname, homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import fs from "fs";
 import path from "path";
+import { createWriteStream } from "node:fs";
+import { pipeline } from "node:stream/promises";
+import { getR2Client, getR2Object, headR2Object, isR2Configured, r2BucketName } from "./r2-storage.js";
+import { PutObjectCommand } from "@aws-sdk/client-s3";
 
 const BUCKET_ID = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
 // Use separate backup keys for production vs development so they never
@@ -123,13 +127,66 @@ export async function downloadDbBackupToStaging(dbPath: string): Promise<boolean
   }
   assertDevelopmentWriterLock("restore");
   const isProduction = process.env.NODE_ENV === "production";
+  const stagingPath = dbPath + ".staging";
+  if (isR2Configured) {
+    try {
+      const object = await getR2Object(BACKUP_KEY);
+      if (object?.Body) {
+        fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+        await pipeline(object.Body as NodeJS.ReadableStream, createWriteStream(stagingPath));
+        const stagedDb = new Database(stagingPath, { readonly: true, fileMustExist: true });
+        try {
+          const check = stagedDb.pragma("quick_check") as { quick_check?: string }[];
+          if (!check.length || check.some(row => row.quick_check !== "ok")) {
+            throw new Error("Cloudflare R2 SQLite backup failed quick_check");
+          }
+        } finally {
+          stagedDb.close();
+        }
+        const backupTime = object.LastModified?.getTime() || 0;
+        const localTime = fs.existsSync(dbPath)
+          ? Math.max(fs.statSync(dbPath).mtimeMs, !isProduction && fs.existsSync(dbPath + "-wal") ? fs.statSync(dbPath + "-wal").mtimeMs : 0)
+          : 0;
+        if (isProduction || backupTime > localTime) {
+          const previousPaths: { original: string; previous: string }[] = [];
+          try {
+            for (const ext of ["", "-wal", "-shm"]) {
+              const original = dbPath + ext;
+              if (!fs.existsSync(original)) continue;
+              const previous = original + ".previous";
+              if (fs.existsSync(previous)) fs.unlinkSync(previous);
+              fs.renameSync(original, previous);
+              previousPaths.push({ original, previous });
+            }
+            fs.renameSync(stagingPath, dbPath);
+          } catch (swapError) {
+            if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+            for (const { original, previous } of previousPaths.reverse()) {
+              if (fs.existsSync(previous)) fs.renameSync(previous, original);
+            }
+            throw swapError;
+          }
+          for (const { previous } of previousPaths) if (fs.existsSync(previous)) fs.unlinkSync(previous);
+          console.log("[db-sync] DB restored from Cloudflare R2 backup");
+          return true;
+        }
+        fs.unlinkSync(stagingPath);
+        console.log("[db-sync] Local db is newer than the R2 backup — no restore needed");
+        return false;
+      }
+    } catch (error) {
+      if (fs.existsSync(stagingPath)) fs.unlinkSync(stagingPath);
+      throw error;
+    }
+  } else if (isProduction) {
+    throw new Error("[db-sync] Cloudflare R2 is not configured in production; refusing to use an older backup");
+  }
   if (!BUCKET_ID) {
     if (isProduction) {
       throw new Error("[db-sync] Object Storage is unavailable in production; refusing to start without the live database backup");
     }
     return false;
   }
-  const stagingPath = dbPath + ".staging";
   try {
     const storage = makeStorage();
     const bucket = storage.bucket(BUCKET_ID);
@@ -236,11 +293,41 @@ export async function uploadDbBackup(
   assertDevelopmentWriterLock("backup");
   const run = backupQueue.then(async () => {
     if (backupPauseDepth > 0 && !allowWhilePaused) return;
-    if (!BUCKET_ID || !fs.existsSync(dbPath)) return;
+    if ((!isR2Configured && !BUCKET_ID) || !fs.existsSync(dbPath)) return;
     // Flush WAL into the main file FIRST. checkpointFn must throw unless every
     // committed frame is present in the main DB file.
     if (checkpointFn) checkpointFn();
 
+    if (isR2Configured) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const incumbent = await headR2Object(BACKUP_KEY);
+        const incumbentStartedAt = Number(incumbent?.Metadata?.writerstartedat || 0);
+        if (incumbentStartedAt > PROCESS_STARTED_AT) {
+          console.error(`[db-sync] Backup writer conflict: current=${WRITER_ID}; R2 has a newer owner`);
+          fenceStaleWriter();
+          throw new Error("[db-sync] Refusing backup from an older server process after a newer deployment became authoritative");
+        }
+        try {
+          await getR2Client().send(new PutObjectCommand({
+            Bucket: r2BucketName(),
+            Key: BACKUP_KEY,
+            Body: fs.createReadStream(dbPath),
+            ContentLength: fs.statSync(dbPath).size,
+            Metadata: getBackupWriterMetadata(),
+            ...(incumbent?.ETag ? { IfMatch: incumbent.ETag } : { IfNoneMatch: "*" }),
+          }));
+          console.log("[db-sync] DB backed up to Cloudflare R2");
+          return;
+        } catch (error) {
+          const status = (error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode;
+          if (attempt === 0 && (status === 409 || status === 412)) continue;
+          throw error;
+        }
+      }
+      throw new Error("[db-sync] Could not acquire the Cloudflare R2 backup writer fence");
+    }
+
+    if (!BUCKET_ID) return;
     const storage = makeStorage();
     const bucket = storage.bucket(BUCKET_ID);
     const file = bucket.file(BACKUP_KEY);

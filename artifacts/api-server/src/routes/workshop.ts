@@ -12,14 +12,12 @@ import { createJournalEntry } from "../lib/journal.js";
 import { isSysAdminToken } from "./auth.js";
 import path from "path";
 import fs from "fs";
+import { deleteR2Object, r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const diskUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOADS_PATH),
-    filename: (_req, file, cb) => cb(null, `reimb_${Date.now()}${path.extname(file.originalname)}`),
-  }),
+  storage: r2MulterStorage(name => uniqueUploadName("reimb-", name)),
   limits: { fileSize: 10 * 1024 * 1024 },
 });
 
@@ -1977,10 +1975,13 @@ router.put("/reimbursement-requests/:id/reimburse", (req, res) => {
   res.json({ ok: true });
 });
 
-router.delete("/reimbursement-requests/:id", (req, res) => {
+router.delete("/reimbursement-requests/:id", async (req, res) => {
   const row = db.prepare("SELECT invoice_image_url FROM reimbursement_requests WHERE id=?").get(req.params.id) as { invoice_image_url: string | null } | undefined;
   if (row?.invoice_image_url) {
     const fname = row.invoice_image_url.split("/").pop()!;
+    if (/^[A-Za-z0-9._-]+$/.test(fname)) {
+      try { await deleteR2Object(`app-uploads/${fname}`); } catch { /* legacy or already removed */ }
+    }
     try { fs.unlinkSync(`${UPLOADS_PATH}/${fname}`); } catch { /* ignore */ }
   }
   db.prepare("DELETE FROM reimbursement_requests WHERE id=?").run(req.params.id);

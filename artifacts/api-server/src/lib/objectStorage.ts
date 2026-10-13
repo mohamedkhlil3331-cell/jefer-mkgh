@@ -14,8 +14,18 @@ import {
   resolveHostingerUploadPath,
 } from "./hostinger-filesystem-storage.js";
 import { isFilesystemStorageMode } from "./db-sync.js";
+import { createR2UploadUrl, deleteR2Object, getR2Object, headR2Object, isR2Configured, r2BucketName } from "./r2-storage.js";
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
+const R2_OBJECT_PREFIX = "app-objects/";
+
+class R2StoredObject {
+  constructor(readonly key: string) {}
+
+  async delete(): Promise<void> {
+    await deleteR2Object(this.key);
+  }
+}
 
 export const objectStorageClient = new Storage({
   credentials: {
@@ -102,6 +112,18 @@ export class ObjectStorageService {
   }
 
   async downloadObject(file: File, cacheTtlSec: number = 3600): Promise<Response> {
+    if (file instanceof R2StoredObject) {
+      const object = await getR2Object(file.key);
+      if (!object?.Body) throw new ObjectNotFoundError();
+      const nodeStream = object.Body as NodeJS.ReadableStream;
+      const headers: Record<string, string> = {
+        "Content-Type": object.ContentType || "application/octet-stream",
+        "Cache-Control": `private, max-age=${cacheTtlSec}`,
+        "X-Content-Type-Options": "nosniff",
+      };
+      if (object.ContentLength != null) headers["Content-Length"] = String(object.ContentLength);
+      return new Response(Readable.toWeb(nodeStream as import("node:stream").Readable) as ReadableStream, { headers });
+    }
     if (file instanceof HostingerObjectFile) {
       const [metadata] = await file.getMetadata();
       const nodeStream = file.createReadStream();
@@ -135,6 +157,9 @@ export class ObjectStorageService {
 
   async getObjectEntityUploadURL(): Promise<string> {
     if (isFilesystemStorageMode()) return issueHostingerUpload("uploads");
+    if (isR2Configured) {
+      return createR2UploadUrl(`${R2_OBJECT_PREFIX}uploads/${randomUUID()}`);
+    }
     const privateObjectDir = this.getPrivateObjectDir();
     if (!privateObjectDir) {
       throw new Error(
@@ -158,6 +183,9 @@ export class ObjectStorageService {
 
   async getBranchDocumentUploadURL(): Promise<string> {
     if (isFilesystemStorageMode()) return issueHostingerUpload("branch-documents");
+    if (isR2Configured) {
+      return createR2UploadUrl(`${R2_OBJECT_PREFIX}branch-documents/${randomUUID()}`);
+    }
     const privateObjectDir = this.getPrivateObjectDir();
     const objectId = randomUUID();
     const fullPath = `${privateObjectDir}/branch-documents/${objectId}`;
@@ -182,6 +210,10 @@ export class ObjectStorageService {
     }
 
     const entityId = parts.slice(1).join("/");
+    if (isR2Configured) {
+      const r2Object = await headR2Object(`${R2_OBJECT_PREFIX}${entityId}`);
+      if (r2Object) return new R2StoredObject(`${R2_OBJECT_PREFIX}${entityId}`) as unknown as File;
+    }
     if (isFilesystemStorageMode()) {
       const objectFile = new HostingerObjectFile(`private/${entityId}`);
       const [exists] = await objectFile.exists();
@@ -220,6 +252,17 @@ export class ObjectStorageService {
       return rawPath;
     }
     if (!rawPath.startsWith("https://storage.googleapis.com/")) {
+      if (isR2Configured) {
+        try {
+          const url = new URL(rawPath);
+          if (url.hostname === `${process.env.CLOUDFLARE_R2_ACCOUNT_ID}.r2.cloudflarestorage.com`) {
+            const segments = url.pathname.split("/").filter(Boolean);
+            if (segments[0] === r2BucketName() && segments[1]?.startsWith(R2_OBJECT_PREFIX)) {
+              return `/objects/${segments.slice(1).join("/") .slice(R2_OBJECT_PREFIX.length)}`;
+            }
+          }
+        } catch { /* already a normalized path */ }
+      }
       return rawPath;
     }
 

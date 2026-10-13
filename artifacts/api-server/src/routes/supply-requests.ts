@@ -1,41 +1,14 @@
 import { Router } from "express";
 import multer from "multer";
-import fs from "fs";
-import db, { UPLOADS_PATH } from "../lib/db.js";
-import { makeStorage } from "../lib/db-sync.js";
+import db from "../lib/db.js";
 import { isSysAdminToken } from "./auth.js";
 import { deletePendingRoutingTripLog, syncRoutingTripLog } from "./routing-trip-log.js";
+import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
-const diskStorage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_PATH),
-  filename:    (_req, file, cb) => cb(null,
-    `sr-${Date.now()}-${file.originalname.replace(/\s+/g, "_").replace(/[^A-Za-z0-9._-]/g, "_")}`),
+const upload = multer({
+  storage: r2MulterStorage(name => uniqueUploadName("sr-", name)),
+  limits: { fileSize: 15 * 1024 * 1024 },
 });
-// Multer only calls the route after _handleFile succeeds. Persist before saving
-// the URL in SQLite, so a new published instance can still serve the same URL.
-const storage: multer.StorageEngine = {
-  _handleFile(req, file, cb) {
-    diskStorage._handleFile(req, file, (error, info) => {
-      if (error) return cb(error);
-      const saved = info as { path: string; filename: string; size: number };
-      const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
-      if (!bucketId) {
-        fs.unlink(saved.path, () => cb(new Error("Object Storage is unavailable for uploaded files")));
-        return;
-      }
-      makeStorage().bucket(bucketId).upload(saved.path, {
-        destination: `legacy-uploads/${saved.filename}`,
-        metadata: { contentType: file.mimetype || "application/octet-stream" },
-      }).then(() => cb(null, info)).catch(uploadError => {
-        fs.unlink(saved.path, () => cb(uploadError));
-      });
-    });
-  },
-  _removeFile(req, file, cb) {
-    diskStorage._removeFile(req, file, cb);
-  },
-};
-const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
 
 const router = Router();
 

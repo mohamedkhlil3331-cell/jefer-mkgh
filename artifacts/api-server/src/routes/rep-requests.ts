@@ -1,17 +1,9 @@
 import { Router } from "express";
 import multer from "multer";
-import path from "path";
-import { fileURLToPath } from "url";
 import db from "../lib/db.js";
+import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const UPLOADS_PATH = path.join(__dirname, "..", "..", "uploads");
-
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_PATH),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
-});
-const upload = multer({ storage, limits: { fileSize: 15 * 1024 * 1024 } });
+const upload = multer({ storage: r2MulterStorage(name => uniqueUploadName("rep-", name)), limits: { fileSize: 15 * 1024 * 1024 } });
 
 const router = Router();
 

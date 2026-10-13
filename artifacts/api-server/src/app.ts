@@ -1,5 +1,6 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
+import compression from "compression";
 import pinoHttp from "pino-http";
 import fs from "node:fs";
 import path from "path";
@@ -9,6 +10,7 @@ import { logger } from "./lib/logger.js";
 import db, { UPLOADS_PATH } from "./lib/db.js";
 import { isBackupWriterFenced, isFilesystemStorageMode, makeStorage } from "./lib/db-sync.js";
 import { mutationSessionGuard } from "./middlewares/mutation-session-guard.js";
+import { getR2Object, isR2Configured } from "./lib/r2-storage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,6 +30,7 @@ app.use(
   }),
 );
 
+app.use(compression({ threshold: 1024 }));
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
@@ -82,6 +85,21 @@ app.use("/api/uploads", express.static(UPLOADS_PATH));
 app.get("/api/uploads/:file", async (req, res, next) => {
   const name = req.params.file;
   if (typeof name !== "string" || !/^[A-Za-z0-9._-]+$/.test(name)) return next();
+  if (isR2Configured) {
+    try {
+      const object = await getR2Object(`app-uploads/${name}`);
+      if (object?.Body) {
+        res.setHeader("Content-Type", object.ContentType || "application/octet-stream");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Cache-Control", object.CacheControl || "private, max-age=300");
+        if (object.ContentLength != null) res.setHeader("Content-Length", object.ContentLength);
+        (object.Body as import("node:stream").Readable).pipe(res);
+        return;
+      }
+    } catch (error) {
+      return next(error);
+    }
+  }
   if (isFilesystemStorageMode()) {
     return res.status(404).json({ error: "الملف غير موجود؛ قد يلزم إعادة رفع النسخة الأصلية" });
   }

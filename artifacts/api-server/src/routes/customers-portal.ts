@@ -1,14 +1,10 @@
 import { Router } from "express";
 import multer from "multer";
-import path from "path";
-import db, { UPLOADS_PATH } from "../lib/db.js";
+import db from "../lib/db.js";
+import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
 const router = Router();
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, UPLOADS_PATH),
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-transfer${path.extname(file.originalname)}`),
-});
-const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 } });
+const upload = multer({ storage: r2MulterStorage(name => uniqueUploadName("transfer-", name)), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ── Customer list ──────────────────────────────────────────────────────────
 router.get("/portal/customers", (_req, res) => {

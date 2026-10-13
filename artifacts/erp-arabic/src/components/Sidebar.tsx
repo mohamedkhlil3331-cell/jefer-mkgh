@@ -455,14 +455,38 @@ export default function Sidebar() {
 
   useEffect(() => {
     if (!user) return;
-    const check = () =>
-      fetch(`/api/notifications?phone=${user.phone}`)
-        .then(r => r.json())
-        .then(n => setUnread(Array.isArray(n) ? n.filter((x: Record<string, unknown>) => !x.read).length : 0))
-        .catch(() => {});
-    check();
-    const ti = setInterval(check, 30000);
-    return () => clearInterval(ti);
+    let timer: number | undefined;
+    let request: AbortController | undefined;
+    const active = () => document.visibilityState === "visible" && document.hasFocus();
+    const synchronize = () => {
+      if (timer !== undefined) window.clearInterval(timer);
+      timer = undefined;
+      request?.abort();
+      request = undefined;
+      if (!active()) return;
+      const check = () => {
+        if (!active()) return;
+        request?.abort();
+        request = new AbortController();
+        fetch(`/api/notifications?phone=${encodeURIComponent(user.phone)}`, { signal: request.signal })
+          .then(r => r.ok ? r.json() : [])
+          .then(n => setUnread(Array.isArray(n) ? n.filter((x: Record<string, unknown>) => !x.read).length : 0))
+          .catch(() => {});
+      };
+      check();
+      timer = window.setInterval(check, 180000);
+    };
+    window.addEventListener("focus", synchronize);
+    window.addEventListener("blur", synchronize);
+    document.addEventListener("visibilitychange", synchronize);
+    synchronize();
+    return () => {
+      if (timer !== undefined) window.clearInterval(timer);
+      request?.abort();
+      window.removeEventListener("focus", synchronize);
+      window.removeEventListener("blur", synchronize);
+      document.removeEventListener("visibilitychange", synchronize);
+    };
   }, [user]);
 
   useEffect(() => {

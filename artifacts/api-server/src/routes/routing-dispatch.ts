@@ -1,11 +1,11 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
-import fs from "fs";
 import multer from "multer";
 import path from "path";
-import db, { UPLOADS_PATH } from "../lib/db.js";
+import db from "../lib/db.js";
 import { isSysAdminToken } from "./auth.js";
 import { finalizeDisabledWarehouseRoutingRequest } from "./supply-requests.js";
 import { deletePendingRoutingTripLog, syncRoutingTripLog } from "./routing-trip-log.js";
+import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
 const router = Router();
 
@@ -24,13 +24,7 @@ function requireRoutingSupervisor(req: Request, res: Response, next: NextFunctio
   next();
 }
 const permitUpload = multer({
-  storage: multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, UPLOADS_PATH),
-    filename: (_req, file, cb) => {
-      const safeName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, "_");
-      cb(null, `routing-permit-${Date.now()}-${safeName}`);
-    },
-  }),
+  storage: r2MulterStorage(name => uniqueUploadName("routing-permit-", name)),
   limits: { fileSize: 15 * 1024 * 1024 },
 });
 
@@ -52,9 +46,7 @@ function validatePermitImageUrl(raw: unknown): string | null | false {
   if (!raw.startsWith(uploadsPrefix)) return false;
   const filename = raw.slice(uploadsPrefix.length);
   if (!filename || filename === "." || filename === ".." || path.basename(filename) !== filename) return false;
-  const uploadsRoot = path.resolve(UPLOADS_PATH);
-  const localFile = path.resolve(uploadsRoot, filename);
-  if (!localFile.startsWith(`${uploadsRoot}${path.sep}`) || !fs.existsSync(localFile)) return false;
+  if (!/^[A-Za-z0-9._-]+$/.test(filename)) return false;
   return raw;
 }
 
