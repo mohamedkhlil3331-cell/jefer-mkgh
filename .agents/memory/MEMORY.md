@@ -21,6 +21,7 @@
 - [pnpm catalog compatibility](pnpm-catalog-compatibility.md) — pin pnpm ≥9.5 and reuse `npm_execpath` in scripts; Hostinger may route nested calls to an uncached Corepack version.
 - [SQLite deployment writer fencing](sqlite-writer-fencing.md) — a stale server must reject mutations and close; the new server claims backup authority before listening.
 - [Legacy uploads at publish](legacy-uploads-publish.md) — preserving the SQLite backup alone does not preserve files stored on a published server's local disk.
+- [Published storage target validation](published-storage-target.md) — a successful app upload may still land in GCS; verify the provider and exact bucket before claiming R2 is active.
 - [Routing bonus continuity](routing-bonus-continuity.md) — preserve the existing tariff bonus calculation; show its saved value on new trip logs without creating a second payout.
 - [Routing cargo quantities](routing-cargo-quantities.md) — a multi-car dispatch is a shortcut for individual trips; each vehicle's receipt, inventory posting, and release are independent.
 - [Bulker tariff accounting](bulker-tariff-accounting.md) — treat the selected tariff and completed trip as accounting snapshots; do not recalculate past trips from later order edits.
