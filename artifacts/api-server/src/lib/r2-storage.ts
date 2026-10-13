@@ -5,8 +5,8 @@ import { randomUUID } from "node:crypto";
 
 const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID?.trim();
 const bucket = process.env.CLOUDFLARE_R2_BUCKET_NAME?.trim();
-const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID?.trim();
-const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY?.trim();
+const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID?.replace(/[\u0000-\u001f\u007f]/g, "").trim();
+const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY?.replace(/[\u0000-\u001f\u007f]/g, "").trim();
 
 export const isR2Configured = Boolean(accountId && bucket && accessKeyId && secretAccessKey);
 
