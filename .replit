@@ -65,3 +65,8 @@ channel = "stable-25_05"
 
 [objectStorage]
 defaultBucketID = "replit-objstore-e24f7dc6-17ef-498a-a1a0-196a18e01da2"
+
+[userenv]
+
+[userenv.shared]
+CLOUDFLARE_R2_BUCKET_NAME = "jefer"
