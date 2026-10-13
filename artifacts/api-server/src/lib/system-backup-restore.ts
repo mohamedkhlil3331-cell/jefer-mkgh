@@ -14,6 +14,15 @@ import {
   writeHostingerObject,
   type HostingerObjectMetadata,
 } from "./hostinger-filesystem-storage.js";
+import {
+  copyR2Object,
+  deleteR2Object,
+  getR2Object,
+  headR2Object,
+  isR2Configured,
+  listR2Objects,
+  uploadR2File,
+} from "./r2-storage.js";
 
 const RESTORE_AUDIT_TABLES = new Set([
   "system_backup_restore_runs",
@@ -914,6 +923,7 @@ async function restoreObjectFiles(
   runId: number,
 ): Promise<{ outcomes: FileOutcome[]; rollback: () => Promise<void>; cleanup: () => Promise<void> }> {
   if (isFilesystemStorageMode()) return restoreFilesystemObjectFiles(backup, mode, runId);
+  if (isR2Configured) return restoreR2ObjectFiles(backup, mode, runId);
   const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
   if (!bucketId) throw new Error("تخزين الملفات غير مهيأ؛ لم تُستعد الملفات");
   const bucket = makeStorage().bucket(bucketId);
@@ -1051,6 +1061,132 @@ async function restoreObjectFiles(
     outcomes,
     rollback: async () => {
       for (const key of uploadedKeys) await bucket.file(key).delete({ ignoreNotFound: true }).catch(() => {});
+    },
+    cleanup: async () => {},
+  };
+}
+
+async function sha256R2Object(key: string): Promise<string | null> {
+  const object = await getR2Object(key);
+  if (!object?.Body) return null;
+  const hash = crypto.createHash("sha256");
+  for await (const chunk of object.Body as AsyncIterable<Buffer | Uint8Array | string>) {
+    hash.update(chunk);
+  }
+  return hash.digest("hex");
+}
+
+async function restoreR2ObjectFiles(
+  backup: ExtractedBackup,
+  mode: RestoreMode,
+  runId: number,
+): Promise<{ outcomes: FileOutcome[]; rollback: () => Promise<void>; cleanup: () => Promise<void> }> {
+  const current = (await listR2Objects()).filter(file =>
+    !file.key.startsWith("db-backups/") && !file.key.startsWith("_system_restore_"),
+  );
+  const currentByKey = new Map(current.map(file => [file.key, file]));
+  const incomingByKey = new Map(backup.objects.map(object => [object.storage_key, object]));
+  const outcomes: FileOutcome[] = [];
+  const uploadedKeys: string[] = [];
+  const rollbackCopies = new Map<string, string>();
+
+  if (mode === "full") {
+    try {
+      for (const file of current) {
+        const keyHash = crypto.createHash("sha256").update(file.key).digest("hex");
+        const rollbackKey = `_system_restore_${runId}/${keyHash}`;
+        await copyR2Object(file.key, rollbackKey);
+        rollbackCopies.set(file.key, rollbackKey);
+      }
+    } catch (error) {
+      for (const key of rollbackCopies.values()) await deleteR2Object(key).catch(() => {});
+      throw error;
+    }
+    const rollback = async (): Promise<void> => {
+      const touched = new Set([...currentByKey.keys(), ...incomingByKey.keys()]);
+      for (const key of touched) {
+        const rollbackKey = rollbackCopies.get(key);
+        if (rollbackKey) await copyR2Object(rollbackKey, key);
+        else await deleteR2Object(key);
+      }
+    };
+    try {
+      for (const object of backup.objects) {
+        await uploadR2File(object.storage_key, object.filePath, {
+          contentType: object.content_type,
+          cacheControl: object.cache_control,
+          contentDisposition: object.content_disposition,
+          metadata: object.metadata,
+        });
+        uploadedKeys.push(object.storage_key);
+        const saved = await headR2Object(object.storage_key);
+        if (!saved || Number(saved.ContentLength) !== object.bytes) {
+          throw new Error(`تعذر التحقق من الملف المستعاد: ${object.storage_key.slice(0, 120)}`);
+        }
+        outcomes.push({
+          itemType: "object", key: object.storage_key, label: object.storage_key,
+          outcome: "restored",
+        });
+      }
+      for (const file of current) {
+        if (!incomingByKey.has(file.key)) await deleteR2Object(file.key);
+      }
+    } catch (error) {
+      await rollback();
+      for (const key of rollbackCopies.values()) await deleteR2Object(key).catch(() => {});
+      throw error;
+    }
+    return {
+      outcomes,
+      rollback,
+      cleanup: async () => {
+        for (const key of rollbackCopies.values()) await deleteR2Object(key);
+      },
+    };
+  }
+
+  try {
+    for (const object of backup.objects) {
+      const existing = currentByKey.get(object.storage_key);
+      if (existing) {
+        if (existing.size === object.bytes
+            && await sha256R2Object(object.storage_key) === await sha256File(object.filePath)) {
+          outcomes.push({
+            itemType: "object", key: object.storage_key, label: object.storage_key,
+            outcome: "already_present",
+          });
+        } else {
+          outcomes.push({
+            itemType: "object", key: object.storage_key, label: object.storage_key,
+            outcome: "conflict", details: "يوجد ملف مختلف بالمسار نفسه؛ احتُفظ بالملف الحالي",
+          });
+        }
+        continue;
+      }
+      await uploadR2File(object.storage_key, object.filePath, {
+        contentType: object.content_type,
+        cacheControl: object.cache_control,
+        contentDisposition: object.content_disposition,
+        metadata: object.metadata,
+      });
+      uploadedKeys.push(object.storage_key);
+      const saved = await headR2Object(object.storage_key);
+      if (!saved || Number(saved.ContentLength) !== object.bytes) {
+        throw new Error(`تعذر التحقق من الملف المستعاد: ${object.storage_key.slice(0, 120)}`);
+      }
+      outcomes.push({
+        itemType: "object", key: object.storage_key, label: object.storage_key,
+        outcome: "restored",
+      });
+    }
+  } catch (error) {
+    for (const key of uploadedKeys) await deleteR2Object(key).catch(() => {});
+    throw error;
+  }
+  return {
+    outcomes,
+    rollback: async () => {
+      for (const key of uploadedKeys) await deleteR2Object(key).catch(() => {});
     },
     cleanup: async () => {},
   };

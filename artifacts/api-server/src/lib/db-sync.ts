@@ -456,7 +456,7 @@ export function getAppDataDir(): string {
 
   const configuredDir = process.env.ERP_DATA_DIR?.trim();
   if (!configuredDir) {
-    throw new Error("[db-sync] ERP_DATA_DIR is required when ERP_STORAGE_BACKEND=filesystem");
+    throw new Error("[db-sync] ERP_DATA_DIR is required when the SQLite database uses filesystem persistence");
   }
   const expandedDir = configuredDir === "~"
     ? homedir()

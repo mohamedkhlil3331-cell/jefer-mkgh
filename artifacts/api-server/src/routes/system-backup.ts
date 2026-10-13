@@ -356,7 +356,7 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
         else if (openR2Stream) {
           void openR2Stream(entry.key).then(stream => {
             if (finished) {
-              stream.destroy(new Error("Download cancelled"));
+              if ("destroy" in stream) (stream as fs.ReadStream).destroy(new Error("Download cancelled"));
               return cb(new Error("Download cancelled"), null as never);
             }
             source = stream;
