@@ -1,0 +1,1024 @@
+{
+  "status": "completed",
+  "migratedAt": "2026-10-13T13:36:55.147Z",
+  "source": {
+    "objectKey": "db-backups/erp.db",
+    "etag": "\"544d77aaabd591a3dfb08dd17c40bd60\"",
+    "lastModified": "2026-10-13T13:31:42.000Z",
+    "sizeBytes": 63340544,
+    "sha256": "4a5a27a96f0c595b07eb3f7598d744f8d431c5a0ce9093e452cdfa81f8a95028"
+  },
+  "migrationBaselineSource": {
+    "objectKey": "db-backups/erp.db",
+    "etag": "\"5ea00d29c9c6c5e35c9d8558e7f0b34a\"",
+    "lastModified": "2026-10-13T12:57:01.000Z",
+    "sizeBytes": 63320064,
+    "sha256": "ebabf06f8512308851833e7e4ac083b2287b275e620f1e87b1febc74583e869d",
+    "rowCount": 510490
+  },
+  "sourceIntegrity": "ok",
+  "tableCount": 139,
+  "totalSourceRows": 510711,
+  "totalD1SourceRows": 510711,
+  "tableCounts": [
+    {
+      "table": "ai_messages",
+      "source": 18,
+      "d1": 18,
+      "exactValueReadback": true
+    },
+    {
+      "table": "breakdown_reports",
+      "source": 5,
+      "d1": 5,
+      "exactValueReadback": true
+    },
+    {
+      "table": "bulker_movements",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "bulker_vehicles",
+      "source": 7,
+      "d1": 7,
+      "exactValueReadback": true
+    },
+    {
+      "table": "business_card_info",
+      "source": 24,
+      "d1": 24,
+      "exactValueReadback": true
+    },
+    {
+      "table": "cargo_routing_rules",
+      "source": 13,
+      "d1": 13,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chart_of_accounts",
+      "source": 12,
+      "d1": 12,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_push_queue",
+      "source": 278,
+      "d1": 278,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_vapid_keys",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "client_locations",
+      "source": 2,
+      "d1": 2,
+      "exactValueReadback": true
+    },
+    {
+      "table": "client_rep_links",
+      "source": 4,
+      "d1": 4,
+      "exactValueReadback": true
+    },
+    {
+      "table": "company_settings",
+      "source": 9,
+      "d1": 9,
+      "exactValueReadback": true
+    },
+    {
+      "table": "contact_entries",
+      "source": 3,
+      "d1": 3,
+      "exactValueReadback": true
+    },
+    {
+      "table": "customer_transfers",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "dev_audit_log",
+      "source": 497526,
+      "d1": 497526,
+      "exactValueReadback": true
+    },
+    {
+      "table": "driver_company_sends",
+      "source": 2,
+      "d1": 2,
+      "exactValueReadback": true
+    },
+    {
+      "table": "driver_custody_records",
+      "source": 86,
+      "d1": 86,
+      "exactValueReadback": true
+    },
+    {
+      "table": "driver_doc_requests",
+      "source": 4,
+      "d1": 4,
+      "exactValueReadback": true
+    },
+    {
+      "table": "driver_expenses",
+      "source": 404,
+      "d1": 404,
+      "exactValueReadback": true
+    },
+    {
+      "table": "driver_settlements",
+      "source": 125,
+      "d1": 125,
+      "exactValueReadback": true
+    },
+    {
+      "table": "employees",
+      "source": 20,
+      "d1": 20,
+      "exactValueReadback": true
+    },
+    {
+      "table": "external_parties",
+      "source": 2,
+      "d1": 2,
+      "exactValueReadback": true
+    },
+    {
+      "table": "external_rentals",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "factory_orders",
+      "source": 2,
+      "d1": 2,
+      "exactValueReadback": true
+    },
+    {
+      "table": "finance_settings",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "flatbed_multipliers",
+      "source": 6,
+      "d1": 6,
+      "exactValueReadback": true
+    },
+    {
+      "table": "fleet_expenses",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "fleet_vehicles",
+      "source": 46,
+      "d1": 46,
+      "exactValueReadback": true
+    },
+    {
+      "table": "hearings",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "hr_requests",
+      "source": 8,
+      "d1": 8,
+      "exactValueReadback": true
+    },
+    {
+      "table": "internal_requests",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "invoice_settings",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "invoices",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "km_rates",
+      "source": 4,
+      "d1": 4,
+      "exactValueReadback": true
+    },
+    {
+      "table": "legal_docs",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "loading_orders",
+      "source": 7,
+      "d1": 7,
+      "exactValueReadback": true
+    },
+    {
+      "table": "loading_points",
+      "source": 4,
+      "d1": 4,
+      "exactValueReadback": true
+    },
+    {
+      "table": "maintenance_logs",
+      "source": 356,
+      "d1": 356,
+      "exactValueReadback": true
+    },
+    {
+      "table": "mirror_errors",
+      "source": 50,
+      "d1": 50,
+      "exactValueReadback": true
+    },
+    {
+      "table": "mkgh_email_settings",
+      "source": 6,
+      "d1": 6,
+      "exactValueReadback": true
+    },
+    {
+      "table": "mkgh_imports",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "mkgh_report_log",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "mutation_versions",
+      "source": 8,
+      "d1": 8,
+      "exactValueReadback": true
+    },
+    {
+      "table": "notifications",
+      "source": 2645,
+      "d1": 2645,
+      "exactValueReadback": true
+    },
+    {
+      "table": "offers",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "order_ratings",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "orders",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "petty_cash",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "printed_marks",
+      "source": 1152,
+      "d1": 1152,
+      "exactValueReadback": true
+    },
+    {
+      "table": "products",
+      "source": 13,
+      "d1": 13,
+      "exactValueReadback": true
+    },
+    {
+      "table": "purchase_invoice_paste_batches",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "purchase_invoice_returns",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "reimbursement_requests",
+      "source": 2,
+      "d1": 2,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rental_account_entries",
+      "source": 4,
+      "d1": 4,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rental_cash_remittances",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rental_financial_audit_log",
+      "source": 12,
+      "d1": 12,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rental_monthly_closures",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rental_receipt_objects",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rental_vehicle_types",
+      "source": 5,
+      "d1": 5,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rep_requests",
+      "source": 2,
+      "d1": 2,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rep_targets",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "route_bonus_rates",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "routing_cargo_types",
+      "source": 7,
+      "d1": 7,
+      "exactValueReadback": true
+    },
+    {
+      "table": "routing_dispatches",
+      "source": 124,
+      "d1": 124,
+      "exactValueReadback": true
+    },
+    {
+      "table": "settlement_items",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "site_analytics_events",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "site_content",
+      "source": 8,
+      "d1": 8,
+      "exactValueReadback": true
+    },
+    {
+      "table": "site_emails",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "site_services",
+      "source": 4,
+      "d1": 4,
+      "exactValueReadback": true
+    },
+    {
+      "table": "sla_settings",
+      "source": 4,
+      "d1": 4,
+      "exactValueReadback": true
+    },
+    {
+      "table": "special_sessions",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "statement_signatures",
+      "source": 13,
+      "d1": 13,
+      "exactValueReadback": true
+    },
+    {
+      "table": "supervisor_settings",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "supplier_reimbursement_claims",
+      "source": 44,
+      "d1": 44,
+      "exactValueReadback": true
+    },
+    {
+      "table": "suppliers",
+      "source": 71,
+      "d1": 71,
+      "exactValueReadback": true
+    },
+    {
+      "table": "supply_request_trips",
+      "source": 111,
+      "d1": 111,
+      "exactValueReadback": true
+    },
+    {
+      "table": "system_backup_restore_runs",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "system_config",
+      "source": 9,
+      "d1": 9,
+      "exactValueReadback": true
+    },
+    {
+      "table": "system_logs",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "tariffs",
+      "source": 130,
+      "d1": 130,
+      "exactValueReadback": true
+    },
+    {
+      "table": "teidarat",
+      "source": 29,
+      "d1": 29,
+      "exactValueReadback": true
+    },
+    {
+      "table": "trailer_load_configs",
+      "source": 6,
+      "d1": 6,
+      "exactValueReadback": true
+    },
+    {
+      "table": "trip_bonus_rates",
+      "source": 7,
+      "d1": 7,
+      "exactValueReadback": true
+    },
+    {
+      "table": "trip_invoice_bulk_runs",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "trip_tariff_expense_snapshots",
+      "source": 956,
+      "d1": 956,
+      "exactValueReadback": true
+    },
+    {
+      "table": "trips",
+      "source": 944,
+      "d1": 944,
+      "exactValueReadback": true
+    },
+    {
+      "table": "unload_locations",
+      "source": 2,
+      "d1": 2,
+      "exactValueReadback": true
+    },
+    {
+      "table": "users",
+      "source": 92,
+      "d1": 92,
+      "exactValueReadback": true
+    },
+    {
+      "table": "vehicle_breakdowns",
+      "source": 18,
+      "d1": 18,
+      "exactValueReadback": true
+    },
+    {
+      "table": "vehicle_compliance_docs",
+      "source": 18,
+      "d1": 18,
+      "exactValueReadback": true
+    },
+    {
+      "table": "vehicle_driver_history",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "vehicle_images",
+      "source": 7,
+      "d1": 7,
+      "exactValueReadback": true
+    },
+    {
+      "table": "vehicle_stop_records",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "vehicle_type_assignments",
+      "source": 94,
+      "d1": 94,
+      "exactValueReadback": true
+    },
+    {
+      "table": "vehicle_type_definitions",
+      "source": 7,
+      "d1": 7,
+      "exactValueReadback": true
+    },
+    {
+      "table": "vehicles",
+      "source": 22,
+      "d1": 22,
+      "exactValueReadback": true
+    },
+    {
+      "table": "warehouse_returns",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "warehouses",
+      "source": 5,
+      "d1": 5,
+      "exactValueReadback": true
+    },
+    {
+      "table": "workshop",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "workshop_inventory",
+      "source": 320,
+      "d1": 320,
+      "exactValueReadback": true
+    },
+    {
+      "table": "workshop_inventory_transactions",
+      "source": 1033,
+      "d1": 1033,
+      "exactValueReadback": true
+    },
+    {
+      "table": "workshop_jobs",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "journal_entries",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "company_branch_documents",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "leave_requests",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "external_account_entries",
+      "source": 4,
+      "d1": 4,
+      "exactValueReadback": true
+    },
+    {
+      "table": "mkgh_transactions",
+      "source": 2734,
+      "d1": 2734,
+      "exactValueReadback": true
+    },
+    {
+      "table": "product_ratings",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "supplier_reimbursement_claim_print_events",
+      "source": 10,
+      "d1": 10,
+      "exactValueReadback": true
+    },
+    {
+      "table": "purchase_invoices",
+      "source": 454,
+      "d1": 454,
+      "exactValueReadback": true
+    },
+    {
+      "table": "system_backup_restore_items",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "invoice_templates",
+      "source": 4,
+      "d1": 4,
+      "exactValueReadback": true
+    },
+    {
+      "table": "tariff_locations",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rental_statement_adjustments",
+      "source": 22,
+      "d1": 22,
+      "exactValueReadback": true
+    },
+    {
+      "table": "trip_invoice_bulk_changes",
+      "source": 15,
+      "d1": 15,
+      "exactValueReadback": true
+    },
+    {
+      "table": "trip_invoice_images",
+      "source": 1,
+      "d1": 1,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_conversations",
+      "source": 7,
+      "d1": 7,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_customer_category_rules",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_customer_direct_rules",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_notification_preferences",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_push_subscriptions",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_realtime_events",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "driver_profiles",
+      "source": 42,
+      "d1": 42,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rental_customers",
+      "source": 13,
+      "d1": 13,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rental_payments",
+      "source": 26,
+      "d1": 26,
+      "exactValueReadback": true
+    },
+    {
+      "table": "sessions",
+      "source": 54,
+      "d1": 54,
+      "exactValueReadback": true
+    },
+    {
+      "table": "workflow_orders",
+      "source": 14,
+      "d1": 14,
+      "exactValueReadback": true
+    },
+    {
+      "table": "supply_requests",
+      "source": 179,
+      "d1": 179,
+      "exactValueReadback": true
+    },
+    {
+      "table": "warehouse_approval_settings",
+      "source": 4,
+      "d1": 4,
+      "exactValueReadback": true
+    },
+    {
+      "table": "warehouse_dispatch_orders",
+      "source": 8,
+      "d1": 8,
+      "exactValueReadback": true
+    },
+    {
+      "table": "warehouse_items",
+      "source": 74,
+      "d1": 74,
+      "exactValueReadback": true
+    },
+    {
+      "table": "purchase_requests",
+      "source": 17,
+      "d1": 17,
+      "exactValueReadback": true
+    },
+    {
+      "table": "trip_invoice_extractions",
+      "source": 14,
+      "d1": 14,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_calls",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_messages",
+      "source": 17,
+      "d1": 17,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_upload_tokens",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "driver_aliases",
+      "source": 11,
+      "d1": 11,
+      "exactValueReadback": true
+    },
+    {
+      "table": "rental_trip_requests",
+      "source": 0,
+      "d1": 0,
+      "exactValueReadback": true
+    },
+    {
+      "table": "chat_message_reads",
+      "source": 13,
+      "d1": 13,
+      "exactValueReadback": true
+    }
+  ],
+  "foreignKeyViolationCount": 10,
+  "foreignKeyViolations": [
+    {
+      "table": "sessions",
+      "column": "user_id",
+      "parentTable": "users",
+      "parentColumn": "id",
+      "rows": 7
+    },
+    {
+      "table": "warehouse_items",
+      "column": "product_id",
+      "parentTable": "products",
+      "parentColumn": "id",
+      "rows": 3
+    }
+  ],
+  "orphanRowsPreserved": [
+    {
+      "table": "sessions",
+      "column": "user_id",
+      "parentTable": "users",
+      "parentColumn": "id",
+      "sourceRows": 7,
+      "d1Rows": 7,
+      "preserved": true
+    },
+    {
+      "table": "warehouse_items",
+      "column": "product_id",
+      "parentTable": "products",
+      "parentColumn": "id",
+      "sourceRows": 3,
+      "d1Rows": 3,
+      "preserved": true
+    }
+  ],
+  "reconciliation": {
+    "changedCells": 12,
+    "auditTable": "d1_migration_reconciliation_log",
+    "entries": [
+      {
+        "table": "products",
+        "rowid": "54",
+        "column": "stock",
+        "oldValueSha256": "c876821b30cf2ae828d56c8c5d1e7b7b8b2449299557b79ccc7e772850446721",
+        "newValueSha256": "36bd36f9488b27ba38690ad0e7a523c46c970af573fa4e8e628c8db7b7112ca4"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "167",
+        "column": "attachments_json",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "836083f3950f2dbb14acec9f42274e3b7ee3001027f78d9459dbc5793ee39018"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "167",
+        "column": "delivered_at",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "34ddad5320de1c3c765ddc6a00a6661e44573782ebcf62956ee84c4ee9439d47"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "167",
+        "column": "driver_loading_image",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "58727ce22e0607e371e6db4992d5ed8615d941607c1ae4f0e117c54dfe89f30d"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "167",
+        "column": "loaded_at",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "7b63dd7856e70a05ea73918517482ac3edec85aa3ff56d53081cda7a319ac385"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "167",
+        "column": "status",
+        "oldValueSha256": "68ae73c709b3fd2c29b3a71337c5f8d95041c478b0aae6fab2ee6fdd6094aac7",
+        "newValueSha256": "ddaaf029c115461cbef98583f7b7e928ff2e8339f37cc201dd9338adecd055b1"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "167",
+        "column": "updated_at",
+        "oldValueSha256": "d0ed39b3dec937c8c96195aee6115806e6b61927bd3ae4b332c27efb35a87ac6",
+        "newValueSha256": "34ddad5320de1c3c765ddc6a00a6661e44573782ebcf62956ee84c4ee9439d47"
+      },
+      {
+        "table": "trips",
+        "rowid": "25672",
+        "column": "image_url",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "58727ce22e0607e371e6db4992d5ed8615d941607c1ae4f0e117c54dfe89f30d"
+      },
+      {
+        "table": "trips",
+        "rowid": "25672",
+        "column": "notes",
+        "oldValueSha256": "79f592624c2d6f79f923b92dbf2b5762ae8d3367c32303669a97cab903a40663",
+        "newValueSha256": "1c83f476d490456b9a5ee140e5be24f990dfc951d22b7de5e9ec4d611f64b66d"
+      },
+      {
+        "table": "trips",
+        "rowid": "25672",
+        "column": "return_value_no_vat",
+        "oldValueSha256": "c876821b30cf2ae828d56c8c5d1e7b7b8b2449299557b79ccc7e772850446721",
+        "newValueSha256": "aecc9d0f6c3bda450a4dcbe9290686adac636e07ab88bf5d3bccbb38efc623d3"
+      },
+      {
+        "table": "warehouse_items",
+        "rowid": "102",
+        "column": "last_updated",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "34ddad5320de1c3c765ddc6a00a6661e44573782ebcf62956ee84c4ee9439d47"
+      },
+      {
+        "table": "warehouse_items",
+        "rowid": "102",
+        "column": "quantity",
+        "oldValueSha256": "c876821b30cf2ae828d56c8c5d1e7b7b8b2449299557b79ccc7e772850446721",
+        "newValueSha256": "6bb887f4e7ef9f6353b1264c0be32c8cc50c114b5efc035cdad29f244b6c1e6e"
+      }
+    ]
+  },
+  "schema": {
+    "copiedTables": 139,
+    "explicitIndexes": 54,
+    "triggers": 12,
+    "restoredSequences": 92,
+    "brokenForeignKeysOmittedForOrphanPreservation": [
+      {
+        "table": "sessions",
+        "column": "user_id",
+        "references": "users.id",
+        "orphanRowsPreserved": 7,
+        "reason": "D1 enforces foreign keys per request; the current source snapshot already contains these orphan references."
+      },
+      {
+        "table": "warehouse_items",
+        "column": "product_id",
+        "references": "products.id",
+        "orphanRowsPreserved": 3,
+        "reason": "D1 enforces foreign keys per request; the current source snapshot already contains these orphan references."
+      }
+    ]
+  },
+  "oversizedValues": [
+    {
+      "table": "supply_requests",
+      "rowid": "47",
+      "column": "invoice_image",
+      "bytes": 2843843,
+      "sha256": "3beda9f79027e9d0ffa8da553dee4e8a2e550abd238d6d524381575de578f9fc",
+      "chunks": 12,
+      "reconstructionVerified": true
+    }
+  ],
+  "exactRowsReadBack": 510711,
+  "d1IntegrityCheck": "ok",
+  "developmentDatabaseChanged": false,
+  "publishedApplicationCutOverToD1": false,
+  "productionSQLiteBackupPreserved": true
+}

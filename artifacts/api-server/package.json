@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "export NODE_ENV=development && pnpm run build && pnpm run start",
     "build": "node ./build.mjs",
+    "migrate:production-to-d1": "node --experimental-strip-types scripts/migrate-production-to-d1.mjs",
     "start": "if [ \"$NODE_ENV\" = \"production\" ]; then node --enable-source-maps ./dist/index.mjs; else mkdir -p data && flock -x -w 60 -E 75 data/erp.db.dev.lock env DEV_DB_WRITER_LOCK_HELD=1 node --enable-source-maps ./dist/index.mjs || { echo '[api] Could not acquire the development database writer lock; refusing to start a second writer.' >&2; exit 75; }; fi",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
