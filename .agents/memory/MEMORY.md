@@ -43,3 +43,4 @@
 - [Automatic GitHub push preference](git-push-preference.md) — after requested work is verified, push assistant-made changes for this project to the configured GitHub branch.
 - [Hostinger destination](hostinger-direction.md) — the user plans to move this project's hosting, storage, and traffic data to Hostinger later.
 - [ERP calculator independence](calculator-independence.md) — keep calculator operations client-only and separate from ERP business data, APIs, and workflows.
+- [Production D1 migration boundary](production-d1-migration.md) — production may move to Cloudflare D1/R2, but keep dev on its separate SQLite/R2 data and defer published cutover until validation.
