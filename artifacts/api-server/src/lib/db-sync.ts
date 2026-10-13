@@ -80,10 +80,22 @@ export function makeStorage(): Storage {
 
 export function isFilesystemStorageMode(): boolean {
   const backend = process.env.ERP_STORAGE_BACKEND;
-  if (backend && backend !== "filesystem") {
+  if (backend && backend !== "filesystem" && backend !== "r2") {
     throw new Error(`[db-sync] Unsupported ERP_STORAGE_BACKEND: ${backend}`);
   }
   return backend === "filesystem";
+}
+
+/**
+ * Database persistence can be local even when uploaded objects are stored in R2.
+ * ERP_STORAGE_BACKEND=filesystem remains the legacy combined mode.
+ */
+export function isFilesystemDatabaseMode(): boolean {
+  const backend = process.env.ERP_DATABASE_BACKEND;
+  if (backend && backend !== "filesystem") {
+    throw new Error(`[db-sync] Unsupported ERP_DATABASE_BACKEND: ${backend}`);
+  }
+  return backend === "filesystem" || isFilesystemStorageMode();
 }
 
 function assertDevelopmentWriterLock(operation: string): void {
@@ -116,13 +128,28 @@ function getBackupWriterMetadata(): Record<string, string> {
  * Returns true when a backup was actually restored.
  */
 export async function restoreDbFromStorage(dbPath: string): Promise<boolean> {
-  return downloadDbBackupToStaging(dbPath);
+  const restored = await downloadDbBackupToStaging(dbPath);
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.ERP_DATABASE_BACKEND === "filesystem" &&
+    !fs.existsSync(dbPath)
+  ) {
+    throw new Error(
+      "[db-sync] Persistent SQLite database is missing and no R2 backup was restored; refusing to start with an empty production database",
+    );
+  }
+  return restored;
 }
 
 export async function downloadDbBackupToStaging(dbPath: string): Promise<boolean> {
   if (isFilesystemStorageMode()) {
     // Hostinger owns the persistent SQLite file directly; never restore a
     // Replit Object Storage snapshot over it.
+    return false;
+  }
+  if (isFilesystemDatabaseMode() && fs.existsSync(dbPath)) {
+    // A persistent VPS database is authoritative when present. R2 is its
+    // recovery copy, not a startup source that can overwrite newer local data.
     return false;
   }
   assertDevelopmentWriterLock("restore");
@@ -425,7 +452,7 @@ export function getAppDataDir(): string {
   const apiServerRoot = path.basename(cwd) === "api-server"
     ? cwd
     : path.join(cwd, "artifacts", "api-server");
-  if (!isFilesystemStorageMode()) return path.join(apiServerRoot, "data");
+  if (!isFilesystemDatabaseMode()) return path.join(apiServerRoot, "data");
 
   const configuredDir = process.env.ERP_DATA_DIR?.trim();
   if (!configuredDir) {

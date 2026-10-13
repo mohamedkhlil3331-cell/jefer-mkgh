@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import crypto from "crypto";
-import { getAppDataDir, getDefaultDbPath, isFilesystemStorageMode } from "./db-sync.js";
+import { getAppDataDir, getDefaultDbPath, isFilesystemDatabaseMode, isFilesystemStorageMode } from "./db-sync.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = getAppDataDir();
@@ -11,7 +11,9 @@ if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
 export const UPLOADS_PATH = isFilesystemStorageMode()
   ? path.join(DATA_DIR, "uploads")
-  : path.join(__dirname, "..", "..", "uploads");
+  : isFilesystemDatabaseMode()
+    ? path.join(DATA_DIR, "uploads")
+    : path.join(__dirname, "..", "..", "uploads");
 if (!fs.existsSync(UPLOADS_PATH)) fs.mkdirSync(UPLOADS_PATH, { recursive: true });
 
 export const DB_PATH = getDefaultDbPath();
