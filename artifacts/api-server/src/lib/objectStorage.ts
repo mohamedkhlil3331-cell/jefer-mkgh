@@ -255,11 +255,19 @@ export class ObjectStorageService {
       if (isR2Configured) {
         try {
           const url = new URL(rawPath);
-          if (url.hostname === `${process.env.CLOUDFLARE_R2_ACCOUNT_ID}.r2.cloudflarestorage.com`) {
-            const segments = url.pathname.split("/").filter(Boolean);
-            if (segments[0] === r2BucketName() && segments[1]?.startsWith(R2_OBJECT_PREFIX)) {
-              return `/objects/${segments.slice(1).join("/") .slice(R2_OBJECT_PREFIX.length)}`;
-            }
+          const accountHost = `${process.env.CLOUDFLARE_R2_ACCOUNT_ID?.trim()}.r2.cloudflarestorage.com`.toLowerCase();
+          const bucketName = r2BucketName();
+          const hostname = url.hostname.toLowerCase();
+          const segments = url.pathname.split("/").filter(Boolean);
+          const objectKeySegments = hostname === accountHost && segments[0] === bucketName
+            ? segments.slice(1)
+            : hostname === `${bucketName}.${accountHost}`
+              ? segments
+              : null;
+          const objectKey = objectKeySegments?.join("/");
+          if (objectKey?.startsWith(R2_OBJECT_PREFIX)) {
+            const entityId = objectKey.slice(R2_OBJECT_PREFIX.length);
+            if (entityId) return `/objects/${entityId}`;
           }
         } catch { /* already a normalized path */ }
       }
