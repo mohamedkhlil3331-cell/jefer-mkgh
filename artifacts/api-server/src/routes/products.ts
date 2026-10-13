@@ -5,7 +5,9 @@ import { queryProductionD1 } from "../lib/cloudflare-d1.js";
 const router = Router();
 
 function useD1ProductsBackend(): boolean {
-  return process.env.NODE_ENV === "production" && process.env.ERP_D1_PRODUCTS_ENABLED === "1";
+  return process.env.NODE_ENV === "production"
+    && process.env.ERP_DATABASE_BACKEND === "d1"
+    && process.env.ERP_D1_PRODUCTS_ENABLED === "1";
 }
 
 async function queryAll<T>(sql: string, ...params: unknown[]): Promise<T[]> {
