@@ -1,7 +1,11 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  CopyObjectCommand, DeleteObjectCommand, GetObjectCommand, HeadObjectCommand,
+  ListObjectsV2Command, PutObjectCommand, S3Client,
+} from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { StorageEngine } from "multer";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 
 const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID?.trim();
 const bucket = process.env.CLOUDFLARE_R2_BUCKET_NAME?.trim();
@@ -26,6 +30,72 @@ export function getR2Client(): S3Client {
 export function r2BucketName(): string {
   if (!bucket) throw new Error("Cloudflare R2 bucket is not configured");
   return bucket;
+}
+
+export type R2ObjectInfo = {
+  key: string;
+  size: number;
+  updated?: string;
+  etag?: string;
+  contentType?: string;
+  cacheControl?: string;
+  contentDisposition?: string;
+  metadata?: Record<string, string>;
+};
+
+export async function listR2Objects(): Promise<R2ObjectInfo[]> {
+  const objects: R2ObjectInfo[] = [];
+  let continuationToken: string | undefined;
+  do {
+    const page = await getR2Client().send(new ListObjectsV2Command({
+      Bucket: r2BucketName(),
+      ContinuationToken: continuationToken,
+    }));
+    for (const item of page.Contents ?? []) {
+      if (!item.Key || item.Key.endsWith("/")) continue;
+      const head = await headR2Object(item.Key);
+      objects.push({
+        key: item.Key,
+        size: Number(item.Size ?? 0),
+        updated: item.LastModified?.toISOString(),
+        etag: item.ETag,
+        contentType: head?.ContentType,
+        cacheControl: head?.CacheControl,
+        contentDisposition: head?.ContentDisposition,
+        metadata: head?.Metadata,
+      });
+    }
+    continuationToken = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (continuationToken);
+  return objects;
+}
+
+export async function uploadR2File(
+  key: string,
+  filePath: string,
+  metadata: Pick<R2ObjectInfo, "contentType" | "cacheControl" | "contentDisposition" | "metadata"> = {},
+): Promise<void> {
+  const size = (await fs.promises.stat(filePath)).size;
+  await getR2Client().send(new PutObjectCommand({
+    Bucket: r2BucketName(),
+    Key: key,
+    Body: fs.createReadStream(filePath),
+    ContentLength: size,
+    ContentType: metadata.contentType,
+    CacheControl: metadata.cacheControl,
+    ContentDisposition: metadata.contentDisposition,
+    Metadata: metadata.metadata,
+  }));
+}
+
+export async function copyR2Object(sourceKey: string, destinationKey: string): Promise<void> {
+  const encodedSource = sourceKey.split("/").map(encodeURIComponent).join("/");
+  await getR2Client().send(new CopyObjectCommand({
+    Bucket: r2BucketName(),
+    Key: destinationKey,
+    CopySource: `${r2BucketName()}/${encodedSource}`,
+    MetadataDirective: "COPY",
+  }));
 }
 
 export async function createR2UploadUrl(key: string, expiresIn = 900): Promise<string> {

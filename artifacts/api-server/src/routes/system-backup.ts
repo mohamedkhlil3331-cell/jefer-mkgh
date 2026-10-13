@@ -9,6 +9,7 @@ import { ZipFile } from "yazl";
 import db, { UPLOADS_PATH } from "../lib/db.js";
 import { isFilesystemStorageMode, makeStorage, pauseDbBackup, waitForDbBackupIdle } from "../lib/db-sync.js";
 import { listHostingerObjects } from "../lib/hostinger-filesystem-storage.js";
+import { getR2Object, isR2Configured, listR2Objects } from "../lib/r2-storage.js";
 import {
   extensionForContentType,
   inferLocalUploadExtension,
@@ -144,7 +145,7 @@ function verifyTicket(ticket: unknown): BackupTicket | null {
 router.get("/system-backup/ticket", (req, res) => {
   const admin = currentAdmin(req);
   if (!admin) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة لتنزيل النسخة الاحتياطية" });
-  if ((!isFilesystemStorageMode() && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
+  if ((!isFilesystemStorageMode() && !isR2Configured && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
     return void res.status(503).json({ error: "خدمة النسخ الاحتياطي غير مهيأة" });
   }
   const ticket = signTicket({
@@ -158,7 +159,7 @@ router.get("/system-backup/ticket", (req, res) => {
 });
 
 router.get("/system-backup/download", async (req: Request, res: Response) => {
-  if ((!isFilesystemStorageMode() && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
+  if ((!isFilesystemStorageMode() && !isR2Configured && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
     return void res.status(503).json({ error: "خدمة النسخ الاحتياطي غير مهيأة" });
   }
   if (!verifyTicket(req.query.ticket)) {
@@ -207,6 +208,7 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
     };
     const objectCandidates: StorageCandidate[] = [];
     let openGcsStream: ((key: string, generation?: string | number) => NodeJS.ReadableStream) | undefined;
+    let openR2Stream: ((key: string) => Promise<NodeJS.ReadableStream>) | undefined;
     if (isFilesystemStorageMode()) {
       const localObjects = await listHostingerObjects();
       for (const object of localObjects) {
@@ -222,6 +224,25 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
           localPath: object.filePath,
         });
       }
+    } else if (isR2Configured) {
+      const files = await listR2Objects();
+      for (const file of files) {
+        if (file.key.startsWith("db-backups/") || file.key.startsWith("_system_restore_")) continue;
+        objectCandidates.push({
+          key: file.key,
+          size: file.size,
+          updated: file.updated,
+          contentType: file.contentType,
+          cacheControl: file.cacheControl,
+          contentDisposition: file.contentDisposition,
+          metadata: file.metadata,
+        });
+      }
+      openR2Stream = async key => {
+        const object = await getR2Object(key);
+        if (!object?.Body) throw new Error(`R2 object is unavailable: ${key}`);
+        return object.Body as NodeJS.ReadableStream;
+      };
     } else {
       const bucket = makeStorage().bucket(process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID!);
       const [allFiles] = await bucket.getFiles();
@@ -332,6 +353,18 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
         if (finished) return cb(new Error("Download cancelled"), null as never);
         if (entry.localPath) source = fs.createReadStream(entry.localPath);
         else if (openGcsStream) source = openGcsStream(entry.key, entry.generation);
+        else if (openR2Stream) {
+          void openR2Stream(entry.key).then(stream => {
+            if (finished) {
+              stream.destroy(new Error("Download cancelled"));
+              return cb(new Error("Download cancelled"), null as never);
+            }
+            source = stream;
+            source.once("error", err => zip?.emit("error", err));
+            cb(null, source);
+          }).catch(err => cb(err, null as never));
+          return;
+        }
         else return cb(new Error("Object storage stream is unavailable"), null as never);
         source.once("error", err => zip?.emit("error", err));
         cb(null, source);
@@ -367,7 +400,7 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
 router.post("/system-backup/restore", (req: Request, res: Response, next) => {
   const admin = currentAdmin(req);
   if (!admin) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة لاستعادة النسخة" });
-  if (!isFilesystemStorageMode() && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) {
+  if (!isFilesystemStorageMode() && !isR2Configured && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) {
     return void res.status(503).json({ error: "تخزين الملفات غير مهيأ؛ لم تبدأ الاستعادة" });
   }
   restoreArchiveUpload(req, res, error => {
