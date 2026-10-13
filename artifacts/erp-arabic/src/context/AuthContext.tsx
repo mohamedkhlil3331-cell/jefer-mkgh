@@ -124,8 +124,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = async (phone: string, password: string, otp?: string) => {
+    const readinessDeadline = Date.now() + 8_000;
+    let serverReady = false;
+
+    while (Date.now() < readinessDeadline) {
+      const readinessCtrl = new AbortController();
+      const readinessTimer = setTimeout(() => readinessCtrl.abort(), 2_500);
+      try {
+        const health = await fetch("/api/healthz", {
+          cache: "no-store",
+          signal: readinessCtrl.signal,
+        });
+        if (health.ok) {
+          serverReady = true;
+          break;
+        }
+      } catch {
+        // Give a starting or briefly unreachable server a short chance to recover.
+      } finally {
+        clearTimeout(readinessTimer);
+      }
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    if (!serverReady) {
+      throw new Error("الخادم غير جاهز حالياً. تحقق من الاتصال وحاول مجدداً.");
+    }
+
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 12_000);
+    const timer = setTimeout(() => ctrl.abort(), 25_000);
     try {
       const res = await fetch("/api/auth/login", {
         method: "POST", headers: { "Content-Type": "application/json" },
