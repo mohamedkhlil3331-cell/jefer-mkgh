@@ -11,6 +11,14 @@
   "triggers": {
     "crons": ["* * * * *"]
   },
+  "durable_objects": {
+    "bindings": [
+      { "name": "CHAT_REALTIME", "class_name": "ChatRealtimeRoom" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ChatRealtimeRoom"] }
+  ],
   "workers_dev": false,
   "preview_urls": false,
   "vars": {

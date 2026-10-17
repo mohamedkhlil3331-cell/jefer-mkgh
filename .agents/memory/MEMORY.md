@@ -17,6 +17,7 @@
 - [Driver custody print cancellation](driver-custody-cancellation.md) — cancel print state only; preserve the statement, snapshots, source marks, and active custody totals
 - [Rental customer classification history](rental-customer-classification.md) — trip billing classification is snapshotted; changing a customer type affects old trips only by explicit reclassification
 - [Workspace package installs](workspace-package-installs.md) — generic Node package installer targets pnpm workspace root and fails; use pnpm filtered installs for artifact dependencies.
+- [Node 24 TS script loading](node24-ts-loader.md) — source `.ts` modules may use `.js` specifiers; a temporary loader can remap them without changing app code.
 - [Stale pnpm runtime links](pnpm-stale-dependency-links.md) — a frozen pnpm install can say “up to date” while a transitive dependency symlink still points to an absent version; force relink when runtime resolution disagrees with the lockfile.
 - [pnpm catalog compatibility](pnpm-catalog-compatibility.md) — pin pnpm ≥9.5 and reuse `npm_execpath` in scripts; Hostinger may route nested calls to an uncached Corepack version.
 - [SQLite deployment writer fencing](sqlite-writer-fencing.md) — a stale server must reject mutations and close; the new server claims backup authority before listening.

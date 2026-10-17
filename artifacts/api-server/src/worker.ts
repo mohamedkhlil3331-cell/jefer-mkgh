@@ -4,6 +4,9 @@ type WorkerBindings = Record<string, unknown> & {
   ERP_DB?: unknown;
   ERP_DB_REPLICA?: unknown;
   ERP_OBJECTS?: unknown;
+  CHAT_REALTIME?: {
+    getByName(name: string): { fetch(request: Request): Promise<Response> };
+  };
 };
 
 type WorkerContext = {
@@ -46,6 +49,23 @@ async function getExpressHandler(): Promise<ReturnType<typeof httpServerHandler>
 export default {
   async fetch(request: Request, env: WorkerBindings, context: WorkerContext): Promise<Response> {
     installWorkerEnvironment(env);
+    if (new URL(request.url).pathname === "/api/chat/ws") {
+      if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
+        return new Response("Expected WebSocket", { status: 426 });
+      }
+      const { protocolTokenFromHeader } = await import("./lib/chat-realtime.js");
+      const { resolveChatActor } = await import("./lib/chat-auth.js");
+      const token = protocolTokenFromHeader(request.headers.get("Sec-WebSocket-Protocol"));
+      const actor = await resolveChatActor(token);
+      if (!actor || actor.id <= 0) return new Response("Unauthorized", { status: 401 });
+      if (!env.CHAT_REALTIME) return new Response("Chat realtime is unavailable", { status: 503 });
+
+      const headers = new Headers(request.headers);
+      headers.set("X-Erp-Chat-Actor", JSON.stringify(actor));
+      return env.CHAT_REALTIME.getByName("erp-chat-room")
+        .fetch(new Request(request, { headers }));
+    }
+
     const { handleWorkerR2Upload } = await import("./lib/r2-storage.js");
     const uploadResponse = await handleWorkerR2Upload(request);
     if (uploadResponse) return uploadResponse;
@@ -111,3 +131,5 @@ export default {
     }));
   },
 };
+
+export { ChatRealtimeRoom } from "./lib/chat-realtime-do.js";

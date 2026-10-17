@@ -11,16 +11,43 @@ import { sendBrowserPush } from "./chat-push.js";
 
 type RealtimeEvent = Record<string, unknown> & { type: string };
 type RealtimeEventRow = { id: number; event_json: string };
+type ChatSocket = { readyState: number; send(data: string): void };
 
-const CHAT_PROTOCOL = "mkgh-chat-v1";
+export const CHAT_PROTOCOL = "mkgh-chat-v1";
 const CALL_EVENT_TTL_SECONDS = 120;
 const socketActors = new WeakMap<WebSocket, ChatActor>();
 
-function setRealtimeEvent(userId: number, event: RealtimeEvent, ttlSeconds = CALL_EVENT_TTL_SECONDS) {
-  return execute(`
+async function broadcastToWorkerSockets(userIds: number[], event: RealtimeEvent): Promise<void> {
+  const env = (globalThis as typeof globalThis & {
+    __ERP_WORKER_ENV?: {
+      CHAT_REALTIME?: {
+        getByName(name: string): { fetch(request: Request): Promise<Response> };
+      };
+    };
+  }).__ERP_WORKER_ENV;
+  if (!env?.CHAT_REALTIME) return;
+
+  try {
+    const room = env.CHAT_REALTIME.getByName("erp-chat-room");
+    const response = await room.fetch(new Request("https://chat.internal/broadcast", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userIds, event }),
+    }));
+    if (!response.ok) {
+      throw new Error(`Durable Object returned HTTP ${response.status}`);
+    }
+  } catch (error) {
+    logger.warn({ err: error }, "Chat event persisted but realtime broadcast failed");
+  }
+}
+
+async function setRealtimeEvent(userId: number, event: RealtimeEvent, ttlSeconds = CALL_EVENT_TTL_SECONDS): Promise<void> {
+  await execute(`
     INSERT INTO chat_realtime_events (recipient_user_id, event_json, expires_at)
     VALUES (?, ?, datetime('now', ?))
   `, userId, JSON.stringify(event), `+${ttlSeconds} seconds`);
+  await broadcastToWorkerSockets([userId], event);
 }
 
 export async function publishChatRealtimeToUsers(userIds: number[], event: RealtimeEvent): Promise<void> {
@@ -30,6 +57,7 @@ export async function publishChatRealtimeToUsers(userIds: number[], event: Realt
           VALUES (?, ?, datetime('now', ?))`,
     params: [userId, JSON.stringify(event), `+${CALL_EVENT_TTL_SECONDS} seconds`],
   })));
+  await broadcastToWorkerSockets(uniqueIds, event);
 }
 
 export async function publishChatConversationEvent(
@@ -62,20 +90,24 @@ async function eventStillAllowed(userId: number, eventJson: string): Promise<boo
   }
 }
 
-function sendSocketError(socket: WebSocket, code: string, message: string): void {
-  if (socket.readyState === WebSocket.OPEN) {
+function sendSocketError(socket: ChatSocket, code: string, message: string): void {
+  if (socket.readyState === 1) {
     socket.send(JSON.stringify({ type: "error", code, message }));
   }
 }
 
-function protocolToken(req: IncomingMessage): string | null {
-  const raw = req.headers["sec-websocket-protocol"];
-  const protocols = (Array.isArray(raw) ? raw.join(",") : raw ?? "")
+export function protocolTokenFromHeader(raw: string | null): string | null {
+  const protocols = (raw ?? "")
     .split(",")
     .map(value => value.trim());
   if (!protocols.includes(CHAT_PROTOCOL)) return null;
   const bearer = protocols.find(value => value.startsWith("bearer."));
   return bearer?.slice("bearer.".length) || null;
+}
+
+function protocolToken(req: IncomingMessage): string | null {
+  const raw = req.headers["sec-websocket-protocol"];
+  return protocolTokenFromHeader(Array.isArray(raw) ? raw.join(",") : raw ?? null);
 }
 
 async function beginPolling(socket: WebSocket, actor: ChatActor): Promise<() => void> {
@@ -118,7 +150,7 @@ async function beginPolling(socket: WebSocket, actor: ChatActor): Promise<() => 
   return () => clearInterval(timer);
 }
 
-async function sendPendingCalls(socket: WebSocket, userId: number): Promise<void> {
+export async function sendPendingWorkerChatCalls(socket: ChatSocket, userId: number): Promise<void> {
   const calls = await queryAll(`
     SELECT c.call_id, c.conversation_id, c.caller_id, c.media_type,
            u.name AS caller_name
@@ -171,14 +203,18 @@ async function hasUnexpiredCallForUser(userId: number): Promise<boolean> {
   `, userId, userId));
 }
 
-async function onClientMessage(socket: WebSocket, actor: ChatActor, raw: RawData): Promise<void> {
+export async function handleWorkerChatMessage(
+  socket: ChatSocket,
+  actor: ChatActor,
+  raw: RawData | string | ArrayBuffer,
+): Promise<void> {
   let input: Record<string, unknown>;
   try {
-    const rawText = Array.isArray(raw)
-      ? Buffer.concat(raw).toString("utf8")
-      : Buffer.isBuffer(raw)
-        ? raw.toString("utf8")
-        : Buffer.from(raw).toString("utf8");
+    const rawText = typeof raw === "string"
+      ? raw
+      : Array.isArray(raw)
+        ? Buffer.concat(raw).toString("utf8")
+        : Buffer.from(raw as ArrayBuffer).toString("utf8");
     const parsed: unknown = JSON.parse(rawText);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       sendSocketError(socket, "invalid_event", "صيغة الإشارة غير صحيحة");
@@ -362,9 +398,9 @@ export function attachChatRealtime(server: Server): () => void {
     }
     void (async () => {
       const stopPolling = await beginPolling(socket, actor);
-      await sendPendingCalls(socket, actor.id);
+      await sendPendingWorkerChatCalls(socket, actor.id);
       socket.on("message", raw => {
-        void onClientMessage(socket, actor, raw).catch(error => {
+        void handleWorkerChatMessage(socket, actor, raw).catch(error => {
           logger.warn({ err: error, userId: actor.id }, "Chat websocket message failed");
           sendSocketError(socket, "server_error", "تعذر معالجة إشارة المكالمة");
         });
