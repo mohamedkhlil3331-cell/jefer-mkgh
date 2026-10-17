@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import {
   ObjectAclPolicy,
   ObjectPermission,
+  ACL_POLICY_METADATA_KEY,
   canAccessObject,
   getObjectAclPolicy,
   setObjectAclPolicy,
@@ -21,6 +22,7 @@ import {
   headR2Object,
   isR2ObjectStorageBackend,
   r2BucketName,
+  setR2ObjectMetadata,
 } from "./r2-storage.js";
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
@@ -28,6 +30,47 @@ const R2_OBJECT_PREFIX = "app-objects/";
 
 class R2StoredObject {
   constructor(readonly key: string) {}
+
+  get name(): string {
+    return this.key;
+  }
+
+  async exists(): Promise<[boolean]> {
+    return [Boolean(await headR2Object(this.key))];
+  }
+
+  async getMetadata(): Promise<[Record<string, unknown>]> {
+    const head = await headR2Object(this.key);
+    if (!head) throw new ObjectNotFoundError();
+    const r2Metadata = head.Metadata ?? {};
+    const metadata = { ...r2Metadata };
+    const aclPolicy = r2Metadata["custom-acl-policy"];
+    if (aclPolicy) metadata[ACL_POLICY_METADATA_KEY] = aclPolicy;
+    return [{
+      metadata,
+      size: head.ContentLength,
+      contentType: head.ContentType,
+      cacheControl: head.CacheControl,
+      contentDisposition: head.ContentDisposition,
+      contentEncoding: head.ContentEncoding,
+      contentLanguage: head.ContentLanguage,
+      updated: head.LastModified,
+    }];
+  }
+
+  async setMetadata(options: { metadata?: Record<string, string> }): Promise<void> {
+    const [current] = await this.getMetadata();
+    const merged = { ...(current.metadata as Record<string, string>), ...(options.metadata ?? {}) };
+    const r2Metadata: Record<string, string> = {};
+    for (const [key, value] of Object.entries(merged)) {
+      const r2Key = key === ACL_POLICY_METADATA_KEY ? "custom-acl-policy" : key.toLowerCase();
+      if (!/^[a-z0-9-]+$/.test(r2Key)) {
+        throw new Error("R2 custom metadata key contains unsupported characters");
+      }
+      r2Metadata[r2Key] = value;
+    }
+    await setR2ObjectMetadata(this.key, r2Metadata);
+  }
 
   async delete(): Promise<void> {
     await deleteR2Object(this.key);

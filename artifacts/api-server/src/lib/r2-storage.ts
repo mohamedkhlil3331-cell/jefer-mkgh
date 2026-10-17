@@ -143,6 +143,25 @@ export async function headR2Object(key: string) {
   }
 }
 
+export async function setR2ObjectMetadata(key: string, metadata: Record<string, string>): Promise<void> {
+  const bucket = r2BucketName();
+  const current = await headR2Object(key);
+  if (!current) throw new Error("R2 object not found");
+  await getR2Client().send(new CopyObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    CopySource: `${bucket}/${key.split("/").map(encodeURIComponent).join("/")}`,
+    MetadataDirective: "REPLACE",
+    Metadata: metadata,
+    ContentType: current.ContentType,
+    CacheControl: current.CacheControl,
+    ContentDisposition: current.ContentDisposition,
+    ContentEncoding: current.ContentEncoding,
+    ContentLanguage: current.ContentLanguage,
+    Expires: current.Expires,
+  }));
+}
+
 export async function deleteR2Object(key: string): Promise<void> {
   await getR2Client().send(new DeleteObjectCommand({ Bucket: r2BucketName(), Key: key }));
 }

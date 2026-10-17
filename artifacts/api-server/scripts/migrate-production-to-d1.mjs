@@ -330,8 +330,9 @@ function rowSelect(tableName, pseudoColumn, columns, cursor, limit, excludedRowI
     params.push(safeNumber(cursor, `${tableName} rowid cursor`));
   }
   if (excludedRowIds.length) {
-    conditions.push(`${quoteIdentifier(pseudoColumn)} NOT IN (${excludedRowIds.map(() => "?").join(", ")})`);
-    params.push(...excludedRowIds.map(rowId => safeNumber(BigInt(rowId), `${tableName} preserved rowid`)));
+    const validatedRowIds = excludedRowIds.map(rowId =>
+      safeNumber(BigInt(rowId), `${tableName} preserved rowid`));
+    conditions.push(`${quoteIdentifier(pseudoColumn)} NOT IN (${validatedRowIds.join(", ")})`);
   }
   params.push(limit);
   const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
@@ -1035,8 +1036,14 @@ async function restoreSequences(db) {
 async function run() {
   const apply = process.argv.includes("--apply");
   const dryRun = process.argv.includes("--dry-run");
+  const expectedSourceEtagArgument = process.argv.find(argument => argument.startsWith("--expected-source-etag="));
+  const expectedSourceEtag = expectedSourceEtagArgument?.slice("--expected-source-etag=".length);
+  const sourceObjectKeyArgument = process.argv.find(argument => argument.startsWith("--source-object-key="));
+  const sourceObjectKey = sourceObjectKeyArgument?.slice("--source-object-key=".length) || SOURCE_KEY;
   const recoverVerifiedProgress = process.argv.includes("--recover-verified-progress");
+  const reconcileExistingValues = process.argv.includes("--reconcile-existing-values");
   const replaceD1SessionsFromSource = process.argv.includes("--replace-d1-sessions-from-source");
+  const preserveD1Sessions = process.argv.includes("--preserve-d1-sessions");
   const preserveAllD1OnlyChatQueueRows = process.argv.includes("--preserve-all-d1-only-chat-queue-rows");
   if (process.argv.some(argument => argument.startsWith("--recover-verified-progress="))) {
     throw new Error("--recover-verified-progress does not take a value");
@@ -1046,6 +1053,17 @@ async function run() {
   }
   if (process.argv.some(argument => argument.startsWith("--replace-d1-sessions-from-source="))) {
     throw new Error("--replace-d1-sessions-from-source does not take a value");
+  }
+  if (expectedSourceEtagArgument && !expectedSourceEtag?.trim()) {
+    throw new Error("--expected-source-etag requires a non-empty ETag value");
+  }
+  if (
+    !sourceObjectKey
+    || sourceObjectKey.startsWith("/")
+    || sourceObjectKey.split("/").some(part => !part || part === "." || part === "..")
+    || (sourceObjectKey !== SOURCE_KEY && !sourceObjectKey.startsWith("db-migrations/"))
+  ) {
+    throw new Error("--source-object-key must be the production backup key or a safe db-migrations/ snapshot key");
   }
   const preserveExtrasPrefix = "--resume-preserving-extras=";
   const preserveExtrasArgument = process.argv.find(argument => argument.startsWith(preserveExtrasPrefix));
@@ -1059,11 +1077,17 @@ async function run() {
   if (replaceD1SessionsFromSource && !preserveExtrasArgument) {
     throw new Error("--replace-d1-sessions-from-source requires --resume-preserving-extras");
   }
+  if (preserveD1Sessions && (!preserveExtrasArgument || replaceD1SessionsFromSource)) {
+    throw new Error("--preserve-d1-sessions requires --resume-preserving-extras and cannot be combined with --replace-d1-sessions-from-source");
+  }
   if (preserveAllD1OnlyChatQueueRows && !preserveExtrasArgument) {
     throw new Error("--preserve-all-d1-only-chat-queue-rows requires --resume-preserving-extras");
   }
   if (recoverVerifiedProgress && !preserveExtrasArgument) {
     throw new Error("--recover-verified-progress requires --resume-preserving-extras");
+  }
+  if (reconcileExistingValues && (!preserveExtrasArgument || !recoverVerifiedProgress)) {
+    throw new Error("--reconcile-existing-values requires --resume-preserving-extras and --recover-verified-progress");
   }
   const requestedPreservedExtras = new Map();
   if (preserveExtrasArgument) {
@@ -1096,8 +1120,9 @@ async function run() {
     || replaceD1SessionsFromSource
     || preserveAllD1OnlyChatQueueRows;
   const replaceFromSourceTables = replaceD1SessionsFromSource ? new Set(["sessions"]) : new Set();
-  if ([apply, dryRun, resume].filter(Boolean).length !== 1) {
-    throw new Error("Choose exactly one mode: --dry-run, --apply, --resume, or --resume-preserving-extras. The default is not to write to D1.");
+  const preserveD1Tables = preserveD1Sessions ? new Set(["sessions"]) : new Set();
+  if ([apply, dryRun && !resume, resume && !dryRun, dryRun && resume].filter(Boolean).length !== 1) {
+    throw new Error("Choose exactly one mode: --dry-run, --apply, --resume, or --resume-preserving-extras. A resume preflight may combine --dry-run with --resume-preserving-extras. The default is not to write to D1.");
   }
 
   const temporaryPath = path.join(os.tmpdir(), `erp-production-${randomUUID()}.db`);
@@ -1120,16 +1145,19 @@ async function run() {
     const { client, bucket } = createR2Client();
     const head = await client.send(new HeadObjectCommand({
       Bucket: bucket,
-      Key: SOURCE_KEY,
+      Key: sourceObjectKey,
     }));
+    if (expectedSourceEtag && head.ETag !== expectedSourceEtag) {
+      throw new Error(`Production R2 source ETag changed before migration; expected ${expectedSourceEtag}, found ${head.ETag ?? "missing"}`);
+    }
     if (!head.ContentLength || !head.ETag || !head.LastModified) {
-      throw new Error(`Production R2 object ${SOURCE_KEY} is missing required metadata`);
+      throw new Error(`Production R2 object ${sourceObjectKey} is missing required metadata`);
     }
     const object = await client.send(new GetObjectCommand({
       Bucket: bucket,
-      Key: SOURCE_KEY,
+      Key: sourceObjectKey,
     }));
-    if (!object.Body) throw new Error(`Production R2 object ${SOURCE_KEY} has no content`);
+    if (!object.Body) throw new Error(`Production R2 object ${sourceObjectKey} has no content`);
     if (
       (object.ETag && object.ETag !== head.ETag)
       || (object.ContentLength !== undefined && Number(object.ContentLength) !== Number(head.ContentLength))
@@ -1225,7 +1253,7 @@ async function run() {
     };
     sourceReport = {
       source: {
-        objectKey: SOURCE_KEY,
+        objectKey: sourceObjectKey,
         etag: head.ETag,
         lastModified: head.LastModified.toISOString(),
         sizeBytes: sourceBytes.byteLength,
@@ -1250,7 +1278,7 @@ async function run() {
     }
     if (!resume) await assertEmptyTarget();
 
-    if (dryRun) {
+    if (dryRun && !resume) {
       console.info(JSON.stringify({
         mode: "dry-run",
         source: sourceReport.source,
@@ -1277,7 +1305,7 @@ async function run() {
       );
       const manifest = manifestResult.results[0];
       if (!manifest) throw new Error("Cannot resume: the D1 migration manifest is missing");
-      if (String(manifest.source_object_key) !== SOURCE_KEY) {
+      if (String(manifest.source_object_key) !== SOURCE_KEY && String(manifest.source_object_key) !== sourceObjectKey) {
         throw new Error("Cannot resume: the existing D1 manifest points at a different source object");
       }
       if (Number(manifest.source_table_count) !== sourceTables.length) {
@@ -1334,7 +1362,7 @@ async function run() {
 
       const baselineCounts = await readD1Inventory(orderedNames);
       const baselineMismatches = orderedNames
-        .filter(name => !replaceFromSourceTables.has(name) && baselineCounts[name] !== manifestProgress[name])
+        .filter(name => !replaceFromSourceTables.has(name) && !preserveD1Tables.has(name) && baselineCounts[name] !== manifestProgress[name])
         .map(name => ({ table: name, manifest: manifestProgress[name], d1: baselineCounts[name] }));
       const regressedBaselineCounts = baselineMismatches.filter(({ manifest, d1 }) => d1 < manifest);
       if (baselineMismatches.length && (
@@ -1363,7 +1391,7 @@ async function run() {
         comparableBaselineCounts[tableName] = 0;
       }
       const sourceCountRegressions = orderedNames
-        .filter(name => !replaceFromSourceTables.has(name) && tableCounts[name] < comparableBaselineCounts[name])
+        .filter(name => !replaceFromSourceTables.has(name) && !preserveD1Tables.has(name) && tableCounts[name] < comparableBaselineCounts[name])
         .map(name => ({ table: name, source: tableCounts[name], d1: comparableBaselineCounts[name] }));
       if (sourceCountRegressions.length) {
         throw new Error(`Cannot resume safely because source tables lost rows after the baseline: ${JSON.stringify(sourceCountRegressions)}`);
@@ -1378,16 +1406,16 @@ async function run() {
         comparableBaselineCounts,
         markerSnapshotSha256,
         {
-          collectChanges: !recoverVerifiedProgress,
+          collectChanges: reconcileExistingValues || !recoverVerifiedProgress,
           excludedRowIdsByTable: preservedD1ExtrasByTable,
-          skipTables: replaceFromSourceTables,
+          skipTables: new Set([...replaceFromSourceTables, ...preserveD1Tables]),
         },
       );
       await verifyOverflowValues(baselineVerification.oversized, markerSnapshotSha256);
 
       const additions = [];
       for (const tableName of orderedNames) {
-        if (replaceFromSourceTables.has(tableName)) continue;
+        if (replaceFromSourceTables.has(tableName) || preserveD1Tables.has(tableName)) continue;
         const gap = tableCounts[tableName] - comparableBaselineCounts[tableName];
         if (gap <= 0) continue;
         const pseudoColumn = rowIdColumns.get(tableName);
@@ -1404,6 +1432,41 @@ async function run() {
         additions.push({ tableName, gap, maxRowId });
       }
 
+      if (dryRun) {
+        const changesByTable = new Map();
+        for (const change of baselineVerification.changes) {
+          const current = changesByTable.get(change.table) ?? { changedCells: 0, rows: new Set(), columns: new Set() };
+          current.changedCells++;
+          current.rows.add(change.rowid);
+          current.columns.add(change.column);
+          changesByTable.set(change.table, current);
+        }
+        console.info(JSON.stringify({
+          mode: "resume-dry-run",
+          source: sourceReport.source,
+          migrationBaselineSource: baseSnapshot,
+          verifiedBaselineRows: baselineVerification.checkedRows,
+          changedCells: baselineVerification.changes.length,
+          changesByTable: [...changesByTable].map(([table, summary]) => ({
+            table,
+            changedCells: summary.changedCells,
+            changedRows: summary.rows.size,
+            columns: [...summary.columns].sort(),
+          })),
+          appendedRows: additions.map(({ tableName, gap }) => ({ table: tableName, rows: gap })),
+          preservedD1ExtrasByTable,
+          existingValuesWouldBeReconciled: reconcileExistingValues,
+          preservedTables: [...preserveD1Tables].map(table => ({
+            table,
+            sourceCount: tableCounts[table],
+            d1Count: baselineCounts[table],
+          })),
+          developmentDatabaseChanged: false,
+          publishedApplicationCutOverToD1: false,
+        }, null, 2));
+        return;
+      }
+
       if (recoverVerifiedProgress) {
         for (const { table, d1 } of baselineMismatches) {
           manifestProgress[table] = d1;
@@ -1413,9 +1476,9 @@ async function run() {
       preserveSnapshotOnFailure = true;
       await queryProductionD1(
         `UPDATE d1_migration_manifest
-         SET migrated_table_counts_json=?, status='running', finished_at=NULL
+         SET source_object_key=?, migrated_table_counts_json=?, status='running', finished_at=NULL
          WHERE id=1`,
-        [JSON.stringify(manifestProgress)],
+        [sourceObjectKey, JSON.stringify(manifestProgress)],
       );
       if (additions.length || baselineVerification.changes.length || replaceFromSourceTables.size) {
         await dropD1Triggers(triggers);
@@ -1479,7 +1542,7 @@ async function run() {
            source_foreign_key_violations_json, schema_adjustments_json, status)
          VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running')`,
         [
-          SOURCE_KEY,
+          sourceObjectKey,
           head.ETag,
           head.LastModified.toISOString(),
           sourceBytes.byteLength,
@@ -1524,7 +1587,7 @@ async function run() {
     if (!resume) await createD1IndexesAndTriggers(indexes, triggers);
     const d1Counts = await readD1Inventory(orderedNames);
     const countMismatches = orderedNames
-      .filter(name => d1Counts[name] !== tableCounts[name] + (preservedD1ExtrasByTable[name]?.length ?? 0))
+      .filter(name => !preserveD1Tables.has(name) && d1Counts[name] !== tableCounts[name] + (preservedD1ExtrasByTable[name]?.length ?? 0))
       .map(name => ({
         table: name,
         source: tableCounts[name],
@@ -1588,24 +1651,34 @@ async function run() {
       rowIdColumns,
       tableCounts,
       markerSnapshotSha256,
-      { excludedRowIdsByTable: preservedD1ExtrasByTable },
+      {
+        excludedRowIdsByTable: preservedD1ExtrasByTable,
+        skipTables: preserveD1Tables,
+      },
     );
     const overflowVerification = await verifyOverflowValues(exactVerification.oversized, markerSnapshotSha256);
     const preservedD1Extras = Object.entries(preservedD1ExtrasByTable)
       .flatMap(([table, rowIds]) => rowIds.map(rowId => ({ table, rowId })));
     const dynamicallyPreservedD1Tables = [...dynamicallyPreservedTables];
     const replacedD1TablesFromSource = [...replaceFromSourceTables];
+    const preservedD1TableCounts = [...preserveD1Tables].map(table => ({
+      table,
+      sourceCount: tableCounts[table],
+      d1Count: d1Counts[table],
+    }));
     // Every preserved D1-only row is explicitly approved and listed in the report;
     // its presence does not mean the source snapshot failed exact verification.
     const migrationStatus = "completed";
     const reportSchemaAdjustments = preservedD1Extras.length
       || dynamicallyPreservedD1Tables.length
       || replacedD1TablesFromSource.length
+      || preservedD1TableCounts.length
       ? {
         ...schemaAdjustments,
         ...(preservedD1Extras.length ? { preservedD1Extras } : {}),
         ...(dynamicallyPreservedD1Tables.length ? { dynamicallyPreservedD1Tables } : {}),
         ...(replacedD1TablesFromSource.length ? { replacedD1TablesFromSource } : {}),
+        ...(preservedD1TableCounts.length ? { preservedD1Tables: preservedD1TableCounts } : {}),
       }
       : schemaAdjustments;
 
@@ -1627,6 +1700,7 @@ async function run() {
       preservedD1Extras,
       dynamicallyPreservedD1Tables,
       replacedD1TablesFromSource,
+      preservedD1Tables: preservedD1TableCounts,
       foreignKeyViolationCount: sourceReport.foreignKeyViolationCount,
       foreignKeyViolations: sourceFkViolations,
       orphanRowsPreserved: orphanCheckResults,
@@ -1652,11 +1726,12 @@ async function run() {
 
     await queryProductionD1(
       `UPDATE d1_migration_manifest
-       SET migrated_table_counts_json=?, schema_adjustments_json=?, status=?, finished_at=datetime('now'),
+       SET source_object_key=?, migrated_table_counts_json=?, schema_adjustments_json=?, status=?, finished_at=datetime('now'),
            final_source_etag=?, final_source_last_modified=?, final_source_size_bytes=?,
            final_source_sha256=?, final_source_table_count=?, final_source_row_count=?
        WHERE id=1`,
       [
+        sourceObjectKey,
         JSON.stringify(d1Counts),
         JSON.stringify(reportSchemaAdjustments),
         migrationStatus,

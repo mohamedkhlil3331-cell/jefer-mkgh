@@ -1,6 +1,6 @@
 import { File } from "@google-cloud/storage";
 
-const ACL_POLICY_METADATA_KEY = "custom:aclPolicy";
+export const ACL_POLICY_METADATA_KEY = "custom:aclPolicy";
 
 // Can be flexibly defined according to the use case.
 //

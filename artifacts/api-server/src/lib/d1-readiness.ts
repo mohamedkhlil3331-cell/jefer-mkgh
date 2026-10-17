@@ -123,6 +123,7 @@ type MigrationManifest = {
 type MigrationAdjustments = {
   preservedD1Extras?: Array<{ table: string; rowId: string | number }>;
   dynamicallyPreservedD1Tables?: string[];
+  preservedD1Tables?: Array<{ table: string; sourceCount: number; d1Count: number }>;
 };
 
 const APPROVED_EXPLICIT_EXTRA_COUNTS: Record<string, number> = {
@@ -131,6 +132,7 @@ const APPROVED_EXPLICIT_EXTRA_COUNTS: Record<string, number> = {
 };
 const APPROVED_DYNAMIC_EXTRA_TABLES = new Set(["chat_push_queue"]);
 const APPROVED_DYNAMIC_EXTRA_ROWS = 74;
+const APPROVED_PRESERVED_D1_TABLES = new Set(["sessions"]);
 
 function readBuildReadiness(): Promise<BuildReadiness> {
   const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -184,7 +186,8 @@ function parseApprovedExtraRows(
   const adjustments = parsed as MigrationAdjustments;
   const explicitEntries = adjustments.preservedD1Extras ?? [];
   const dynamicTables = adjustments.dynamicallyPreservedD1Tables ?? [];
-  if (!Array.isArray(explicitEntries) || !Array.isArray(dynamicTables)) {
+  const preservedTables = adjustments.preservedD1Tables ?? [];
+  if (!Array.isArray(explicitEntries) || !Array.isArray(dynamicTables) || !Array.isArray(preservedTables)) {
     throw new Error("[d1-readiness] D1 migration manifest contains malformed preserved-row metadata");
   }
 
@@ -205,7 +208,7 @@ function parseApprovedExtraRows(
     }
   }
   for (const table of explicitCounts.keys()) {
-    if (!(table in APPROVED_EXPLICIT_EXTRA_COUNTS)) {
+    if (!(table in APPROVED_EXPLICIT_EXTRA_COUNTS) && !APPROVED_DYNAMIC_EXTRA_TABLES.has(table)) {
       throw new Error(`[d1-readiness] D1 migration manifest contains unapproved extra rows for ${table}`);
     }
   }
@@ -220,16 +223,33 @@ function parseApprovedExtraRows(
     }
   }
 
+  const preservedTableNames = new Set<string>();
+  let preservedTableRowDelta = 0;
+  for (const entry of preservedTables) {
+    if (
+      !entry
+      || typeof entry.table !== "string"
+      || !APPROVED_PRESERVED_D1_TABLES.has(entry.table)
+      || preservedTableNames.has(entry.table)
+      || !Number.isSafeInteger(entry.sourceCount)
+      || entry.sourceCount < 0
+      || !Number.isSafeInteger(entry.d1Count)
+      || entry.d1Count < 0
+      || tableCounts[entry.table] !== entry.d1Count
+    ) {
+      throw new Error("[d1-readiness] D1 migration manifest contains an invalid preserved-table entry");
+    }
+    preservedTableNames.add(entry.table);
+    preservedTableRowDelta += entry.d1Count - entry.sourceCount;
+  }
+
   const explicitCount = [...explicitCounts.values()].reduce((sum, count) => sum + count, 0);
-  const unexplainedDifference = targetRowCount - sourceRowCount - explicitCount;
+  const unexplainedDifference = targetRowCount - sourceRowCount - explicitCount - preservedTableRowDelta;
   if (unexplainedDifference < 0) {
     throw new Error("[d1-readiness] D1 target contains fewer rows than the verified source plus approved extras");
   }
   if (unexplainedDifference === 0) {
-    if (dynamicTables.length) {
-      throw new Error("[d1-readiness] D1 migration lists dynamically preserved rows but records no corresponding extras");
-    }
-    return explicitCount;
+    return explicitCount + preservedTableRowDelta;
   }
   if (
     dynamicTables.length !== 1
@@ -239,7 +259,7 @@ function parseApprovedExtraRows(
   ) {
     throw new Error("[d1-readiness] D1 target contains unapproved or unexplained extra rows");
   }
-  return explicitCount + unexplainedDifference;
+  return explicitCount + preservedTableRowDelta + unexplainedDifference;
 }
 
 async function validateCompletedMigration(): Promise<void> {
