@@ -2,6 +2,7 @@ import express, { type Express, type Request, type Response, type NextFunction }
 import cors from "cors";
 import compression from "compression";
 import pinoHttp from "pino-http";
+import { Readable } from "node:stream";
 import fs from "node:fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -104,7 +105,12 @@ app.get("/api/uploads/:file", async (req, res, next) => {
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("Cache-Control", object.CacheControl || "private, max-age=300");
         if (object.ContentLength != null) res.setHeader("Content-Length", object.ContentLength);
-        (object.Body as import("node:stream").Readable).pipe(res);
+        const body = object.Body as ReadableStream<Uint8Array> | import("node:stream").Readable;
+        if (typeof (body as ReadableStream<Uint8Array>).getReader === "function") {
+          Readable.fromWeb(body as ReadableStream<Uint8Array>).pipe(res);
+        } else {
+          (body as import("node:stream").Readable).pipe(res);
+        }
         return;
       }
     } catch (error) {

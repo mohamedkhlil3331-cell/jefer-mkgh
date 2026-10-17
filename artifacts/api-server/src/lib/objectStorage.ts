@@ -20,6 +20,7 @@ import {
   deleteR2Object,
   getR2Object,
   headR2Object,
+  isWorkerR2BindingConfigured,
   isR2ObjectStorageBackend,
   r2BucketName,
   setR2ObjectMetadata,
@@ -169,14 +170,17 @@ export class ObjectStorageService {
     if (file instanceof R2StoredObject) {
       const object = await getR2Object(file.key);
       if (!object?.Body) throw new ObjectNotFoundError();
-      const nodeStream = object.Body as NodeJS.ReadableStream;
+      const body = object.Body as ReadableStream<Uint8Array> | NodeJS.ReadableStream;
+      const webStream = typeof (body as ReadableStream<Uint8Array>).getReader === "function"
+        ? body as ReadableStream<Uint8Array>
+        : Readable.toWeb(body as import("node:stream").Readable) as ReadableStream<Uint8Array>;
       const headers: Record<string, string> = {
         "Content-Type": object.ContentType || "application/octet-stream",
         "Cache-Control": `private, max-age=${cacheTtlSec}`,
         "X-Content-Type-Options": "nosniff",
       };
       if (object.ContentLength != null) headers["Content-Length"] = String(object.ContentLength);
-      return new Response(Readable.toWeb(nodeStream as import("node:stream").Readable) as ReadableStream, { headers });
+      return new Response(webStream, { headers });
     }
     if (file instanceof HostingerObjectFile) {
       const [metadata] = await file.getMetadata();
@@ -212,6 +216,9 @@ export class ObjectStorageService {
   async getObjectEntityUploadURL(): Promise<string> {
     if (isFilesystemStorageMode()) return issueHostingerUpload("uploads");
     if (isR2ObjectStorageBackend()) {
+      if (isWorkerR2BindingConfigured()) {
+        return `/api/storage/r2-upload/uploads/${randomUUID()}`;
+      }
       return createR2UploadUrl(`${R2_OBJECT_PREFIX}uploads/${randomUUID()}`);
     }
     const privateObjectDir = this.getPrivateObjectDir();
@@ -238,6 +245,9 @@ export class ObjectStorageService {
   async getBranchDocumentUploadURL(): Promise<string> {
     if (isFilesystemStorageMode()) return issueHostingerUpload("branch-documents");
     if (isR2ObjectStorageBackend()) {
+      if (isWorkerR2BindingConfigured()) {
+        return `/api/storage/r2-upload/branch-documents/${randomUUID()}`;
+      }
       return createR2UploadUrl(`${R2_OBJECT_PREFIX}branch-documents/${randomUUID()}`);
     }
     const privateObjectDir = this.getPrivateObjectDir();
@@ -304,6 +314,15 @@ export class ObjectStorageService {
         // Already-normalized object paths are not absolute URLs.
       }
       return rawPath;
+    }
+    if (isWorkerR2BindingConfigured()) {
+      try {
+        const url = new URL(rawPath, "https://worker-upload.invalid");
+        const match = url.pathname.match(
+          /^\/api\/storage\/r2-upload\/(uploads|branch-documents)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+        );
+        if (match) return `/objects/${match[1]}/${match[2]}`;
+      } catch { /* already-normalized object paths are not absolute URLs */ }
     }
     if (!rawPath.startsWith("https://storage.googleapis.com/")) {
       if (isR2ObjectStorageBackend()) {
