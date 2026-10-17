@@ -33,6 +33,12 @@ Cloudflare D1 HTTP API writes require the API token's `D1:Edit` permission; `D1:
 
 **How to apply:** Ensure the existing Cloudflare connection has D1 write permission before migrating. Preserve a failed source snapshot, compare all existing source-backed D1 rows, reject count decreases or non-append differences, and never replay from an old manifest count without verification.
 
+Cloudflare D1 SQL imports can reject oversized literal `INSERT` statements with `SQLITE_TOOBIG`, and import jobs can reset if they are not polled promptly. Split large exports into smaller statement-complete chunks, poll each job continuously, and insert oversized rows with bound parameters. If triggers block historical inserts, disable them only on the replica during import and restore their exact source definitions before checking parity.
+
+**Why:** A full export exceeded D1's statement limit, and one large import timed out before polling; later chunks succeeded, while several large image rows required parameterized inserts.
+
+**How to apply:** Keep the source database untouched. Verify each chunk's completion before proceeding, record which large rows were parameterized, then compare every application table's row count and restore triggers before declaring the replica synchronized.
+
 D1 query batches can hit a lower SQL bind-variable ceiling than SQLite, especially when verification statements bind long lists of preserved row IDs.
 
 **Why:** A read-only comparison failed with “too many SQL variables” before any database writes when the preserved-row exclusion list was bound as parameters.

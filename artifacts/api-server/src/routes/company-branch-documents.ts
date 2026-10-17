@@ -98,7 +98,7 @@ router.post("/company-settings/:id/documents/upload-url", async (req: Request, r
   }
 
   try {
-    const uploadURL = await objectStorageService.getBranchDocumentUploadURL();
+    const uploadURL = await objectStorageService.getBranchDocumentUploadURL(body.data.size);
     const objectPath = objectStorageService.normalizeObjectEntityPath(uploadURL);
     const payload = CreateCompanyBranchDocumentUploadUrlResponse.parse({ uploadURL, objectPath });
     if (!BRANCH_DOCUMENT_OBJECT_PATH.test(payload.objectPath)) {

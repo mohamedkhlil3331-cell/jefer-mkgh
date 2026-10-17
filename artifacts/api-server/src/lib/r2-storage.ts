@@ -60,6 +60,22 @@ export async function handleWorkerR2Upload(request: Request): Promise<Response |
   const bucket = workerR2Bucket();
   if (!bucket) return new Response("R2 binding is unavailable", { status: 503 });
   if (!request.body) return new Response("Upload body is required", { status: 400 });
+  const declaredSize = url.searchParams.get("size") ?? request.headers.get("content-length");
+  const size = declaredSize === null ? NaN : Number(declaredSize);
+  if (!Number.isSafeInteger(size) || size < 0) {
+    return new Response("A valid upload size is required", { status: 411 });
+  }
+  const requestLength = request.headers.get("content-length");
+  if (requestLength !== null && Number(requestLength) !== size) {
+    return new Response("Upload size does not match the request body length", { status: 400 });
+  }
+  const FixedLengthStream = (globalThis as typeof globalThis & {
+    FixedLengthStream?: new (length: number) => {
+      readable: ReadableStream<Uint8Array>;
+      writable: WritableStream<Uint8Array>;
+    };
+  }).FixedLengthStream;
+  if (!FixedLengthStream) return new Response("Fixed-length upload streaming is unavailable", { status: 503 });
 
   const metadata: NonNullable<WorkerR2Object["httpMetadata"]> = {};
   const contentType = request.headers.get("content-type");
@@ -73,9 +89,13 @@ export async function handleWorkerR2Upload(request: Request): Promise<Response |
   if (contentEncoding) metadata.contentEncoding = contentEncoding;
   if (contentLanguage) metadata.contentLanguage = contentLanguage;
 
-  const stored = await bucket.put(`app-objects/${match[1]}/${match[2]}`, request.body, {
-    ...(Object.keys(metadata).length ? { httpMetadata: metadata } : {}),
-  });
+  const fixedLength = new FixedLengthStream(size);
+  const [stored] = await Promise.all([
+    bucket.put(`app-objects/${match[1]}/${match[2]}`, fixedLength.readable, {
+      ...(Object.keys(metadata).length ? { httpMetadata: metadata } : {}),
+    }),
+    request.body.pipeTo(fixedLength.writable),
+  ]);
   if (!stored) return new Response("R2 upload failed", { status: 500 });
   return new Response(null, { status: 200 });
 }

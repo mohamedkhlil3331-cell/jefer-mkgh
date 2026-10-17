@@ -1,7 +1,6 @@
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import compression from "compression";
-import pinoHttp from "pino-http";
 import { Readable } from "node:stream";
 import fs from "node:fs";
 import path from "path";
@@ -19,26 +18,44 @@ import {
 import { mutationSessionGuard } from "./middlewares/mutation-session-guard.js";
 import { getR2Object, isR2ObjectStorageBackend } from "./lib/r2-storage.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const isCloudflareWorker = Boolean(
+  (globalThis as typeof globalThis & { __ERP_WORKER_ENV?: unknown }).__ERP_WORKER_ENV,
+);
+const __dirname = isCloudflareWorker ? "/worker" : path.dirname(fileURLToPath(import.meta.url));
 const UPLOADS_PATH = isFilesystemStorageMode() || isFilesystemDatabaseMode()
   ? path.join(getAppDataDir(), "uploads")
   : path.join(__dirname, "..", "uploads");
 
 const app: Express = express();
 
-app.use(
-  pinoHttp({
-    logger,
-    serializers: {
-      req(req) {
-        return { id: req.id, method: req.method, url: req.url?.split("?")[0] };
+if ((globalThis as typeof globalThis & { __ERP_WORKER_ENV?: unknown }).__ERP_WORKER_ENV) {
+  app.use((req, res, next) => {
+    const startedAt = Date.now();
+    res.once("finish", () => {
+      logger.info({
+        req: { method: req.method, url: req.url?.split("?")[0] },
+        res: { statusCode: res.statusCode },
+        responseTime: Date.now() - startedAt,
+      }, "request completed");
+    });
+    next();
+  });
+} else {
+  const { default: pinoHttp } = await import("pino-http");
+  app.use(
+    pinoHttp({
+      logger,
+      serializers: {
+        req(req) {
+          return { id: req.id, method: req.method, url: req.url?.split("?")[0] };
+        },
+        res(res) {
+          return { statusCode: res.statusCode };
+        },
       },
-      res(res) {
-        return { statusCode: res.statusCode };
-      },
-    },
-  }),
-);
+    }),
+  );
+}
 
 app.use(compression({ threshold: 1024 }));
 app.use(cors());
@@ -139,8 +156,10 @@ app.get("/api/uploads/:file", async (req, res, next) => {
   }
 });
 
-// Serve static public files (system guide, etc.)
-app.use("/api/public", express.static(path.join(import.meta.dirname, "..", "public")));
+// Public files remain served by the Node deployment; Workers have no local filesystem.
+if (!isCloudflareWorker) {
+  app.use("/api/public", express.static(path.join(import.meta.dirname, "..", "public")));
+}
 
 
 app.use("/api", router);

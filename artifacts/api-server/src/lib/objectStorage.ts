@@ -213,11 +213,12 @@ export class ObjectStorageService {
     return new Response(webStream, { headers });
   }
 
-  async getObjectEntityUploadURL(): Promise<string> {
+  async getObjectEntityUploadURL(expectedSize?: number): Promise<string> {
     if (isFilesystemStorageMode()) return issueHostingerUpload("uploads");
     if (isR2ObjectStorageBackend()) {
       if (isWorkerR2BindingConfigured()) {
-        return `/api/storage/r2-upload/uploads/${randomUUID()}`;
+        const size = expectedSize === undefined ? "" : `?size=${encodeURIComponent(String(expectedSize))}`;
+        return `/api/storage/r2-upload/uploads/${randomUUID()}${size}`;
       }
       return createR2UploadUrl(`${R2_OBJECT_PREFIX}uploads/${randomUUID()}`);
     }
@@ -242,11 +243,12 @@ export class ObjectStorageService {
     });
   }
 
-  async getBranchDocumentUploadURL(): Promise<string> {
+  async getBranchDocumentUploadURL(expectedSize?: number): Promise<string> {
     if (isFilesystemStorageMode()) return issueHostingerUpload("branch-documents");
     if (isR2ObjectStorageBackend()) {
       if (isWorkerR2BindingConfigured()) {
-        return `/api/storage/r2-upload/branch-documents/${randomUUID()}`;
+        const size = expectedSize === undefined ? "" : `?size=${encodeURIComponent(String(expectedSize))}`;
+        return `/api/storage/r2-upload/branch-documents/${randomUUID()}${size}`;
       }
       return createR2UploadUrl(`${R2_OBJECT_PREFIX}branch-documents/${randomUUID()}`);
     }

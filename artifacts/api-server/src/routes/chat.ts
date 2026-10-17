@@ -442,7 +442,7 @@ router.post("/chat/conversations/:conversationId/voice-upload-url", async (req, 
   }
 
   try {
-    const uploadUrl = await objectStorage.getObjectEntityUploadURL();
+    const uploadUrl = await objectStorage.getObjectEntityUploadURL(parsed.data.size);
     const objectPath = objectStorage.normalizeObjectEntityPath(uploadUrl);
     if (!objectPath.startsWith("/objects/")) {
       throw new Error("Object storage did not return a private object path");
