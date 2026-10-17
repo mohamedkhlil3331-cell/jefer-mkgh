@@ -14,7 +14,14 @@ import {
   resolveHostingerUploadPath,
 } from "./hostinger-filesystem-storage.js";
 import { isFilesystemStorageMode } from "./db-sync.js";
-import { createR2UploadUrl, deleteR2Object, getR2Object, headR2Object, isR2Configured, r2BucketName } from "./r2-storage.js";
+import {
+  createR2UploadUrl,
+  deleteR2Object,
+  getR2Object,
+  headR2Object,
+  isR2ObjectStorageBackend,
+  r2BucketName,
+} from "./r2-storage.js";
 
 const REPLIT_SIDECAR_ENDPOINT = "http://127.0.0.1:1106";
 const R2_OBJECT_PREFIX = "app-objects/";
@@ -93,6 +100,10 @@ export class ObjectStorageService {
       const fullPath = `${searchPath}/${filePath}`;
 
       const { bucketName, objectName } = parseObjectPath(fullPath);
+      if (isR2ObjectStorageBackend()) {
+        const r2Key = `${R2_OBJECT_PREFIX}${objectName}`;
+        if (await headR2Object(r2Key)) return new R2StoredObject(r2Key) as unknown as File;
+      }
       if (isFilesystemStorageMode()) {
         const localFile = new HostingerObjectFile(objectName);
         const [exists] = await localFile.exists();
@@ -157,7 +168,7 @@ export class ObjectStorageService {
 
   async getObjectEntityUploadURL(): Promise<string> {
     if (isFilesystemStorageMode()) return issueHostingerUpload("uploads");
-    if (isR2Configured) {
+    if (isR2ObjectStorageBackend()) {
       return createR2UploadUrl(`${R2_OBJECT_PREFIX}uploads/${randomUUID()}`);
     }
     const privateObjectDir = this.getPrivateObjectDir();
@@ -183,7 +194,7 @@ export class ObjectStorageService {
 
   async getBranchDocumentUploadURL(): Promise<string> {
     if (isFilesystemStorageMode()) return issueHostingerUpload("branch-documents");
-    if (isR2Configured) {
+    if (isR2ObjectStorageBackend()) {
       return createR2UploadUrl(`${R2_OBJECT_PREFIX}branch-documents/${randomUUID()}`);
     }
     const privateObjectDir = this.getPrivateObjectDir();
@@ -210,7 +221,7 @@ export class ObjectStorageService {
     }
 
     const entityId = parts.slice(1).join("/");
-    if (isR2Configured) {
+    if (isR2ObjectStorageBackend()) {
       const r2Object = await headR2Object(`${R2_OBJECT_PREFIX}${entityId}`);
       if (r2Object) return new R2StoredObject(`${R2_OBJECT_PREFIX}${entityId}`) as unknown as File;
     }
@@ -252,7 +263,7 @@ export class ObjectStorageService {
       return rawPath;
     }
     if (!rawPath.startsWith("https://storage.googleapis.com/")) {
-      if (isR2Configured) {
+      if (isR2ObjectStorageBackend()) {
         try {
           const url = new URL(rawPath);
           const accountHost = `${process.env.CLOUDFLARE_R2_ACCOUNT_ID?.trim()}.r2.cloudflarestorage.com`.toLowerCase();

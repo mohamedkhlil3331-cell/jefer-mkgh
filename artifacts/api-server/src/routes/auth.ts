@@ -1,8 +1,8 @@
 import { Router } from "express";
 import crypto from "node:crypto";
 import nodemailer from "nodemailer";
-import db, { generateToken, checkpointWAL } from "../lib/db.js";
-import { uploadDbBackup, getDefaultDbPath } from "../lib/db-sync.js";
+import { execute, executeBatch, queryAll, queryOne } from "../lib/erp-sql.js";
+import { isD1DatabaseMode } from "../lib/database-mode.js";
 import { acquireActorLock } from "../lib/session-control.js";
 import { clearSpecialSession, isSpecialSessionValid, setSpecialSession } from "../lib/special-sessions.js";
 import { generateRentalOtp, hashRentalPassword, RENTAL_CUSTOMER_ROLE, verifyRentalPassword } from "../lib/rental-customer-auth.js";
@@ -17,6 +17,19 @@ const RENTAL_OTP_MAX_ATTEMPTS = 5;
 const recoveryOtps = new Map<number, { digest: string; expiresAt: number; attempts: number }>();
 const recoveryRequestLimits = new Map<string, number>();
 const recoveryIpLimits = new Map<string, { count: number; expiresAt: number }>();
+
+async function backupSqliteAfterAuthMutation(): Promise<void> {
+  if (isD1DatabaseMode()) return;
+  try {
+    const [{ uploadDbBackup, getDefaultDbPath }, dbModule] = await Promise.all([
+      import("../lib/db-sync.js"),
+      import("../lib/db.js"),
+    ]);
+    await uploadDbBackup(getDefaultDbPath(), dbModule.checkpointWAL);
+  } catch (error) {
+    console.warn("[auth] SQLite backup after auth mutation failed", error);
+  }
+}
 
 function recoveryPhone(raw: unknown): { stored: string[]; sms: string } | null {
   if (typeof raw !== "string") return null;
@@ -34,28 +47,27 @@ function recoveryPhone(raw: unknown): { stored: string[]; sms: string } | null {
 export const sysAdminTokens = new Set<string>();
 const SYS_ADMIN_USER = { id: 0, name: "مدير النظام", phone: "mkgh", role: "admin", active: 1, approval_status: "approved", permissions: null };
 
-export function isSysAdminToken(token: string): boolean {
-  return sysAdminTokens.has(token) || isSpecialSessionValid("system-admin", token);
+export async function isSysAdminToken(token: string): Promise<boolean> {
+  return sysAdminTokens.has(token) || await isSpecialSessionValid("system-admin", token);
 }
 
 async function createSingleSession(userId: number | bigint, ipAddress: string | null) {
   const actorKey = `user:${userId}`;
   const release = await acquireActorLock(actorKey);
   try {
-    const token = generateToken();
+    const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    db.transaction(() => {
-      db.prepare("DELETE FROM sessions WHERE user_id=?").run(userId);
-      db.prepare("INSERT INTO sessions (token, user_id, expires_at, ip_address) VALUES (?,?,?,?)")
-        .run(token, userId, expiresAt, ipAddress);
-    })();
+    await executeBatch([
+      { sql: "DELETE FROM sessions WHERE user_id=?", params: [userId] },
+      { sql: "INSERT INTO sessions (token, user_id, expires_at, ip_address) VALUES (?,?,?,?)", params: [token, userId, expiresAt, ipAddress] },
+    ]);
     return token;
   } finally {
     release();
   }
 }
 
-function requireUserAdmin(req: import("express").Request, res: import("express").Response): boolean {
+async function requireUserAdmin(req: import("express").Request, res: import("express").Response): Promise<boolean> {
   const authorization = req.headers.authorization?.trim() ?? "";
   const bearer = authorization.match(/^Bearer\s+(.+)$/i);
   const token = bearer?.[1].trim();
@@ -63,14 +75,14 @@ function requireUserAdmin(req: import("express").Request, res: import("express")
     res.status(401).json({ error: "تسجيل الدخول مطلوب" });
     return false;
   }
-  if (isSysAdminToken(token)) return true;
-  const admin = db.prepare(
+  if (await isSysAdminToken(token)) return true;
+  const admin = await queryOne(
     `SELECT u.id
      FROM sessions s JOIN users u ON u.id=s.user_id
      WHERE s.token=? AND datetime(s.expires_at) > datetime('now')
        AND s.rowid=(SELECT MAX(current.rowid) FROM sessions current WHERE current.user_id=s.user_id)
        AND u.active=1 AND u.role='admin'`
-  ).get(token) as { id: number } | undefined;
+  , token) as { id: number } | undefined;
   if (!admin) {
     res.status(403).json({ error: "صلاحيات المدير مطلوبة" });
     return false;
@@ -81,16 +93,19 @@ function requireUserAdmin(req: import("express").Request, res: import("express")
 // ── OTP store for secret admin access ─────────────────────────────────────────
 const otpStore = new Map<string, { otp: string; expiresAt: number }>();
 
-function getDbCfg(key: string): string {
+async function getDbCfg(key: string): Promise<string> {
   try {
-    return (db.prepare("SELECT value FROM system_config WHERE key=?").get(key) as any)?.value?.trim() ?? "";
+    return (await queryOne<{ value?: string }>("SELECT value FROM system_config WHERE key=?", key))?.value?.trim() ?? "";
   } catch { return ""; }
 }
 
 async function sendOtpEmail(otp: string): Promise<void> {
-  const gmailUser = getDbCfg("gmail_user") || process.env.GMAIL_USER?.trim();
-  const gmailPass = getDbCfg("gmail_pass") || process.env.GMAIL_APP_PASSWORD?.trim();
-  const toEmail   = getDbCfg("otp_email")  || "mohamedkhlil3331@gmail.com";
+  const [configuredUser, configuredPass, configuredEmail] = await Promise.all([
+    getDbCfg("gmail_user"), getDbCfg("gmail_pass"), getDbCfg("otp_email"),
+  ]);
+  const gmailUser = configuredUser || process.env.GMAIL_USER?.trim();
+  const gmailPass = configuredPass || process.env.GMAIL_APP_PASSWORD?.trim();
+  const toEmail   = configuredEmail || "mohamedkhlil3331@gmail.com";
 
   if (!gmailUser || !gmailPass) {
     console.warn(`[OTP] No email credentials set. Admin OTP = ${otp} (valid 5 min)`);
@@ -128,15 +143,15 @@ router.post("/auth/login", async (req, res) => {
   if (!phone || !password) return void res.status(400).json({ error: "رقم الجوال وكلمة المرور مطلوبان" });
 
   // ─── Hidden system-admin bypass (password only) ──────────────────────────
-  const mkghPw = getDbCfg("mkgh_password") || "mkgh";
+  const mkghPw = (await getDbCfg("mkgh_password")) || "mkgh";
   if (phone === "mkgh" && password === mkghPw) {
     const release = await acquireActorLock("system-admin");
     try {
-      const token = generateToken();
+      const token = crypto.randomBytes(32).toString("hex");
       const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
       sysAdminTokens.clear();
       sysAdminTokens.add(token);
-      setSpecialSession("system-admin", token, expiresAt);
+      await setSpecialSession("system-admin", token, expiresAt);
       return void res.json({ token, user: SYS_ADMIN_USER });
     } finally {
       release();
@@ -146,7 +161,7 @@ router.post("/auth/login", async (req, res) => {
   // ─── Step 1: try vehicle / car-number login FIRST ───────────────────────────
   // Doing this before the phone lookup ensures numeric car numbers (like "1908")
   // never collide with regular phone accounts.
-  const vehicleMatch = db.prepare("SELECT * FROM fleet_vehicles WHERE plate_number = ?").get(phone) as Record<string, unknown> | undefined;
+  const vehicleMatch = await queryOne<Record<string, unknown>>("SELECT * FROM fleet_vehicles WHERE plate_number = ?", phone);
   if (vehicleMatch) {
     const isNumericPlate = /^\d+$/.test(String(vehicleMatch.plate_number));
     const vehicleRole    = isNumericPlate ? "vehicle" : "driver";
@@ -157,30 +172,40 @@ router.post("/auth/login", async (req, res) => {
 
     if (pwOk) {
       // Find or create the linked user with the correct role
-      let vUser = db.prepare("SELECT * FROM users WHERE vehicle_plate = ? AND role = ?")
-        .get(String(vehicleMatch.plate_number), vehicleRole) as Record<string, unknown> | undefined;
+      let vUser = await queryOne<Record<string, unknown>>(
+        "SELECT * FROM users WHERE vehicle_plate = ? AND role = ?",
+        String(vehicleMatch.plate_number), vehicleRole,
+      );
       if (!vUser && !isNumericPlate) {
-        vUser = db.prepare("SELECT * FROM users WHERE phone = ? AND role = 'driver'")
-          .get(String(vehicleMatch.plate_number)) as Record<string, unknown> | undefined;
+        vUser = await queryOne<Record<string, unknown>>(
+          "SELECT * FROM users WHERE phone = ? AND role = 'driver'",
+          String(vehicleMatch.plate_number),
+        );
       }
       if (!vUser) {
         const usedPw = customPw || defaultPw || password;
-        const r = db.prepare(
-          "INSERT OR IGNORE INTO users (name,phone,password,role,active,approval_status,vehicle_plate) VALUES (?,?,?,?,1,'approved',?)"
-        ).run(vehicleMatch.driver_name || vehicleMatch.plate_number, vehicleMatch.plate_number, usedPw, vehicleRole, vehicleMatch.plate_number);
+        const r = await execute(
+          "INSERT OR IGNORE INTO users (name,phone,password,role,active,approval_status,vehicle_plate) VALUES (?,?,?,?,1,'approved',?)",
+          vehicleMatch.driver_name || vehicleMatch.plate_number, vehicleMatch.plate_number, usedPw, vehicleRole, vehicleMatch.plate_number,
+        );
         // Also update password for any existing user with same phone (numeric plate collision fix)
-        db.prepare("UPDATE users SET role=?,vehicle_plate=?,password=? WHERE phone=? AND role!=?")
-          .run(vehicleRole, vehicleMatch.plate_number, customPw || password, vehicleMatch.plate_number, "customer");
-        vUser = db.prepare("SELECT * FROM users WHERE id=?").get(r.lastInsertRowid) as Record<string, unknown> | undefined
-          ?? db.prepare("SELECT * FROM users WHERE vehicle_plate=? AND role=?").get(String(vehicleMatch.plate_number), vehicleRole) as Record<string, unknown> | undefined;
+        await execute(
+          "UPDATE users SET role=?,vehicle_plate=?,password=? WHERE phone=? AND role!=?",
+          vehicleRole, vehicleMatch.plate_number, customPw || password, vehicleMatch.plate_number, "customer",
+        );
+        vUser = await queryOne<Record<string, unknown>>("SELECT * FROM users WHERE id=?", r.lastInsertRowid)
+          ?? await queryOne<Record<string, unknown>>(
+            "SELECT * FROM users WHERE vehicle_plate=? AND role=?",
+            String(vehicleMatch.plate_number), vehicleRole,
+          );
       } else if (!vUser.vehicle_plate) {
-        db.prepare("UPDATE users SET vehicle_plate = ? WHERE id = ?").run(vehicleMatch.plate_number, vUser.id);
+        await execute("UPDATE users SET vehicle_plate = ? WHERE id = ?", vehicleMatch.plate_number, vUser.id);
         vUser = { ...vUser, vehicle_plate: vehicleMatch.plate_number };
       }
       if (vUser) {
         const ip1 = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0].trim() ?? req.socket?.remoteAddress ?? null;
         const token = await createSingleSession(vUser.id as number, ip1);
-        uploadDbBackup(getDefaultDbPath(), checkpointWAL).catch(() => {});
+        void backupSqliteAfterAuthMutation();
         const { password: _pw, ...safeVUser } = vUser;
         return void res.json({ token, user: { ...safeVUser, vehicle_plate: vehicleMatch.plate_number, vehicle_id: vehicleMatch.id } });
       }
@@ -192,12 +217,15 @@ router.post("/auth/login", async (req, res) => {
   }
 
   // ─── Step 2: regular phone + password login ──────────────────────────────────
-  let user = db.prepare("SELECT * FROM users WHERE phone = ?").get(phone) as Record<string, unknown> | undefined;
+  let user = await queryOne<Record<string, unknown>>("SELECT * FROM users WHERE phone = ?", phone);
   let vehicleInfo: Record<string, unknown> | undefined;
 
   // Also try looking up by vehicle_plate for non-numeric plate drivers
   if (!user) {
-    const driverByPlate = db.prepare("SELECT * FROM users WHERE vehicle_plate = ? AND role = 'driver'").get(phone) as Record<string, unknown> | undefined;
+    const driverByPlate = await queryOne<Record<string, unknown>>(
+      "SELECT * FROM users WHERE vehicle_plate = ? AND role = 'driver'",
+      phone,
+    );
     if (driverByPlate) {
       user = driverByPlate;
       vehicleInfo = vehicleMatch;
@@ -221,7 +249,7 @@ router.post("/auth/login", async (req, res) => {
 
   const ip2 = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0].trim() ?? req.socket?.remoteAddress ?? null;
   const token = await createSingleSession(user.id as number, ip2);
-  uploadDbBackup(getDefaultDbPath(), checkpointWAL).catch(() => {});
+  void backupSqliteAfterAuthMutation();
 
   const { password: _pw, ...safeUser } = user;
   const extra = vehicleInfo ? { vehicle_plate: vehicleInfo.plate_number, vehicle_id: vehicleInfo.id } :
@@ -245,21 +273,20 @@ router.post("/auth/register", async (req, res) => {
   const finalRole = role || "customer";
 
   try {
-    const result = db.prepare(
-      "INSERT INTO users (name,phone,password,role,company_name,vat_number,active,approval_status,register_note) VALUES (?,?,?,?,?,?,?,?,?)"
-    ).run(name, phone, password, finalRole, company_name || null, vat_number || null, active, approvalStatus, register_note || null);
+    const result = await execute(
+      "INSERT INTO users (name,phone,password,role,company_name,vat_number,active,approval_status,register_note) VALUES (?,?,?,?,?,?,?,?,?)",
+      name, phone, password, finalRole, company_name || null, vat_number || null, active, approvalStatus, register_note || null,
+    );
 
     // If a rep_phone is supplied during customer registration, create a pending link
     if (rep_phone && finalRole === "customer") {
-      const repUser = db.prepare("SELECT id FROM users WHERE phone=? AND role='rep'").get(rep_phone);
+      const repUser = await queryOne("SELECT id FROM users WHERE phone=? AND role='rep'", rep_phone);
       if (repUser) {
         try {
-          db.prepare(
-            "INSERT OR IGNORE INTO client_rep_links (customer_phone,rep_phone,link_status) VALUES (?,?,'pending_rep_approval')"
-          ).run(phone, rep_phone);
-          db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)").run(
-            rep_phone, "طلب ارتباط عميل جديد", `يطلب ${name} الانضمام لقائمة عملائك`
-          );
+          await executeBatch([
+            { sql: "INSERT OR IGNORE INTO client_rep_links (customer_phone,rep_phone,link_status) VALUES (?,?,'pending_rep_approval')", params: [phone, rep_phone] },
+            { sql: "INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)", params: [rep_phone, "طلب ارتباط عميل جديد", `يطلب ${name} الانضمام لقائمة عملائك`] },
+          ]);
         } catch { /* ignore dup */ }
       }
     }
@@ -267,8 +294,11 @@ router.post("/auth/register", async (req, res) => {
     if (!isStaff) {
       const ip3 = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0].trim() ?? req.socket?.remoteAddress ?? null;
       const token = await createSingleSession(result.lastInsertRowid, ip3);
-      uploadDbBackup(getDefaultDbPath(), checkpointWAL).catch(() => {});
-      const newUser = db.prepare("SELECT id,name,phone,role,company_name,vat_number FROM users WHERE id=?").get(result.lastInsertRowid);
+      void backupSqliteAfterAuthMutation();
+      const newUser = await queryOne(
+        "SELECT id,name,phone,role,company_name,vat_number FROM users WHERE id=?",
+        result.lastInsertRowid,
+      );
       return void res.status(201).json({ id: result.lastInsertRowid, token, user: newUser, message: "تم إنشاء الحساب بنجاح" });
     }
 
@@ -278,19 +308,19 @@ router.post("/auth/register", async (req, res) => {
   }
 });
 
-function getAuthenticatedRentalUser(req: import("express").Request) {
+async function getAuthenticatedRentalUser(req: import("express").Request) {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
   if (!token || token === "guest") return undefined;
-  return db.prepare(`
+  return queryOne<{ id: number; phone: string; role: string; active: number }>(`
     SELECT u.id,u.phone,u.role,u.active
     FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token=? AND datetime(s.expires_at)>datetime('now')
       AND s.rowid=(SELECT MAX(current.rowid) FROM sessions current WHERE current.user_id=s.user_id)
-  `).get(token) as { id: number; phone: string; role: string; active: number } | undefined;
+  `, token);
 }
 
 router.post("/auth/rental-password/request-otp", async (req, res) => {
-  const user = getAuthenticatedRentalUser(req);
+  const user = await getAuthenticatedRentalUser(req);
   if (!user) return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
   if (user.role !== RENTAL_CUSTOMER_ROLE || !user.active) return void res.status(403).json({ error: "هذه الخدمة متاحة لحسابات عملاء الإيجار فقط" });
   const now = Date.now();
@@ -314,8 +344,8 @@ router.post("/auth/rental-password/request-otp", async (req, res) => {
   }
 });
 
-router.post("/auth/rental-password/verify-otp", (req, res) => {
-  const user = getAuthenticatedRentalUser(req);
+router.post("/auth/rental-password/verify-otp", async (req, res) => {
+  const user = await getAuthenticatedRentalUser(req);
   if (!user) return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
   if (user.role !== RENTAL_CUSTOMER_ROLE || !user.active) return void res.status(403).json({ error: "هذه الخدمة متاحة لحسابات عملاء الإيجار فقط" });
   const code = String(req.body.otp ?? "").trim();
@@ -338,9 +368,10 @@ router.post("/auth/rental-password/verify-otp", (req, res) => {
       ? "تم تجاوز عدد المحاولات، اطلب رمزاً جديداً"
       : "رمز التحقق غير صحيح" });
   }
-  db.prepare("UPDATE users SET password=? WHERE id=? AND role=?")
-    .run(hashRentalPassword(newPassword), user.id, RENTAL_CUSTOMER_ROLE);
-  db.prepare("DELETE FROM sessions WHERE user_id=?").run(user.id);
+  await executeBatch([
+    { sql: "UPDATE users SET password=? WHERE id=? AND role=?", params: [hashRentalPassword(newPassword), user.id, RENTAL_CUSTOMER_ROLE] },
+    { sql: "DELETE FROM sessions WHERE user_id=?", params: [user.id] },
+  ]);
   rentalPasswordOtps.delete(user.id);
   res.json({ message: "تم تغيير كلمة المرور بنجاح، سجّل الدخول من جديد" });
 });
@@ -363,8 +394,10 @@ router.post("/auth/forgot-password/request-otp", async (req, res) => {
   recoveryRequestLimits.set(phone.sms, now + RENTAL_OTP_RESEND_MS);
 
   const placeholders = phone.stored.map(() => "?").join(",");
-  const users = db.prepare(`SELECT id,active FROM users WHERE phone IN (${placeholders})`).all(...phone.stored) as
-    { id: number; active: number }[];
+  const users = await queryAll<{ id: number; active: number }>(
+    `SELECT id,active FROM users WHERE phone IN (${placeholders})`,
+    ...phone.stored,
+  );
   // An unrecognized or ambiguous number must never reveal which accounts exist.
   if (users.length !== 1 || !users[0].active) return void res.json({ message: "إذا كان الرقم مسجّلًا، سيصلك رمز التحقق" });
 
@@ -387,7 +420,7 @@ router.post("/auth/forgot-password/request-otp", async (req, res) => {
   }
 });
 
-router.post("/auth/forgot-password/reset", (req, res) => {
+router.post("/auth/forgot-password/reset", async (req, res) => {
   const phone = recoveryPhone(req.body?.phone);
   const code = typeof req.body?.otp === "string" ? req.body.otp.trim() : "";
   const newPassword = req.body?.new_password;
@@ -396,8 +429,10 @@ router.post("/auth/forgot-password/reset", (req, res) => {
   if (typeof newPassword !== "string" || newPassword.length < 8)
     return void res.status(400).json({ error: "كلمة المرور الجديدة يجب ألا تقل عن 8 أحرف" });
   const placeholders = phone.stored.map(() => "?").join(",");
-  const users = db.prepare(`SELECT id,phone,role,password,vehicle_plate,active FROM users WHERE phone IN (${placeholders})`).all(...phone.stored) as
-    { id: number; phone: string; role: string; password: string; vehicle_plate: string | null; active: number }[];
+  const users = await queryAll<{ id: number; phone: string; role: string; password: string; vehicle_plate: string | null; active: number }>(
+    `SELECT id,phone,role,password,vehicle_plate,active FROM users WHERE phone IN (${placeholders})`,
+    ...phone.stored,
+  );
   if (users.length !== 1 || !users[0].active)
     return void res.status(400).json({ error: "الرمز غير صحيح أو انتهت صلاحيته" });
   const user = users[0];
@@ -413,15 +448,14 @@ router.post("/auth/forgot-password/reset", (req, res) => {
     if (challenge.attempts >= RENTAL_OTP_MAX_ATTEMPTS) recoveryOtps.delete(user.id);
     return void res.status(400).json({ error: "الرمز غير صحيح أو انتهت صلاحيته" });
   }
-  db.transaction(() => {
-    const storedPassword = user.role === RENTAL_CUSTOMER_ROLE || user.password.startsWith("scrypt$")
-      ? hashRentalPassword(newPassword) : newPassword;
-    db.prepare("UPDATE users SET password=? WHERE id=?").run(storedPassword, user.id);
-    if (user.vehicle_plate) {
-      db.prepare("UPDATE fleet_vehicles SET vehicle_password=? WHERE plate_number=?").run(newPassword, user.vehicle_plate);
-    }
-    db.prepare("DELETE FROM sessions WHERE user_id=?").run(user.id);
-  })();
+  const storedPassword = user.role === RENTAL_CUSTOMER_ROLE || user.password.startsWith("scrypt$")
+    ? hashRentalPassword(newPassword) : newPassword;
+  const recoveryStatements = [
+    { sql: "UPDATE users SET password=? WHERE id=?", params: [storedPassword, user.id] },
+    ...(user.vehicle_plate ? [{ sql: "UPDATE fleet_vehicles SET vehicle_password=? WHERE plate_number=?", params: [newPassword, user.vehicle_plate] }] : []),
+    { sql: "DELETE FROM sessions WHERE user_id=?", params: [user.id] },
+  ];
+  await executeBatch(recoveryStatements);
   recoveryOtps.delete(user.id);
   res.json({ message: "تم تعيين كلمة مرور جديدة. يمكنك تسجيل الدخول الآن", phone: user.phone });
 });
@@ -435,50 +469,50 @@ router.post("/auth/guest", (_req, res) => {
 });
 
 // ── Logout ───────────────────────────────────────────────────────────────────
-router.post("/auth/logout", (req, res) => {
+router.post("/auth/logout", async (req, res) => {
   const token = req.headers.authorization?.replace("Bearer ", "");
-  if (token && isSysAdminToken(token)) {
+  if (token && await isSysAdminToken(token)) {
     sysAdminTokens.delete(token);
-    clearSpecialSession("system-admin", token);
+    await clearSpecialSession("system-admin", token);
     return void res.json({ message: "تم تسجيل الخروج" });
   }
-  if (token && token !== "guest") db.prepare("DELETE FROM sessions WHERE token = ?").run(token);
+  if (token && token !== "guest") await execute("DELETE FROM sessions WHERE token = ?", token);
   res.json({ message: "تم تسجيل الخروج" });
 });
 
 // ── Logout from every device ──────────────────────────────────────────────────
-router.post("/auth/logout-all", (req, res) => {
+router.post("/auth/logout-all", async (req, res) => {
   const authorization = req.headers.authorization?.trim();
   if (!authorization) return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
 
   if (authorization.startsWith("DevAuth ")) {
     const token = authorization.slice(8).trim();
-    if (!isSpecialSessionValid("developer-admin", token)) return void res.status(401).json({ error: "الجلسة منتهية" });
-    clearSpecialSession("developer-admin", token);
+    if (!await isSpecialSessionValid("developer-admin", token)) return void res.status(401).json({ error: "الجلسة منتهية" });
+    await clearSpecialSession("developer-admin", token);
     return void res.json({ message: "تم تسجيل الخروج من جميع الأجهزة" });
   }
 
   const token = authorization.replace(/^Bearer\s+/i, "").trim();
-  if (isSysAdminToken(token)) {
+  if (await isSysAdminToken(token)) {
     sysAdminTokens.delete(token);
-    clearSpecialSession("system-admin", token);
+    await clearSpecialSession("system-admin", token);
     return void res.json({ message: "تم تسجيل الخروج من جميع الأجهزة" });
   }
 
-  const session = db.prepare(`
+  const session = await queryOne<{ user_id: number }>(`
     SELECT s.user_id
     FROM sessions s
     WHERE s.token=? AND datetime(s.expires_at)>datetime('now')
       AND s.rowid=(SELECT MAX(current.rowid) FROM sessions current WHERE current.user_id=s.user_id)
-  `).get(token) as { user_id: number } | undefined;
+  `, token);
   if (!session) return void res.status(401).json({ error: "الجلسة منتهية" });
 
-  db.prepare("DELETE FROM sessions WHERE user_id=?").run(session.user_id);
+  await execute("DELETE FROM sessions WHERE user_id=?", session.user_id);
   res.json({ message: "تم تسجيل الخروج من جميع الأجهزة" });
 });
 
 // ── Me ────────────────────────────────────────────────────────────────────────
-router.get("/auth/me", (req, res) => {
+router.get("/auth/me", async (req, res) => {
   res.setHeader("Cache-Control", "no-store, no-cache, max-age=0, must-revalidate");
   res.setHeader("Pragma", "no-cache");
   res.setHeader("Expires", "0");
@@ -490,18 +524,18 @@ router.get("/auth/me", (req, res) => {
   if (!token || token === "guest") return void res.status(401).json({ error: "غير مصرح" });
 
   // Hidden system-admin (in-memory, no DB)
-  if (isSysAdminToken(token)) return void res.json(SYS_ADMIN_USER);
+  if (await isSysAdminToken(token)) return void res.json(SYS_ADMIN_USER);
 
-  const session = db.prepare(`
+  const session = await queryOne<Record<string, unknown>>(`
     SELECT * FROM sessions s
     WHERE s.token=? AND datetime(s.expires_at)>datetime('now')
       AND s.rowid=(SELECT MAX(current.rowid) FROM sessions current WHERE current.user_id=s.user_id)
-  `).get(token) as Record<string, unknown> | undefined;
+  `, token);
   if (!session) return void res.status(401).json({ error: "الجلسة منتهية" });
 
-  const user = db.prepare(
+  const user = await queryOne<Record<string, unknown>>(
     "SELECT id,name,phone,role,email,company_name,vat_number,cr_number,vehicle_plate,permissions,created_at FROM users WHERE id = ?"
-  ).get(session.user_id) as Record<string, unknown> | undefined;
+  , session.user_id);
   if (!user) return void res.status(401).json({ error: "المستخدم غير موجود" });
 
   const parsedPerms = user.permissions
@@ -510,7 +544,7 @@ router.get("/auth/me", (req, res) => {
 
   let extra: Record<string, unknown> = {};
   if (user.vehicle_plate) {
-    const v = db.prepare("SELECT id FROM fleet_vehicles WHERE plate_number = ?").get(user.vehicle_plate) as Record<string, unknown> | undefined;
+    const v = await queryOne<Record<string, unknown>>("SELECT id FROM fleet_vehicles WHERE plate_number = ?", user.vehicle_plate);
     if (v) extra.vehicle_id = v.id;
   }
 
@@ -518,20 +552,19 @@ router.get("/auth/me", (req, res) => {
 });
 
 // ── Change Password (unified handler) ─────────────────────────────────────────
-router.put("/auth/change-password", (req, res) => {
+router.put("/auth/change-password", async (req, res) => {
   const { user_id, old_password, new_password, target_user_id, vehicle_plate, phone, current_password } = req.body;
   const authorization = req.headers.authorization?.trim() ?? "";
   const authToken = authorization.match(/^Bearer\s+(.+)$/i)?.[1].trim();
   let authenticatedCaller: { role: string } | undefined;
   if (authToken) {
-    if (isSysAdminToken(authToken)) {
+    if (await isSysAdminToken(authToken)) {
       authenticatedCaller = { role: "admin" };
     } else {
-      authenticatedCaller = db.prepare(`SELECT u.role FROM sessions s JOIN users u ON u.id=s.user_id
+      authenticatedCaller = await queryOne<{ role: string }>(`SELECT u.role FROM sessions s JOIN users u ON u.id=s.user_id
         WHERE s.token=? AND datetime(s.expires_at)>datetime('now')
           AND s.rowid=(SELECT MAX(current.rowid) FROM sessions current WHERE current.user_id=s.user_id)
-          AND u.active=1`)
-        .get(authToken) as { role: string } | undefined;
+          AND u.active=1`, authToken);
     }
     if (authenticatedCaller?.role === RENTAL_CUSTOMER_ROLE)
       return void res.status(403).json({ error: "استخدم التحقق عبر رمز الجوال لتغيير كلمة المرور" });
@@ -548,113 +581,122 @@ router.put("/auth/change-password", (req, res) => {
       return void res.status(403).json({ error: "صلاحيات المدير أو المشرف مطلوبة" });
     let target: Record<string, unknown> | undefined;
     if (target_user_id) {
-      target = db.prepare("SELECT * FROM users WHERE id = ?").get(target_user_id) as typeof target;
+      target = await queryOne<Record<string, unknown>>("SELECT * FROM users WHERE id = ?", target_user_id);
     } else if (vehicle_plate) {
-      target = db.prepare("SELECT * FROM users WHERE vehicle_plate = ? AND role = 'driver'").get(vehicle_plate) as typeof target;
-      if (!target) target = db.prepare("SELECT * FROM users WHERE phone = ? AND role = 'driver'").get(vehicle_plate) as typeof target;
+      target = await queryOne<Record<string, unknown>>("SELECT * FROM users WHERE vehicle_plate = ? AND role = 'driver'", vehicle_plate);
+      if (!target) target = await queryOne<Record<string, unknown>>("SELECT * FROM users WHERE phone = ? AND role = 'driver'", vehicle_plate);
     }
     if (!target) {
       if (vehicle_plate) {
-        db.prepare("UPDATE fleet_vehicles SET vehicle_password = ? WHERE plate_number = ?").run(newPw, vehicle_plate);
+        await execute("UPDATE fleet_vehicles SET vehicle_password = ? WHERE plate_number = ?", newPw, vehicle_plate);
         return void res.json({ message: "تم تحديث باسورد السيارة (السائق لم يسجّل دخوله بعد)" });
       }
       return void res.status(404).json({ error: "المستخدم غير موجود" });
     }
     if (target.role === RENTAL_CUSTOMER_ROLE)
       return void res.status(403).json({ error: "تغيير كلمة مرور حساب الإيجار يتطلب رمز التحقق المرسل إلى جوالك" });
-    db.prepare("UPDATE users SET password = ? WHERE id = ?").run(newPw, target.id);
     const plate = target.vehicle_plate || vehicle_plate;
-    if (plate) db.prepare("UPDATE fleet_vehicles SET vehicle_password = ? WHERE plate_number = ?").run(newPw, plate);
+    await executeBatch([
+      { sql: "UPDATE users SET password = ? WHERE id = ?", params: [newPw, target.id] },
+      ...(plate ? [{ sql: "UPDATE fleet_vehicles SET vehicle_password = ? WHERE plate_number = ?", params: [newPw, plate] }] : []),
+    ]);
     return void res.json({ message: "تم تغيير كلمة المرور" });
   }
 
   // ── Case 2: User changing own password by phone + current_password ─────────
   if (phone && current_password) {
-    const u = db.prepare("SELECT id, password, vehicle_plate,role FROM users WHERE phone=?").get(phone) as Record<string, unknown> | undefined;
+    const u = await queryOne<Record<string, unknown>>("SELECT id, password, vehicle_plate,role FROM users WHERE phone=?", phone);
     if (!u) return void res.status(404).json({ error: "المستخدم غير موجود" });
     if (u.role === RENTAL_CUSTOMER_ROLE)
       return void res.status(403).json({ error: "تغيير كلمة مرور حساب الإيجار يتطلب رمز التحقق المرسل إلى جوالك" });
     if (u.password !== current_password)
       return void res.status(401).json({ error: "كلمة المرور الحالية غير صحيحة" });
-    db.prepare("UPDATE users SET password=? WHERE id=?").run(newPw, u.id);
-    if (u.vehicle_plate)
-      db.prepare("UPDATE fleet_vehicles SET vehicle_password=? WHERE plate_number=?").run(newPw, u.vehicle_plate);
+    await executeBatch([
+      { sql: "UPDATE users SET password=? WHERE id=?", params: [newPw, u.id] },
+      ...(u.vehicle_plate ? [{ sql: "UPDATE fleet_vehicles SET vehicle_password=? WHERE plate_number=?", params: [newPw, u.vehicle_plate] }] : []),
+    ]);
     return void res.json({ message: "تم تغيير كلمة المرور بنجاح" });
   }
 
   // ── Case 3: User changing own password by user_id + old_password ───────────
   if (!user_id || !old_password)
     return void res.status(400).json({ error: "كلمة المرور الحالية مطلوبة" });
-  const target = db.prepare("SELECT * FROM users WHERE id = ?").get(user_id) as Record<string, unknown> | undefined;
+  const target = await queryOne<Record<string, unknown>>("SELECT * FROM users WHERE id = ?", user_id);
   if (!target) return void res.status(404).json({ error: "المستخدم غير موجود" });
   if (target.role === RENTAL_CUSTOMER_ROLE)
     return void res.status(403).json({ error: "تغيير كلمة مرور حساب الإيجار يتطلب رمز التحقق المرسل إلى جوالك" });
   if (target.password !== old_password)
     return void res.status(401).json({ error: "كلمة المرور الحالية غير صحيحة" });
-  db.prepare("UPDATE users SET password = ? WHERE id = ?").run(newPw, user_id);
-  if (target.vehicle_plate)
-    db.prepare("UPDATE fleet_vehicles SET vehicle_password = ? WHERE plate_number = ?").run(newPw, target.vehicle_plate);
+  await executeBatch([
+    { sql: "UPDATE users SET password = ? WHERE id = ?", params: [newPw, user_id] },
+    ...(target.vehicle_plate ? [{ sql: "UPDATE fleet_vehicles SET vehicle_password = ? WHERE plate_number = ?", params: [newPw, target.vehicle_plate] }] : []),
+  ]);
   res.json({ message: "تم تغيير كلمة المرور بنجاح" });
 });
 
 // ── Customer self-service profile update ─────────────────────────────────────
-router.put("/auth/update-profile", (req, res) => {
+router.put("/auth/update-profile", async (req, res) => {
   const { phone, name, email, address, city, company_name, vat_number, cr_number } = req.body;
   if (!phone) return void res.status(400).json({ error: "الجوال مطلوب" });
-  const u = db.prepare("SELECT id,role FROM users WHERE phone = ?").get(phone) as { id: number; role: string } | undefined;
+  const u = await queryOne<{ id: number; role: string }>("SELECT id,role FROM users WHERE phone = ?", phone);
   if (!u) return void res.status(404).json({ error: "المستخدم غير موجود" });
   if (u.role === RENTAL_CUSTOMER_ROLE) {
     const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1].trim();
-    const session = token && db.prepare(`
+    const session = token && await queryOne(`
       SELECT s.user_id FROM sessions s JOIN users current_user ON current_user.id=s.user_id
       WHERE s.token=? AND s.user_id=? AND datetime(s.expires_at)>datetime('now')
         AND s.rowid=(SELECT MAX(current.rowid) FROM sessions current WHERE current.user_id=s.user_id)
         AND current_user.active=1 AND current_user.role=?
-    `).get(token, u.id, RENTAL_CUSTOMER_ROLE);
+    `, token, u.id, RENTAL_CUSTOMER_ROLE);
     if (!session) return void res.status(403).json({ error: "تسجيل الدخول بحساب عميل الإيجار مطلوب لتحديث الملف" });
   }
-  db.prepare(`UPDATE users SET name=COALESCE(?,name), email=COALESCE(?,email),
-    address=?, city=?, company_name=?, vat_number=?, cr_number=? WHERE id=?`)
-    .run(name||null, email||null, address||null, city||null,
-         company_name||null, vat_number||null, cr_number||null, u.id);
-  const updated = db.prepare("SELECT id,name,phone,role,email,company_name,vat_number,cr_number,address,city FROM users WHERE id=?").get(u.id);
+  await execute(
+    `UPDATE users SET name=COALESCE(?,name), email=COALESCE(?,email),
+     address=?, city=?, company_name=?, vat_number=?, cr_number=? WHERE id=?`,
+    name || null, email || null, address || null, city || null,
+    company_name || null, vat_number || null, cr_number || null, u.id,
+  );
+  const updated = await queryOne(
+    "SELECT id,name,phone,role,email,company_name,vat_number,cr_number,address,city FROM users WHERE id=?",
+    u.id,
+  );
   res.json({ message: "تم تحديث البيانات", user: updated });
 });
 
 
 // ── Get current user profile ──────────────────────────────────────────────────
-router.get("/auth/me", (req, res) => {
+router.get("/auth/me", async (req, res) => {
   const auth = req.headers.authorization?.replace("Bearer ","") || req.query.token as string;
   if (!auth) return void res.status(401).json({ error: "غير مصرح" });
-  if (isSysAdminToken(auth)) return void res.json(SYS_ADMIN_USER);
-  const session = db.prepare(`
+  if (await isSysAdminToken(auth)) return void res.json(SYS_ADMIN_USER);
+  const session = await queryOne<{ user_id: number }>(`
     SELECT user_id FROM sessions s
     WHERE s.token=? AND datetime(s.expires_at)>datetime('now')
       AND s.rowid=(SELECT MAX(current.rowid) FROM sessions current WHERE current.user_id=s.user_id)
-  `).get(auth) as { user_id:number }|undefined;
+  `, auth);
   if (!session) return void res.status(401).json({ error: "جلسة منتهية" });
-  const u = db.prepare("SELECT id,name,phone,role,email,company_name,vat_number,cr_number,address,city,active FROM users WHERE id=?").get(session.user_id);
+  const u = await queryOne("SELECT id,name,phone,role,email,company_name,vat_number,cr_number,address,city,active FROM users WHERE id=?", session.user_id);
   res.json(u || {});
 });
 
 // ── Users CRUD ────────────────────────────────────────────────────────────────
-router.get("/users", (req, res) => {
+router.get("/users", async (req, res) => {
   const role = typeof req.query.role === "string" ? req.query.role : undefined;
-  if (role !== "rep" && !requireUserAdmin(req, res)) return;
+  if (role !== "rep" && !await requireUserAdmin(req, res)) return;
   if (role === "rep") {
-    return void res.json(db.prepare("SELECT id,name,phone FROM users WHERE role='rep' ORDER BY name").all());
+    return void res.json(await queryAll("SELECT id,name,phone FROM users WHERE role='rep' ORDER BY name"));
   }
   let sql = "SELECT id,name,phone,role,active,approval_status,company_name,vat_number,email,cr_number,vehicle_plate,permissions,created_at FROM users WHERE 1=1";
   const params: string[] = [];
   if (role) { sql += " AND role = ?"; params.push(role); }
   sql += " ORDER BY name";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
-router.get("/users/:id/password", (req, res) => {
-  if (!requireUserAdmin(req, res)) return;
+router.get("/users/:id/password", async (req, res) => {
+  if (!await requireUserAdmin(req, res)) return;
   res.setHeader("Cache-Control", "no-store");
-  const user = db.prepare("SELECT password FROM users WHERE id=?").get(req.params.id) as { password: string } | undefined;
+  const user = await queryOne<{ password: string }>("SELECT password FROM users WHERE id=?", req.params.id);
   if (!user) return void res.status(404).json({ error: "المستخدم غير موجود" });
   if (user.password?.startsWith("scrypt$")) {
     return void res.json({ recoverable: false, password: null });
@@ -662,14 +704,17 @@ router.get("/users/:id/password", (req, res) => {
   res.json({ recoverable: true, password: user.password });
 });
 
-router.post("/users", (req, res) => {
-  if (!requireUserAdmin(req, res)) return;
+router.post("/users", async (req, res) => {
+  if (!await requireUserAdmin(req, res)) return;
   const { name, phone, password, role, email, company_name, vat_number, cr_number, vehicle_plate, permissions } = req.body;
   const permsJson = Array.isArray(permissions) ? JSON.stringify(permissions) : null;
   try {
-    const result = db.prepare(
-      "INSERT INTO users (name,phone,password,role,email,company_name,vat_number,cr_number,vehicle_plate,approval_status,permissions) VALUES (?,?,?,?,?,?,?,?,?,?,?)"
-    ).run(name, phone, role === RENTAL_CUSTOMER_ROLE ? hashRentalPassword(String(password || "123456")) : password || "123456", role || "customer", email || null, company_name || null, vat_number || null, cr_number || null, vehicle_plate || null, "approved", permsJson);
+    const result = await execute(
+      "INSERT INTO users (name,phone,password,role,email,company_name,vat_number,cr_number,vehicle_plate,approval_status,permissions) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+      name, phone, role === RENTAL_CUSTOMER_ROLE ? hashRentalPassword(String(password || "123456")) : password || "123456",
+      role || "customer", email || null, company_name || null, vat_number || null, cr_number || null,
+      vehicle_plate || null, "approved", permsJson,
+    );
     res.status(201).json({ id: result.lastInsertRowid, message: "تم إضافة المستخدم" });
   } catch {
     res.status(409).json({ error: "رقم الجوال مسجل مسبقاً" });
@@ -677,8 +722,8 @@ router.post("/users", (req, res) => {
 });
 
 // ── Swap login credentials between two existing accounts ─────────────────────
-router.post("/users/swap-login", (req, res) => {
-  if (!requireUserAdmin(req, res)) return;
+router.post("/users/swap-login", async (req, res) => {
+  if (!await requireUserAdmin(req, res)) return;
   const { source_user_id, target_user_id } = req.body as {
     source_user_id?: number; target_user_id?: number;
   };
@@ -688,81 +733,83 @@ router.post("/users/swap-login", (req, res) => {
     return void res.status(400).json({ error: "اختر مستخدمين مختلفين للتبديل" });
   }
 
-  const swap = db.transaction(() => {
-    const source = db.prepare("SELECT id, phone, password FROM users WHERE id=?").get(sourceId) as
-      { id: number; phone: string; password: string } | undefined;
-    const target = db.prepare("SELECT id, phone, password FROM users WHERE id=?").get(targetId) as
-      { id: number; phone: string; password: string } | undefined;
-    if (!source || !target) return null;
+  const [source, target] = await Promise.all([
+    queryOne<{ id: number; phone: string; password: string }>("SELECT id, phone, password FROM users WHERE id=?", sourceId),
+    queryOne<{ id: number; phone: string; password: string }>("SELECT id, phone, password FROM users WHERE id=?", targetId),
+  ]);
+  if (!source || !target) return void res.status(404).json({ error: "أحد المستخدمين غير موجود" });
 
-    // phone is unique, so temporarily free the first value before exchanging it.
-    const temporaryPhone = `__swap_${source.id}_${Date.now()}`;
-    db.prepare("UPDATE users SET phone=? WHERE id=?").run(temporaryPhone, source.id);
-    db.prepare("UPDATE users SET phone=?, password=? WHERE id=?")
-      .run(source.phone, source.password, target.id);
-    db.prepare("UPDATE users SET phone=?, password=? WHERE id=?")
-      .run(target.phone, target.password, source.id);
-    db.prepare("DELETE FROM sessions WHERE user_id IN (?,?)").run(source.id, target.id);
-    return { source_phone: source.phone, target_phone: target.phone };
-  })();
-
-  if (!swap) return void res.status(404).json({ error: "أحد المستخدمين غير موجود" });
+  // Phone is unique, so temporarily free the first value before exchanging it.
+  const temporaryPhone = `__swap_${source.id}_${Date.now()}`;
+  await executeBatch([
+    { sql: "UPDATE users SET phone=? WHERE id=? AND phone=?", params: [temporaryPhone, source.id, source.phone] },
+    { sql: "UPDATE users SET phone=?, password=? WHERE id=? AND phone=?", params: [source.phone, source.password, target.id, target.phone] },
+    { sql: "UPDATE users SET phone=?, password=? WHERE id=? AND phone=?", params: [target.phone, target.password, source.id, temporaryPhone] },
+    { sql: "DELETE FROM sessions WHERE user_id IN (?,?)", params: [source.id, target.id] },
+  ]);
   res.json({ message: "تم تبديل بيانات الدخول وتسجيل خروج الحسابين" });
 });
 
-router.put("/users/:id", (req, res) => {
-  if (!requireUserAdmin(req, res)) return;
+router.put("/users/:id", async (req, res) => {
+  if (!await requireUserAdmin(req, res)) return;
   const { name, phone, password, role, email, company_name, vat_number, cr_number, active, vehicle_plate, permissions } = req.body;
-  const current = db.prepare("SELECT * FROM users WHERE id = ?").get(req.params.id) as Record<string, unknown> | undefined;
+  const current = await queryOne<Record<string, unknown>>("SELECT * FROM users WHERE id = ?", req.params.id);
   if (!current) return void res.status(404).json({ error: "المستخدم غير موجود" });
   const permsJson = Array.isArray(permissions) ? JSON.stringify(permissions)
                   : permissions === null        ? null
                   : current.permissions as string | null;
   const pick = <T>(incoming: T | undefined, fallback: T) =>
     incoming !== undefined ? incoming : fallback;
-  db.prepare(
-    "UPDATE users SET name=?,phone=?,password=?,role=?,email=?,company_name=?,vat_number=?,cr_number=?,active=?,vehicle_plate=?,permissions=? WHERE id=?"
-  ).run(
-    pick(name,          current.name),
-    pick(phone,         current.phone),
-    password ? (pick(role, current.role) === RENTAL_CUSTOMER_ROLE ? hashRentalPassword(String(password)) : password) : current.password,
-    pick(role,          current.role),
-    pick(email,         current.email),
-    pick(company_name,  current.company_name),
-    pick(vat_number,    current.vat_number),
-    pick(cr_number,     current.cr_number),
-    active !== undefined ? active : current.active,
-    pick(vehicle_plate, current.vehicle_plate),
-    permsJson,
-    req.params.id,
-  );
-  if (password) db.prepare("DELETE FROM sessions WHERE user_id=?").run(req.params.id);
+  const statements = [
+    {
+      sql: "UPDATE users SET name=?,phone=?,password=?,role=?,email=?,company_name=?,vat_number=?,cr_number=?,active=?,vehicle_plate=?,permissions=? WHERE id=?",
+      params: [
+        pick(name, current.name),
+        pick(phone, current.phone),
+        password ? (pick(role, current.role) === RENTAL_CUSTOMER_ROLE ? hashRentalPassword(String(password)) : password) : current.password,
+        pick(role, current.role),
+        pick(email, current.email),
+        pick(company_name, current.company_name),
+        pick(vat_number, current.vat_number),
+        pick(cr_number, current.cr_number),
+        active !== undefined ? active : current.active,
+        pick(vehicle_plate, current.vehicle_plate),
+        permsJson,
+        req.params.id,
+      ],
+    },
+    ...(password ? [{ sql: "DELETE FROM sessions WHERE user_id=?", params: [req.params.id] }] : []),
+  ];
+  await executeBatch(statements);
   res.json({ message: "تم التحديث" });
 });
 
-router.delete("/users/:id", (req, res) => {
-  if (!requireUserAdmin(req, res)) return;
-  db.prepare("DELETE FROM sessions WHERE user_id = ?").run(req.params.id);
-  db.prepare("DELETE FROM users WHERE id = ?").run(req.params.id);
+router.delete("/users/:id", async (req, res) => {
+  if (!await requireUserAdmin(req, res)) return;
+  await executeBatch([
+    { sql: "DELETE FROM sessions WHERE user_id = ?", params: [req.params.id] },
+    { sql: "DELETE FROM users WHERE id = ?", params: [req.params.id] },
+  ]);
   res.json({ message: "تم الحذف" });
 });
 
 // ── Admin: Approvals Management ────────────────────────────────────────────────
-router.get("/admin/pending-approvals", (req, res) => {
-  if (!requireUserAdmin(req, res)) return;
-  const rows = db.prepare(
+router.get("/admin/pending-approvals", async (req, res) => {
+  if (!await requireUserAdmin(req, res)) return;
+  const rows = await queryAll(
     "SELECT id,name,phone,role,company_name,register_note,approval_status,created_at FROM users WHERE approval_status='pending' ORDER BY created_at DESC"
-  ).all();
+  );
   res.json(rows);
 });
 
-router.put("/admin/users/:id/approve", (req, res) => {
-  if (!requireUserAdmin(req, res)) return;
+router.put("/admin/users/:id/approve", async (req, res) => {
+  if (!await requireUserAdmin(req, res)) return;
   const { approved, note } = req.body;
   const status = approved ? "approved" : "rejected";
   const active = approved ? 1 : 0;
-  db.prepare("UPDATE users SET approval_status=?,active=? WHERE id=?").run(status, active, req.params.id);
-  if (note) db.prepare("UPDATE users SET register_note=? WHERE id=?").run(note, req.params.id);
+  const updates = [{ sql: "UPDATE users SET approval_status=?,active=? WHERE id=?", params: [status, active, req.params.id] }];
+  if (note) updates.push({ sql: "UPDATE users SET register_note=? WHERE id=?", params: [note, req.params.id] });
+  await executeBatch(updates);
   res.json({ message: approved ? "تم قبول المستخدم" : "تم رفض المستخدم" });
 });
 

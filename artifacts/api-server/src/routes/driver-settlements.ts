@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
-import db from "../lib/db.js";
+import { execute, executeBatch, queryAll, queryOne } from "../lib/erp-sql.js";
 import { createJournalEntry } from "../lib/journal.js";
 import { isSysAdminToken } from "./auth.js";
 
@@ -8,14 +8,14 @@ const router = Router();
 const SIGNATURE_MANAGER_ROLES = new Set(["admin", "supervisor", "finance", "accountant"]);
 type SignatureUser = { id: number; role: string; phone: string | null };
 
-function requireSignatureAccess(req: Request, res: Response, next: NextFunction) {
+async function requireSignatureAccess(req: Request, res: Response, next: NextFunction) {
   const auth = req.headers.authorization;
   const token = auth?.startsWith("Bearer ") ? auth.slice(7) : "";
-  const user = token ? db.prepare(
+  const user = token ? await queryOne<SignatureUser>(
     `SELECT u.id, u.role, u.phone
      FROM sessions s JOIN users u ON u.id=s.user_id
      WHERE s.token=? AND datetime(s.expires_at) > datetime('now') AND u.active=1`
-  ).get(token) as SignatureUser | undefined : undefined;
+  , token) : undefined;
   if (!user) return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
   res.locals.signatureUser = user;
   next();
@@ -45,15 +45,15 @@ type SettlementDashboardSettings = {
   rentals_amount: number;
 };
 
-function canAccessSettlementDashboard(req: Request, res: Response): boolean {
+async function canAccessSettlementDashboard(req: Request, res: Response): Promise<boolean> {
   const token = req.headers.authorization?.replace("Bearer ", "").trim();
-  if (token && isSysAdminToken(token)) return true;
+  if (token && await isSysAdminToken(token)) return true;
   const user = token
-    ? db.prepare(
+    ? await queryOne<{ role: string }>(
       `SELECT u.role
        FROM sessions s JOIN users u ON u.id=s.user_id
        WHERE s.token=? AND datetime(s.expires_at) > datetime('now') AND u.active=1`
-    ).get(token) as { role: string } | undefined
+      , token)
     : undefined;
 
   if (!user) {
@@ -72,8 +72,10 @@ function toNonNegativeAmount(value: unknown): number {
   return Number.isFinite(amount) && amount >= 0 ? amount : 0;
 }
 
-function getSettlementDashboardSettings(): SettlementDashboardSettings {
-  const row = db.prepare("SELECT value FROM system_config WHERE key=?").get(SETTLEMENT_DASHBOARD_SETTINGS_KEY) as { value?: string } | undefined;
+async function getSettlementDashboardSettings(): Promise<SettlementDashboardSettings> {
+  const row = await queryOne<{ value?: string }>(
+    "SELECT value FROM system_config WHERE key=?", SETTLEMENT_DASHBOARD_SETTINGS_KEY,
+  );
   try {
     const parsed = JSON.parse(row?.value || "{}") as Partial<SettlementDashboardSettings>;
     return {
@@ -86,40 +88,40 @@ function getSettlementDashboardSettings(): SettlementDashboardSettings {
   }
 }
 
-router.get("/driver-settlements/ledger", (_req, res) => {
-  const drivers = db.prepare(
+router.get("/driver-settlements/ledger", async (_req, res) => {
+  const drivers = await queryAll<{ driver_name: string; phone: string; vehicle_plate: string; status: string }>(
     "SELECT dp.driver_name, dp.phone, dp.vehicle_plate, dp.status FROM driver_profiles dp ORDER BY dp.driver_name"
-  ).all() as Array<{ driver_name: string; phone: string; vehicle_plate: string; status: string }>;
+  );
 
-  const result = drivers.map(d => {
-    const earned = (db.prepare(
+  const result = await Promise.all(drivers.map(async d => {
+    const earned = (await queryOne<{ s: number }>(
       "SELECT COALESCE(SUM(driver_bonus),0) as s FROM workflow_orders WHERE driver_phone=? AND stage='delivered'"
-    ).get(d.phone) as { s: number }).s;
-    const expenses = (db.prepare(
+    , d.phone))?.s ?? 0;
+    const expenses = (await queryOne<{ s: number }>(
       "SELECT COALESCE(SUM(amount),0) as s FROM driver_expenses WHERE driver_phone=?"
-    ).get(d.phone) as { s: number }).s;
-    const settled = (db.prepare(
+    , d.phone))?.s ?? 0;
+    const settled = (await queryOne<{ s: number }>(
       "SELECT COALESCE(SUM(allocated_amount),0) as s FROM driver_settlements WHERE driver_phone=? AND (deferred=0 OR delivered_at IS NOT NULL)"
-    ).get(d.phone) as { s: number }).s;
-    const deferred = (db.prepare(
+    , d.phone))?.s ?? 0;
+    const deferred = (await queryOne<{ s: number }>(
       "SELECT COALESCE(SUM(allocated_amount),0) as s FROM driver_settlements WHERE driver_phone=? AND deferred=1 AND delivered_at IS NULL"
-    ).get(d.phone) as { s: number }).s;
+    , d.phone))?.s ?? 0;
     // Company sends (debited from balance — الشركة أرسلت مسبقاً)
-    const companySent = (db.prepare(
+    const companySent = (await queryOne<{ s: number }>(
       "SELECT COALESCE(SUM(amount),0) as s FROM driver_company_sends WHERE driver_phone=?"
-    ).get(d.phone) as { s: number }).s;
-    const lastSettlement = db.prepare(
+    , d.phone))?.s ?? 0;
+    const lastSettlement = await queryOne<SettlementRow>(
       "SELECT * FROM driver_settlements WHERE driver_phone=? ORDER BY created_at DESC LIMIT 1"
-    ).get(d.phone) as SettlementRow | undefined;
-    const lastCompanySend = db.prepare(
+    , d.phone);
+    const lastCompanySend = await queryOne<{ id: number; amount: number; note: string | null; created_at: string }>(
       "SELECT * FROM driver_company_sends WHERE driver_phone=? ORDER BY created_at DESC LIMIT 1"
-    ).get(d.phone) as { id: number; amount: number; note: string | null; created_at: string } | undefined;
-    const trips = (db.prepare(
+    , d.phone);
+    const trips = (await queryOne<{ c: number }>(
       "SELECT COUNT(*) as c FROM workflow_orders WHERE driver_phone=? AND stage='delivered'"
-    ).get(d.phone) as { c: number }).c;
-    const tripsNoBonus = (db.prepare(
+    , d.phone))?.c ?? 0;
+    const tripsNoBonus = (await queryOne<{ c: number }>(
       "SELECT COUNT(*) as c FROM workflow_orders WHERE driver_phone=? AND stage='delivered' AND (driver_bonus IS NULL OR driver_bonus=0)"
-    ).get(d.phone) as { c: number }).c;
+    , d.phone))?.c ?? 0;
 
     return {
       ...d,
@@ -134,15 +136,15 @@ router.get("/driver-settlements/ledger", (_req, res) => {
       lastSettlement: lastSettlement || null,
       lastCompanySend: lastCompanySend || null,
     };
-  });
+  }));
 
   res.json(result);
 });
 
 // Read-only aggregate for the Gross Settlements tab. It deliberately uses only
 // printed movement-custody records, then applies registered payments and sends.
-router.get("/driver-settlements/statement-summary", (req, res) => {
-  if (!canAccessSettlementDashboard(req, res)) return;
+router.get("/driver-settlements/statement-summary", async (req, res) => {
+  if (!await canAccessSettlementDashboard(req, res)) return;
 
   const balances = new Map<string, number>();
   const addToBalance = (phone: string, amount: number) => {
@@ -150,15 +152,15 @@ router.get("/driver-settlements/statement-summary", (req, res) => {
     balances.set(phone, (balances.get(phone) || 0) + amount);
   };
 
-  const custodyRows = db.prepare(`
+  const custodyRows = await queryAll<{ driver_phone: string; net_total: number; due_total: number }>(`
     SELECT driver_phone,
            COALESCE(SUM(net_amount), 0) AS net_total,
            COALESCE(SUM(CASE WHEN net_amount > 0 THEN net_amount ELSE 0 END), 0) AS due_total
     FROM driver_custody_records
     WHERE is_custody_printed=1
     GROUP BY driver_phone
-  `).all() as Array<{ driver_phone: string; net_total: number; due_total: number }>;
-  const settlementRows = db.prepare(`
+  `);
+  const settlementRows = await queryAll<{ driver_phone: string; total: number }>(`
     SELECT driver_phone, COALESCE(SUM(allocated_amount), 0) AS total
     FROM driver_settlements
     WHERE driver_phone IN (
@@ -167,8 +169,8 @@ router.get("/driver-settlements/statement-summary", (req, res) => {
       WHERE is_custody_printed=1
     )
     GROUP BY driver_phone
-  `).all() as Array<{ driver_phone: string; total: number }>;
-  const companySendRows = db.prepare(`
+  `);
+  const companySendRows = await queryAll<{ driver_phone: string; total: number }>(`
     SELECT driver_phone, COALESCE(SUM(amount), 0) AS total
     FROM driver_company_sends
     WHERE driver_phone IN (
@@ -177,7 +179,7 @@ router.get("/driver-settlements/statement-summary", (req, res) => {
       WHERE is_custody_printed=1
     )
     GROUP BY driver_phone
-  `).all() as Array<{ driver_phone: string; total: number }>;
+  `);
 
   let totalCustodyDue = 0;
   custodyRows.forEach(row => {
@@ -199,38 +201,38 @@ router.get("/driver-settlements/statement-summary", (req, res) => {
   });
 });
 
-router.get("/driver-settlements/dashboard-settings", (req, res) => {
-  if (!canAccessSettlementDashboard(req, res)) return;
-  res.json(getSettlementDashboardSettings());
+router.get("/driver-settlements/dashboard-settings", async (req, res) => {
+  if (!await canAccessSettlementDashboard(req, res)) return;
+  res.json(await getSettlementDashboardSettings());
 });
 
-router.put("/driver-settlements/dashboard-settings", (req, res) => {
-  if (!canAccessSettlementDashboard(req, res)) return;
+router.put("/driver-settlements/dashboard-settings", async (req, res) => {
+  if (!await canAccessSettlementDashboard(req, res)) return;
   const settings: SettlementDashboardSettings = {
     cash_amount: toNonNegativeAmount(req.body.cash_amount),
     company_custody_amount: toNonNegativeAmount(req.body.company_custody_amount),
     rentals_amount: toNonNegativeAmount(req.body.rentals_amount),
   };
-  db.prepare(`
+  await execute(`
     INSERT INTO system_config (key, value, updated_at) VALUES (?,?,datetime('now'))
     ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
-  `).run(SETTLEMENT_DASHBOARD_SETTINGS_KEY, JSON.stringify(settings));
+  `, SETTLEMENT_DASHBOARD_SETTINGS_KEY, JSON.stringify(settings));
   res.json(settings);
 });
 
-router.get("/driver-settlements", (req, res) => {
+router.get("/driver-settlements", async (req, res) => {
   const { driver_phone } = req.query as Record<string, string>;
-  const rows = driver_phone
-    ? db.prepare(
+  const rows = await (driver_phone
+    ? queryAll(
         "SELECT * FROM driver_settlements WHERE driver_phone=? ORDER BY created_at DESC"
-      ).all(driver_phone)
-    : db.prepare(
+      , driver_phone)
+    : queryAll(
         "SELECT * FROM driver_settlements ORDER BY created_at DESC LIMIT 100"
-      ).all();
+      ));
   res.json(rows);
 });
 
-router.post("/driver-settlements", (req, res) => {
+router.post("/driver-settlements", async (req, res) => {
   const { driver_phone, driver_name, allocated_amount, settlement_date, settled_by, notes, deferred, is_settlement_cash, items } = req.body;
   if (!driver_phone || allocated_amount === undefined) {
     return void res.status(400).json({ error: "البيانات غير مكتملة" });
@@ -243,12 +245,10 @@ router.post("/driver-settlements", (req, res) => {
   }
   const amt = parseFloat(String(allocated_amount));
 
-  let newId: number | bigint = 0;
-  db.transaction(() => {
-    const r = db.prepare(`
+  const r = await execute(`
       INSERT INTO driver_settlements (driver_phone, driver_name, allocated_amount, settlement_date, settled_by, notes, deferred, is_settlement_cash)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
+    `,
       driver_phone,
       driver_name || null,
       amt,
@@ -258,21 +258,19 @@ router.post("/driver-settlements", (req, res) => {
       deferred ? 1 : 0,
       is_settlement_cash ? 1 : 0,
     );
-    newId = r.lastInsertRowid;
+  const newId = r.lastInsertRowid;
 
-    // ── Save selective settlement items ────────────────────────────────────
-    if (Array.isArray(items) && items.length > 0) {
-      const itemStmt = db.prepare(
-        "INSERT INTO settlement_items (settlement_id, item_type, item_ref, amount) VALUES (?,?,?,?)"
-      );
-      for (const item of items as { type: string; ref: string; amount: number }[]) {
-        itemStmt.run(newId, item.type, String(item.ref), item.amount || 0);
-      }
-    }
+  // ── Save selective settlement items ────────────────────────────────────
+  if (Array.isArray(items) && items.length > 0) {
+    await executeBatch((items as { type: string; ref: string; amount: number }[]).map(item => ({
+      sql: "INSERT INTO settlement_items (settlement_id, item_type, item_ref, amount) VALUES (?,?,?,?)",
+      params: [newId, item.type, String(item.ref), item.amount || 0],
+    })));
+  }
 
-    // ── Journal Entry: Create driver settlement ───────────────────────────
-    if (amt > 0) {
-      createJournalEntry({
+  // ── Journal Entry: Create driver settlement ───────────────────────────
+  if (amt > 0) {
+    await createJournalEntry({
         reference_type: "settlement_create",
         reference_id: String(newId),
         debit_account:  "5030",
@@ -280,9 +278,8 @@ router.post("/driver-settlements", (req, res) => {
         amount: amt,
         description: `تسوية سائق: ${driver_name || driver_phone}${deferred ? " (مؤجلة)" : ""}`,
         created_by: settled_by || undefined,
-      });
-    }
-  })();
+    });
+  }
 
   res.status(201).json({
     id: newId,
@@ -291,52 +288,50 @@ router.post("/driver-settlements", (req, res) => {
 });
 
 // ── Printed marks (وسم "تم طباعته") ──────────────────────────────────────────
-router.get("/driver-settlements/printed-marks-all", (req, res) => {
-  if (!canAccessSettlementDashboard(req, res)) return;
+router.get("/driver-settlements/printed-marks-all", async (req, res) => {
+  if (!await canAccessSettlementDashboard(req, res)) return;
   try {
-    const rows = db.prepare(
+    const rows = await queryAll(
       `SELECT pm.item_type, pm.item_ref, pm.marked_at,
               (SELECT dcr.filter_ref FROM driver_custody_records dcr
                WHERE dcr.driver_phone=pm.driver_phone AND dcr.batch_key=pm.batch_key
                ORDER BY dcr.id DESC LIMIT 1) AS statement_ref
        FROM printed_marks pm ORDER BY pm.marked_at DESC`
-    ).all();
+     );
     res.json(rows);
   } catch {
     res.json([]);
   }
 });
 
-router.get("/driver-settlements/printed-marks/:phone", (req, res) => {
+router.get("/driver-settlements/printed-marks/:phone", async (req, res) => {
   try {
-    const rows = db.prepare(
+    const rows = await queryAll(
       `SELECT pm.item_type, pm.item_ref, pm.marked_at, pm.batch_key,
               (SELECT dcr.filter_ref FROM driver_custody_records dcr
                WHERE dcr.driver_phone=pm.driver_phone AND dcr.batch_key=pm.batch_key
                ORDER BY dcr.id DESC LIMIT 1) AS statement_ref
        FROM printed_marks pm WHERE pm.driver_phone=?`
-    ).all(req.params.phone);
+     , req.params.phone);
     res.json(rows);
   } catch {
     res.json([]);
   }
 });
 
-router.post("/driver-settlements/printed-marks", (req, res) => {
+router.post("/driver-settlements/printed-marks", async (req, res) => {
   const { driver_phone, items, batch_key } = req.body as { driver_phone: string; items: { type: string; ref: string }[]; batch_key?: string };
   if (!driver_phone || !Array.isArray(items) || items.length === 0) {
     return void res.status(400).json({ error: "البيانات غير مكتملة" });
   }
   try {
-    const ins = db.prepare(
-      "INSERT OR IGNORE INTO printed_marks (driver_phone, item_type, item_ref, batch_key) VALUES (?,?,?,?)"
-    );
-    db.transaction(() => {
-      for (const it of items) {
-        if (!it?.type || it.ref === undefined) continue;
-        ins.run(driver_phone, it.type, String(it.ref), batch_key || null);
-      }
-    })();
+    const statements = items
+      .filter(it => it?.type && it.ref !== undefined)
+      .map(it => ({
+        sql: "INSERT OR IGNORE INTO printed_marks (driver_phone, item_type, item_ref, batch_key) VALUES (?,?,?,?)",
+        params: [driver_phone, it.type, String(it.ref), batch_key || null],
+      }));
+    await executeBatch(statements);
     res.status(201).json({ message: "تم وسم البنود" });
   } catch {
     res.status(500).json({ error: "تعذّر حفظ الوسم" });
@@ -345,15 +340,15 @@ router.post("/driver-settlements/printed-marks", (req, res) => {
 
 // ── Statement signatures (توقيع السائق الرقمي) ────────────────────────────────
 // GET all signatures for a driver
-router.get("/driver-settlements/statements/signatures/:phone", requireSignatureAccess, (req, res) => {
+router.get("/driver-settlements/statements/signatures/:phone", requireSignatureAccess, async (req, res) => {
   const phone = String(req.params.phone);
   if (!canAccessDriverSignature(res.locals.signatureUser as SignatureUser, phone)) {
     return void res.status(403).json({ error: "لا تملك صلاحية عرض التوقيع" });
   }
   try {
-    const rows = db.prepare(
+    const rows = await queryAll(
       "SELECT batch_key, signed_at FROM statement_signatures WHERE driver_phone=? ORDER BY signed_at DESC"
-    ).all(phone);
+    , phone);
     res.json(rows);
   } catch {
     res.json([]);
@@ -361,11 +356,11 @@ router.get("/driver-settlements/statements/signatures/:phone", requireSignatureA
 });
 
 // GET single signature (for embedding in print)
-router.get("/driver-settlements/statements/:batchKey/signature", requireSignatureAccess, (req, res) => {
+router.get("/driver-settlements/statements/:batchKey/signature", requireSignatureAccess, async (req, res) => {
   try {
-    const row = db.prepare(
+    const row = await queryOne<{ driver_phone: string; signature_data: string; signed_at: string }>(
       "SELECT driver_phone, signature_data, signed_at FROM statement_signatures WHERE batch_key=?"
-    ).get(req.params.batchKey) as { driver_phone: string; signature_data: string; signed_at: string } | undefined;
+    , req.params.batchKey);
     if (!row) return void res.status(404).json({ error: "لا يوجد توقيع" });
     if (!canAccessDriverSignature(res.locals.signatureUser as SignatureUser, row.driver_phone)) {
       return void res.status(403).json({ error: "لا تملك صلاحية عرض التوقيع" });
@@ -377,7 +372,7 @@ router.get("/driver-settlements/statements/:batchKey/signature", requireSignatur
 });
 
 // POST sign a statement
-router.post("/driver-settlements/statements/:batchKey/sign", requireSignatureAccess, (req, res) => {
+router.post("/driver-settlements/statements/:batchKey/sign", requireSignatureAccess, async (req, res) => {
   const { driver_phone, signature_data } = req.body as { driver_phone: string; signature_data: string };
   const signatureUser = res.locals.signatureUser as SignatureUser;
   if (!driver_phone || !signature_data || !isSafeSignatureData(signature_data)) {
@@ -387,30 +382,24 @@ router.post("/driver-settlements/statements/:batchKey/sign", requireSignatureAcc
     return void res.status(403).json({ error: "لا تملك صلاحية توقيع هذا الكشف" });
   }
   try {
-    db.prepare(
+    await execute(
       "INSERT OR REPLACE INTO statement_signatures (driver_phone, batch_key, signature_data) VALUES (?,?,?)"
-    ).run(driver_phone, req.params.batchKey, signature_data);
+    , driver_phone, req.params.batchKey, signature_data);
 
     // ── إشعار المدير والمراجعين عند توقيع السائق ──────────────────────────
     try {
-      const driverInfo = db.prepare(
+      const driverInfo = await queryOne<{ driver_name: string }>(
         "SELECT driver_name FROM driver_profiles WHERE phone=? LIMIT 1"
-      ).get(driver_phone) as { driver_name: string } | undefined;
+      , driver_phone);
       const driverLabel = driverInfo?.driver_name || driver_phone;
       const signedAt = new Date().toLocaleDateString("ar-SA", { year: "numeric", month: "long", day: "numeric" });
-      const admins = db.prepare(
+      const admins = await queryAll<{ phone: string }>(
         "SELECT phone FROM users WHERE role IN ('admin','reviewer') AND active=1"
-      ).all() as { phone: string }[];
-      const insNotif = db.prepare(
-        "INSERT INTO notifications (user_phone, title, body) VALUES (?,?,?)"
       );
-      for (const admin of admins) {
-        insNotif.run(
-          admin.phone,
-          "توقيع كشف حساب",
-          `السائق ${driverLabel} وقّع على كشف حساب بتاريخ ${signedAt}`
-        );
-      }
+      await executeBatch(admins.map(admin => ({
+        sql: "INSERT INTO notifications (user_phone, title, body) VALUES (?,?,?)",
+        params: [admin.phone, "توقيع كشف حساب", `السائق ${driverLabel} وقّع على كشف حساب بتاريخ ${signedAt}`],
+      })));
     } catch { /* لا يوقف الاستجابة إذا فشل الإشعار */ }
 
     res.status(201).json({ message: "تم حفظ التوقيع" });
@@ -419,21 +408,18 @@ router.post("/driver-settlements/statements/:batchKey/sign", requireSignatureAcc
   }
 });
 
-router.delete("/driver-settlements/printed-marks", (req, res) => {
+router.delete("/driver-settlements/printed-marks", async (req, res) => {
   const { driver_phone, items } = req.body as { driver_phone: string; items: { type: string; ref: string }[] };
   if (!driver_phone || !Array.isArray(items) || items.length === 0) {
     return void res.status(400).json({ error: "البيانات غير مكتملة" });
   }
   try {
-    const del = db.prepare(
-      "DELETE FROM printed_marks WHERE driver_phone=? AND item_type=? AND item_ref=?"
-    );
-    db.transaction(() => {
-      for (const it of items) {
-        if (!it?.type || it.ref === undefined) continue;
-        del.run(driver_phone, it.type, String(it.ref));
-      }
-    })();
+    await executeBatch(items
+      .filter(it => it?.type && it.ref !== undefined)
+      .map(it => ({
+        sql: "DELETE FROM printed_marks WHERE driver_phone=? AND item_type=? AND item_ref=?",
+        params: [driver_phone, it.type, String(it.ref)],
+      })));
     res.json({ message: "تم إلغاء الوسم" });
   } catch {
     res.status(500).json({ error: "تعذّر إلغاء الوسم" });
@@ -441,9 +427,9 @@ router.delete("/driver-settlements/printed-marks", (req, res) => {
 });
 
 // ── Edit settlement (amount + notes) ─────────────────────────────────────────
-router.put("/driver-settlements/:id", (req, res) => {
+router.put("/driver-settlements/:id", async (req, res) => {
   const { allocated_amount, notes, settlement_date } = req.body;
-  const existing = db.prepare("SELECT * FROM driver_settlements WHERE id=?").get(req.params.id) as SettlementRow | undefined;
+  const existing = await queryOne<SettlementRow>("SELECT * FROM driver_settlements WHERE id=?", req.params.id);
   if (!existing) return void res.status(404).json({ error: "التسوية غير موجودة" });
   if (settlement_date !== undefined && (typeof settlement_date !== "string" ||
       !/^\d{4}-\d{2}-\d{2}$/.test(settlement_date) ||
@@ -455,39 +441,40 @@ router.put("/driver-settlements/:id", (req, res) => {
   const newAmt = allocated_amount !== undefined ? parseFloat(String(allocated_amount)) : existing.allocated_amount;
   const newNotes = notes !== undefined ? (notes || null) : existing.notes;
 
-  db.prepare(
+  await execute(
     "UPDATE driver_settlements SET allocated_amount=?, notes=?, settlement_date=? WHERE id=?"
-  ).run(newAmt, newNotes, settlement_date ?? existing.settlement_date, req.params.id);
+  , newAmt, newNotes, settlement_date ?? existing.settlement_date, req.params.id);
 
   res.json({ message: "تم تعديل التسوية" });
 });
 
 // ── Delete settlement ─────────────────────────────────────────────────────────
-router.delete("/driver-settlements/:id", (req, res) => {
-  const existing = db.prepare("SELECT * FROM driver_settlements WHERE id=?").get(req.params.id) as SettlementRow | undefined;
+router.delete("/driver-settlements/:id", async (req, res) => {
+  const existing = await queryOne<SettlementRow>("SELECT * FROM driver_settlements WHERE id=?", req.params.id);
   if (!existing) return void res.status(404).json({ error: "التسوية غير موجودة" });
 
-  db.transaction(() => {
-    try { db.prepare("DELETE FROM settlement_items WHERE settlement_id=?").run(req.params.id); } catch {}
-    db.prepare("DELETE FROM driver_settlements WHERE id=?").run(req.params.id);
-  })();
+  await executeBatch([
+    { sql: "DELETE FROM settlement_items WHERE settlement_id=?", params: [req.params.id] },
+    { sql: "DELETE FROM driver_settlements WHERE id=?", params: [req.params.id] },
+  ]);
 
   res.json({ message: "تم حذف التسوية" });
 });
 
-router.put("/driver-settlements/:id/deliver", (req, res) => {
+router.put("/driver-settlements/:id/deliver", async (req, res) => {
   const { delivered_by } = req.body;
-  const settlement = db.prepare("SELECT * FROM driver_settlements WHERE id=?").get(req.params.id) as Record<string, unknown> | undefined;
+  const settlement = await queryOne<Record<string, unknown>>(
+    "SELECT * FROM driver_settlements WHERE id=?", req.params.id,
+  );
   if (!settlement) return void res.status(404).json({ error: "التسوية غير موجودة" });
 
-  db.transaction(() => {
-    db.prepare(
+  await execute(
       "UPDATE driver_settlements SET delivered_at=datetime('now'), deferred=0, settled_by=COALESCE(?,settled_by) WHERE id=?"
-    ).run(delivered_by || null, req.params.id);
+    , delivered_by || null, req.params.id);
 
-    // ── Journal Entry: Pay driver settlement ───────────────────────────────
-    if (Number(settlement.allocated_amount) > 0) {
-      createJournalEntry({
+  // ── Journal Entry: Pay driver settlement ───────────────────────────────
+  if (Number(settlement.allocated_amount) > 0) {
+    await createJournalEntry({
         reference_type: "settlement_pay",
         reference_id: String(req.params.id),
         debit_account:  "2020",
@@ -495,28 +482,27 @@ router.put("/driver-settlements/:id/deliver", (req, res) => {
         amount: Number(settlement.allocated_amount),
         description: `صرف تسوية سائق: ${settlement.driver_name || settlement.driver_phone}`,
         created_by: delivered_by || undefined,
-      });
-    }
-  })();
+    });
+  }
 
   res.json({ message: "تم تسليم المبالغ بنجاح" });
 });
 
 
 // ── Remove a single settled item (un-settle) ─────────────────────────────────
-router.delete("/driver-settlements/items", (req, res) => {
+router.delete("/driver-settlements/items", async (req, res) => {
   const { driver_phone, item_type, item_ref } = req.body as { driver_phone: string; item_type: string; item_ref: string };
   if (!driver_phone || !item_type || item_ref === undefined) {
     return void res.status(400).json({ error: "البيانات غير مكتملة" });
   }
   try {
-    db.prepare(`
+    await execute(`
       DELETE FROM settlement_items
       WHERE item_type=? AND item_ref=?
         AND settlement_id IN (
           SELECT id FROM driver_settlements WHERE driver_phone=?
         )
-    `).run(item_type, String(item_ref), driver_phone);
+    `, item_type, String(item_ref), driver_phone);
     res.json({ message: "تم إلغاء تصفية البند" });
   } catch {
     res.status(500).json({ error: "تعذّر إلغاء التصفية" });
@@ -524,7 +510,7 @@ router.delete("/driver-settlements/items", (req, res) => {
 });
 
 // ── Full statement per driver (for print) ──────────────────────────────────
-router.get("/driver-settlements/statement/:phone", (req, res) => {
+router.get("/driver-settlements/statement/:phone", async (req, res) => {
   const { phone } = req.params;
   const { from, to, vehicle_plate } = req.query as Record<string, string>;
 
@@ -548,14 +534,14 @@ router.get("/driver-settlements/statement/:phone", (req, res) => {
   const fromExpSql   = f  ? `AND substr(expense_date,1,10) >= '${f}'`  : "";
   const toExpSql     = t2 ? `AND substr(expense_date,1,10) <= '${t2}'` : "";
 
-  const driver = db.prepare(
+  const driver = await queryOne<{ driver_name: string; phone: string; vehicle_plate: string; status: string }>(
     "SELECT driver_name, phone, vehicle_plate, status FROM driver_profiles WHERE phone=? LIMIT 1"
-  ).get(phone) as { driver_name: string; phone: string; vehicle_plate: string; status: string } | undefined;
+  , phone);
 
   // Trips belong to the driver name recorded on the trip, not to whichever
   // vehicle is currently assigned to the driver. Aliases keep historical names
   // visible without rewriting old trip records.
-  const driverNames = (db.prepare(`
+  const driverNameRows = await queryAll<{ name: string }>(`
     SELECT DISTINCT name FROM (
       SELECT name AS name FROM users WHERE phone=?
       UNION
@@ -567,7 +553,8 @@ router.get("/driver-settlements/statement/:phone", (req, res) => {
       WHERE dp.phone=?
     )
     WHERE name IS NOT NULL AND trim(name) != ''
-  `).all(phone, phone, phone) as { name: string }[]).map(row => row.name);
+  `, phone, phone, phone);
+  const driverNames = driverNameRows.map(row => row.name);
   const legacyTripOwnerSql = driverNames.length
     ? `t.driver_name IN (${driverNames.map(() => "?").join(",")})`
     : "0";
@@ -581,19 +568,26 @@ router.get("/driver-settlements/statement/:phone", (req, res) => {
   const supplyVehicleSql = selectedVehicle ? "AND t.vehicle_plate=?" : "";
   const expenseVehicleSql = selectedVehicle ? "AND vehicle_plate=?" : "";
 
-  const orders = db.prepare(`
+  const orders = await queryAll<Record<string, unknown>>(`
     SELECT order_number, created_at, driver_bonus,
            loading_point_name, delivery_location, quantity, vehicle_plate
     FROM workflow_orders
     WHERE driver_phone=? AND stage='delivered' ${fromSql} ${toSql} ${orderVehicleSql}
     ORDER BY created_at DESC
-  `).all(...(selectedVehicle ? [phone, selectedVehicle] : [phone])) as Record<string, unknown>[];
+  `, ...(selectedVehicle ? [phone, selectedVehicle] : [phone]));
 
-  const rates = db.prepare("SELECT state, rate_per_km FROM trip_bonus_rates").all() as { state: string; rate_per_km: number }[];
+  const rates = await queryAll<{ state: string; rate_per_km: number }>(
+    "SELECT state, rate_per_km FROM trip_bonus_rates",
+  );
   const rateMap: Record<string, number> = {};
   rates.forEach(r => { rateMap[r.state] = r.rate_per_km; });
 
-  const rawTrips = db.prepare(`
+  const rawTrips = await queryAll<{
+    id: number; date: string; bonus_date: string | null; trip_state: string; distance_km: number;
+    vehicle_plate: string; route_bonus: number; notes: string | null; client_request_id: string | null;
+    routing_child_status: string | null; destination: string; client_name: string;
+    loading_region: string; unloading_region: string; trips_count: number; unit_price: number;
+  }>(`
     SELECT t.id, t.date, ${tripAccountingDate} AS bonus_date,
            t.trip_state, t.distance_km,
            t.car_id AS vehicle_plate,
@@ -609,12 +603,7 @@ router.get("/driver-settlements/statement/:phone", (req, res) => {
       ON t.client_request_id = 'routing-trip:' || route_child.id
     WHERE ${tripOwnerSql} ${fromTripSql} ${toTripSql} ${vehicleTripSql}
     ORDER BY t.date DESC
-  `).all(...tripOwnerParams, ...(selectedVehicle ? [selectedVehicle] : [])) as {
-    id: number; date: string; bonus_date: string | null; trip_state: string; distance_km: number;
-    vehicle_plate: string; route_bonus: number; notes: string | null; client_request_id: string | null;
-    routing_child_status: string | null; destination: string; client_name: string;
-    loading_region: string; unloading_region: string; trips_count: number; unit_price: number;
-  }[];
+  `, ...tripOwnerParams, ...(selectedVehicle ? [selectedVehicle] : []));
 
   const trips = rawTrips.map(t => {
     const kmBonus  = (t.distance_km || 0) * (rateMap[t.trip_state] || 0);
@@ -635,15 +624,15 @@ router.get("/driver-settlements/statement/:phone", (req, res) => {
     };
   });
 
-  const rentals = db.prepare(`
+  const rentals = await queryAll<Record<string, unknown>>(`
     SELECT id, assigned_at, driver_bonus, pickup_location, destination_location, assigned_vehicle AS vehicle_plate
     FROM external_rentals
     WHERE driver_phone=? AND status='confirmed' ${fromRentSql} ${toRentSql} ${rentalVehicleSql}
     ORDER BY assigned_at DESC
-  `).all(...(selectedVehicle ? [phone, selectedVehicle] : [phone])) as Record<string, unknown>[];
+  `, ...(selectedVehicle ? [phone, selectedVehicle] : [phone]));
 
   // ── Completed routing-dispatch supply trips ────────────────────────────────
-  const supply_trips = db.prepare(`
+  const supply_trips = await queryAll<Record<string, unknown>>(`
     SELECT t.id, COALESCE(t.delivered_at, t.updated_at) AS completed_at,
            sr.rental, sr.driver_expense,
            sr.product_name, sr.warehouse_name, sr.destination_division,
@@ -652,23 +641,23 @@ router.get("/driver-settlements/statement/:phone", (req, res) => {
     JOIN supply_requests sr ON sr.id = t.supply_request_id
     WHERE t.driver_phone=? AND t.status='completed' AND sr.routing_dispatch_id IS NULL ${fromStripSql} ${toStripSql} ${supplyVehicleSql}
     ORDER BY completed_at DESC
-  `).all(...(selectedVehicle ? [phone, selectedVehicle] : [phone])) as Record<string, unknown>[];
+  `, ...(selectedVehicle ? [phone, selectedVehicle] : [phone]));
 
-  const expenses = db.prepare(
+  const expenses = await queryAll<Record<string, unknown>>(
     `SELECT id, expense_date, expense_type, amount, liters, description, order_number, vehicle_plate FROM driver_expenses WHERE driver_phone=? ${fromExpSql} ${toExpSql} ${expenseVehicleSql} ORDER BY expense_date DESC, id DESC`
-  ).all(...(selectedVehicle ? [phone, selectedVehicle] : [phone])) as Record<string, unknown>[];
+  , ...(selectedVehicle ? [phone, selectedVehicle] : [phone]));
 
   // A vehicle-specific statement cannot attribute an older global settlement
   // to one car, so keep settlements in the all-vehicles statement only.
-  const settlements = selectedVehicle ? [] : db.prepare(
+  const settlements = selectedVehicle ? [] : await queryAll<Record<string, unknown>>(
     `SELECT id, created_at, settlement_date, allocated_amount, notes, settled_by, deferred, delivered_at
      FROM driver_settlements WHERE driver_phone=?
        ${f ? "AND substr(COALESCE(NULLIF(settlement_date,''),created_at),1,10)>=?" : ""}
        ${t2 ? "AND substr(COALESCE(NULLIF(settlement_date,''),created_at),1,10)<=?" : ""}
      ORDER BY COALESCE(NULLIF(settlement_date,''),created_at) DESC`
-  ).all(phone, ...(f ? [f] : []), ...(t2 ? [t2] : [])) as Record<string, unknown>[];
+   , phone, ...(f ? [f] : []), ...(t2 ? [t2] : []));
 
-  const vehicle_plates = (db.prepare(`
+  const vehiclePlateRows = await queryAll<{ vehicle_plate: string }>(`
     SELECT DISTINCT vehicle_plate FROM (
       SELECT t.car_id AS vehicle_plate FROM trips t WHERE ${tripOwnerSql}
       UNION
@@ -682,28 +671,28 @@ router.get("/driver-settlements/statement/:phone", (req, res) => {
     )
     WHERE vehicle_plate IS NOT NULL AND trim(vehicle_plate) != ''
     ORDER BY vehicle_plate
-  `).all(...tripOwnerParams, phone, phone, phone, phone) as { vehicle_plate: string }[])
-    .map(row => row.vehicle_plate);
+  `, ...tripOwnerParams, phone, phone, phone, phone);
+  const vehicle_plates = vehiclePlateRows.map(row => row.vehicle_plate);
   // Only currently assigned vehicles can be used for a new standalone expense.
   // Historical statement plates remain available for filtering, not for new entries.
-  const expense_vehicle_plates = (db.prepare(`
+  const expenseVehicleRows = await queryAll<{ plate_number: string }>(`
     SELECT DISTINCT plate_number FROM fleet_vehicles
     WHERE driver_phone=? OR backup_driver_phone=?
        OR (driver_phone IS NULL AND driver_name=?)
        OR (backup_driver_phone IS NULL AND backup_driver_name=?)
     ORDER BY plate_number
-  `).all(phone, phone, driver?.driver_name || "", driver?.driver_name || "") as { plate_number: string }[])
-    .map(row => row.plate_number).filter(Boolean);
+  `, phone, phone, driver?.driver_name || "", driver?.driver_name || "");
+  const expense_vehicle_plates = expenseVehicleRows.map(row => row.plate_number).filter(Boolean);
 
   // ── Mark items already included in a selective settlement ─────────────────
   const settledRefs = new Set<string>();
   try {
-    const settledRows = db.prepare(`
+    const settledRows = await queryAll<{ item_type: string; item_ref: string }>(`
       SELECT si.item_type, si.item_ref
       FROM settlement_items si
       JOIN driver_settlements ds ON ds.id = si.settlement_id
       WHERE ds.driver_phone = ?
-    `).all(phone) as { item_type: string; item_ref: string }[];
+    `, phone);
     settledRows.forEach(s => settledRefs.add(`${s.item_type}:${s.item_ref}`));
   } catch {}
 

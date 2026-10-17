@@ -1,19 +1,27 @@
 import { Router } from "express";
-import db from "../lib/db.js";
 import { queryProductionD1 } from "../lib/cloudflare-d1.js";
 
 const router = Router();
 
 function useD1ProductsBackend(): boolean {
-  return process.env.NODE_ENV === "production"
-    && process.env.ERP_DATABASE_BACKEND === "d1"
-    && process.env.ERP_D1_PRODUCTS_ENABLED === "1";
+  if (process.env.NODE_ENV === "production" && process.env.ERP_DATABASE_BACKEND === "d1") {
+    if (process.env.ERP_D1_PRODUCTS_ENABLED !== "1") {
+      throw new Error("[products] D1 backend is selected but ERP_D1_PRODUCTS_ENABLED is not enabled");
+    }
+    return true;
+  }
+  return false;
+}
+
+async function getSqliteDb() {
+  return (await import("../lib/db.js")).default;
 }
 
 async function queryAll<T>(sql: string, ...params: unknown[]): Promise<T[]> {
   if (useD1ProductsBackend()) {
     return (await queryProductionD1<T>(sql, params)).results;
   }
+  const db = await getSqliteDb();
   return db.prepare(sql).all(...params) as T[];
 }
 
@@ -21,6 +29,7 @@ async function queryOne<T>(sql: string, ...params: unknown[]): Promise<T | undef
   if (useD1ProductsBackend()) {
     return (await queryProductionD1<T>(sql, params)).results[0];
   }
+  const db = await getSqliteDb();
   return db.prepare(sql).get(...params) as T | undefined;
 }
 
@@ -32,6 +41,7 @@ async function execute(sql: string, ...params: unknown[]): Promise<{ lastInsertR
       changes: result.meta?.changes ?? 0,
     };
   }
+  const db = await getSqliteDb();
   return db.prepare(sql).run(...params);
 }
 

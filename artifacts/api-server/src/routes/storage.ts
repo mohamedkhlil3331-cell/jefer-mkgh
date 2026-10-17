@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { Readable } from "stream";
 import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
-import db from "../lib/db.js";
+import { queryOne } from "../lib/erp-sql.js";
 import { isSpecialSessionValid } from "../lib/special-sessions.js";
 import { isSysAdminToken } from "./auth.js";
 import { isRentalAccessTokenValid } from "./rental-accounts.js";
@@ -44,58 +44,58 @@ router.put("/storage/local-upload/:token", async (req: Request, res: Response): 
   }
 });
 
-function authorizeProtectedReceipt(req: Request, objectPath: string) {
+async function authorizeProtectedReceipt(req: Request, objectPath: string) {
   const paths = [objectPath, `/api/storage${objectPath}`, `/api${objectPath}`];
   const placeholders = paths.map(() => "?").join(",");
-  const registered = db.prepare(
+  const registered = await queryOne<{ owner_user_id: number }>(
     `SELECT owner_user_id FROM rental_receipt_objects WHERE path IN (${placeholders}) LIMIT 1`
-  ).get(...paths) as { owner_user_id: number } | undefined;
-  const attached = db.prepare(
+  , ...paths);
+  const attached = await queryOne(
     `SELECT 1 FROM rental_payments WHERE transfer_image_url IN (${placeholders}) LIMIT 1`
-  ).get(...paths);
+  , ...paths);
   if (!registered && !attached) return true;
 
   const bearer = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization || ""));
   const token = bearer?.[1]?.trim();
-  const user = token ? db.prepare(`
+  const user = token ? await queryOne<{ id: number; role: string }>(`
     SELECT u.id,u.role FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token=? AND datetime(s.expires_at)>datetime('now') AND u.active=1
       AND s.rowid=(
         SELECT MAX(s2.rowid) FROM sessions s2
         WHERE s2.user_id=s.user_id AND datetime(s2.expires_at)>datetime('now')
       )
-  `).get(token) as { id: number; role: string } | undefined : undefined;
+  `, token) : undefined;
 
   const accessToken = String(req.headers["x-rental-access"] || "").trim();
-  const unlocked = isRentalAccessTokenValid(accessToken);
-  if (unlocked && token && isSpecialSessionValid("system-admin", token)) return true;
+  const unlocked = await isRentalAccessTokenValid(accessToken);
+  if (unlocked && token && await isSpecialSessionValid("system-admin", token)) return true;
   if (unlocked && user && FINANCE_ROLES.has(user.role)) return true;
 
   if (user?.role === "rental_trip_customer") {
-    const activeCustomer = db.prepare(`
+    const activeCustomer = await queryOne<{ id: number; name: string }>(`
       SELECT id,name FROM rental_customers
       WHERE portal_user_id=? AND active=1 AND customer_type='rental'
-    `).get(user.id) as { id: number; name: string } | undefined;
+    `, user.id);
     if (activeCustomer) {
       if (registered?.owner_user_id === user.id) return true;
-      const ownedAttachment = db.prepare(`
+      const ownedAttachment = await queryOne(`
         SELECT 1 FROM rental_payments p
         JOIN rental_customers c ON LOWER(TRIM(c.name))=LOWER(TRIM(p.customer_name))
         WHERE p.transfer_image_url IN (${placeholders})
           AND c.portal_user_id=? AND c.active=1 AND c.customer_type='rental'
         LIMIT 1
-      `).get(...paths, user.id);
+      `, ...paths, user.id);
       if (ownedAttachment) return true;
     }
   }
   return false;
 }
 
-function branchDocumentObjectAccess(req: Request): "allowed" | "unauthenticated" | "forbidden" {
+async function branchDocumentObjectAccess(req: Request): Promise<"allowed" | "unauthenticated" | "forbidden"> {
   const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (!token || token === "guest") return "unauthenticated";
-  if (isSysAdminToken(token)) return "allowed";
-  const session = db.prepare(`
+  if (await isSysAdminToken(token)) return "allowed";
+  const session = await queryOne<{ role: string }>(`
     SELECT u.role
     FROM sessions s
     JOIN users u ON u.id=s.user_id
@@ -105,7 +105,7 @@ function branchDocumentObjectAccess(req: Request): "allowed" | "unauthenticated"
         FROM sessions current
         WHERE current.user_id=s.user_id
       )
-  `).get(token) as { role: string } | undefined;
+  `, token);
   if (!session) return "unauthenticated";
   return session.role === "admin" ? "allowed" : "forbidden";
 }
@@ -151,7 +151,7 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
     const objectPath = `/objects/${wildcardPath}`;
     if (objectPath.startsWith("/objects/branch-documents/")) {
-      const access = branchDocumentObjectAccess(req);
+       const access = await branchDocumentObjectAccess(req);
       if (access !== "allowed") {
         res.status(access === "unauthenticated" ? 401 : 403).json({
           error: access === "unauthenticated" ? "تسجيل الدخول مطلوب" : "صلاحية مدير النظام مطلوبة",
@@ -159,7 +159,7 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
         return;
       }
     }
-    if (!authorizeProtectedReceipt(req, objectPath)) {
+     if (!await authorizeProtectedReceipt(req, objectPath)) {
       res.status(403).json({ error: "لا تملك صلاحية عرض إيصال التحويل" });
       return;
     }

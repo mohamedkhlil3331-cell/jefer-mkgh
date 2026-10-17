@@ -18,11 +18,13 @@ const SOURCE_KEY = "db-backups/erp.db";
 const D1_TABLE_ROW_LIMIT = 2_000_000;
 const MAX_SAFE_ROW_BYTES = 1_900_000;
 const OVERFLOW_CHUNK_BYTES = 250_000;
-const MAX_BATCH_STATEMENTS = 40;
-const MAX_BATCH_BINDINGS = 4_000;
-const MAX_BATCH_BODY_BYTES = 4_000_000;
+const MAX_BATCH_STATEMENTS = 5;
+const MAX_BATCH_BINDINGS = 500;
+const MAX_BATCH_BODY_BYTES = 512_000;
+const D1_WRITE_REQUEST_DELAY_MS = 1_000;
 const VERIFY_PAGE_SIZE = 500;
 const VERIFY_QUERIES_PER_BATCH = 20;
+let completedD1InsertRequest = false;
 const INTERNAL_D1_TABLES = new Set([
   "_cf_KV",
   "d1_migration_manifest",
@@ -316,15 +318,23 @@ function keepsRowIdThroughPrimaryKey(columns) {
   return primaryKey.length === 1 && String(primaryKey[0].type).toUpperCase() === "INTEGER";
 }
 
-function rowSelect(tableName, pseudoColumn, columns, cursor, limit) {
+function rowSelect(tableName, pseudoColumn, columns, cursor, limit, excludedRowIds = []) {
   const selectColumns = [
     `${quoteIdentifier(pseudoColumn)} AS "__d1_source_rowid__"`,
     ...columns.map(column => quoteIdentifier(column.name)),
   ];
-  const where = cursor === null ? "" : ` WHERE ${quoteIdentifier(pseudoColumn)} > ?`;
-  const params = cursor === null
-    ? [limit]
-    : [safeNumber(cursor, `${tableName} rowid cursor`), limit];
+  const conditions = [];
+  const params = [];
+  if (cursor !== null) {
+    conditions.push(`${quoteIdentifier(pseudoColumn)} > ?`);
+    params.push(safeNumber(cursor, `${tableName} rowid cursor`));
+  }
+  if (excludedRowIds.length) {
+    conditions.push(`${quoteIdentifier(pseudoColumn)} NOT IN (${excludedRowIds.map(() => "?").join(", ")})`);
+    params.push(...excludedRowIds.map(rowId => safeNumber(BigInt(rowId), `${tableName} preserved rowid`)));
+  }
+  params.push(limit);
+  const where = conditions.length ? ` WHERE ${conditions.join(" AND ")}` : "";
   return {
     sql: `SELECT ${selectColumns.join(", ")} FROM ${quoteIdentifier(tableName)}${where} ORDER BY ${quoteIdentifier(pseudoColumn)} LIMIT ?`,
     params,
@@ -344,9 +354,16 @@ function overflowMarker(snapshotSha256, tableName, rowId, columnName, valueSha25
 
 function buildInsertStatement(tableName, columnNames, rows) {
   const quotedColumns = columnNames.map(quoteIdentifier).join(", ");
-  const placeholders = `(${columnNames.map(() => "?").join(", ")})`;
-  const sql = `INSERT INTO ${quoteIdentifier(tableName)} (${quotedColumns}) VALUES ${rows.map(() => placeholders).join(", ")}`;
-  const params = rows.flatMap(row => row);
+  const params = [];
+  const values = rows.map(row => `(${row.map((value, index) => {
+    if (tableName === "dev_audit_log" && columnNames[index] === "path" && typeof value === "string") {
+      // The Cloudflare connector rejects some raw audit paths; hex preserves the exact UTF-8 text.
+      return `CAST(X'${Buffer.from(value, "utf8").toString("hex")}' AS TEXT)`;
+    }
+    params.push(value);
+    return "?";
+  }).join(", ")})`).join(", ");
+  const sql = `INSERT INTO ${quoteIdentifier(tableName)} (${quotedColumns}) VALUES ${values}`;
   if (params.length > 100) {
     throw new Error(`D1 parameter limit exceeded while building an insert for ${tableName}`);
   }
@@ -370,10 +387,17 @@ function addBoundedStatement(pending, statement) {
 
 async function flushInsertBatch(pending, tableName) {
   if (!pending.statements.length) return 0;
-  const result = await queryProductionD1Batch(pending.statements);
   let inserted = 0;
-  for (let index = 0; index < result.length; index++) {
-    const actual = Number(result[index].meta?.changes ?? 0);
+  for (let index = 0; index < pending.statements.length; index++) {
+    if (completedD1InsertRequest) {
+      await new Promise(resolve => setTimeout(resolve, D1_WRITE_REQUEST_DELAY_MS));
+    }
+    const result = await queryProductionD1(
+      pending.statements[index].sql,
+      pending.statements[index].params ?? [],
+    );
+    completedD1InsertRequest = true;
+    const actual = Number(result.meta?.changes ?? 0);
     const expected = pending.expectedChanges[index];
     if (actual !== expected) {
       throw new Error(`D1 reported ${actual} inserted row(s), expected ${expected}, in ${tableName}`);
@@ -405,6 +429,46 @@ async function readD1Inventory(tableNames) {
   return output;
 }
 
+async function verifyRequestedPreservedD1Extras(
+  db,
+  rowIdColumns,
+  sourceTables,
+  requestedExtras,
+  dynamicallyPreservedTables = new Set(),
+) {
+  const sourceTableNames = new Set(sourceTables.map(table => table.name));
+  const verified = {};
+  const tableNames = new Set([...requestedExtras.keys(), ...dynamicallyPreservedTables]);
+  for (const tableName of tableNames) {
+    const requestedRowIds = requestedExtras.get(tableName);
+    if (!sourceTableNames.has(tableName)) {
+      throw new Error(`Cannot preserve D1-only rows from a table missing in the source snapshot: ${tableName}`);
+    }
+    const pseudoColumn = rowIdColumns.get(tableName);
+    const sourceRows = db.prepare(
+      `SELECT ${quoteIdentifier(pseudoColumn)} AS row_id FROM ${quoteIdentifier(tableName)}`,
+    ).all();
+    const sourceIds = new Set(sourceRows.map(row => String(row.row_id)));
+    const d1Rows = (await queryProductionD1(
+      `SELECT ${quoteIdentifier(pseudoColumn)} AS row_id FROM ${quoteIdentifier(tableName)}`,
+    )).results;
+    const actualD1OnlyIds = d1Rows
+      .map(row => String(row.row_id))
+      .filter(rowId => !sourceIds.has(rowId))
+      .sort((left, right) => Number(left) - Number(right));
+    const expectedD1OnlyIds = requestedRowIds
+      ? [...requestedRowIds].sort((left, right) => Number(left) - Number(right))
+      : null;
+    if (expectedD1OnlyIds && JSON.stringify(actualD1OnlyIds) !== JSON.stringify(expectedD1OnlyIds)) {
+      throw new Error(
+        `D1-only rows in ${tableName} differ from the explicitly approved preserve list; expected ${JSON.stringify(expectedD1OnlyIds)}, found ${JSON.stringify(actualD1OnlyIds)}`,
+      );
+    }
+    verified[tableName] = actualD1OnlyIds;
+  }
+  return verified;
+}
+
 async function validateEveryValue(
   db,
   tableNames,
@@ -412,12 +476,13 @@ async function validateEveryValue(
   rowIdColumns,
   expectedCounts,
   markerSnapshotSha256,
-  { collectChanges = false } = {},
+  { collectChanges = false, excludedRowIdsByTable = {}, skipTables = new Set() } = {},
 ) {
   let checkedRows = 0;
   const oversized = new Map();
   const changes = [];
   for (const tableName of tableNames) {
+    if (skipTables.has(tableName)) continue;
     const columns = tableInfo.get(tableName);
     const pseudoColumn = rowIdColumns.get(tableName);
     let cursor = null;
@@ -435,14 +500,15 @@ async function validateEveryValue(
           VERIFY_PAGE_SIZE,
           expectedCounts[tableName] - tableRows - rowsQueued,
         );
-        const localStatement = rowSelect(tableName, pseudoColumn, columns, requestCursor, pageLimit);
+        const excludedRowIds = excludedRowIdsByTable[tableName] ?? [];
+        const localStatement = rowSelect(tableName, pseudoColumn, columns, requestCursor, pageLimit, excludedRowIds);
         const sourcePage = db.prepare(localStatement.sql).all(...localStatement.params);
         if (!sourcePage.length) break;
         pageCursor = sourcePage[sourcePage.length - 1].__d1_source_rowid__;
         rowsQueued += sourcePage.length;
         pages.push({
           sourcePage,
-          statement: rowSelect(tableName, pseudoColumn, columns, requestCursor, pageLimit),
+          statement: rowSelect(tableName, pseudoColumn, columns, requestCursor, pageLimit, excludedRowIds),
           sourceCursor: pageCursor,
         });
       }
@@ -688,8 +754,12 @@ async function importTable(db, tableName, tableInfo, rowIdColumns, keepRowId, sn
               ["snapshot_sha256", "table_name", "record_key", "column_name", "chunk_index", "chunk_count", "original_byte_length", "original_sha256", "chunk_value"],
               chunks.slice(start, start + 10),
             );
-            const results = await queryProductionD1Batch([{ sql: statement.sql, params: statement.params }]);
-            if (Number(results[0].meta?.changes ?? 0) !== statement.expectedChanges) {
+            if (completedD1InsertRequest) {
+              await new Promise(resolve => setTimeout(resolve, D1_WRITE_REQUEST_DELAY_MS));
+            }
+            const result = await queryProductionD1(statement.sql, statement.params);
+            completedD1InsertRequest = true;
+            if (Number(result.meta?.changes ?? 0) !== statement.expectedChanges) {
               throw new Error(`D1 did not store every overflow chunk for ${label}`);
             }
           }
@@ -965,9 +1035,69 @@ async function restoreSequences(db) {
 async function run() {
   const apply = process.argv.includes("--apply");
   const dryRun = process.argv.includes("--dry-run");
-  const resume = process.argv.includes("--resume");
+  const recoverVerifiedProgress = process.argv.includes("--recover-verified-progress");
+  const replaceD1SessionsFromSource = process.argv.includes("--replace-d1-sessions-from-source");
+  const preserveAllD1OnlyChatQueueRows = process.argv.includes("--preserve-all-d1-only-chat-queue-rows");
+  if (process.argv.some(argument => argument.startsWith("--recover-verified-progress="))) {
+    throw new Error("--recover-verified-progress does not take a value");
+  }
+  if (process.argv.some(argument => argument.startsWith("--preserve-all-d1-only-chat-queue-rows="))) {
+    throw new Error("--preserve-all-d1-only-chat-queue-rows does not take a value");
+  }
+  if (process.argv.some(argument => argument.startsWith("--replace-d1-sessions-from-source="))) {
+    throw new Error("--replace-d1-sessions-from-source does not take a value");
+  }
+  const preserveExtrasPrefix = "--resume-preserving-extras=";
+  const preserveExtrasArgument = process.argv.find(argument => argument.startsWith(preserveExtrasPrefix));
+  const hasMalformedPreserveExtrasFlag = process.argv.includes("--resume-preserving-extras") && !preserveExtrasArgument;
+  if (hasMalformedPreserveExtrasFlag) {
+    throw new Error("Use --resume-preserving-extras=table_name:id,id[;another_table:id,id]");
+  }
+  if (preserveExtrasArgument && process.argv.includes("--resume")) {
+    throw new Error("Choose either --resume or --resume-preserving-extras, not both");
+  }
+  if (replaceD1SessionsFromSource && !preserveExtrasArgument) {
+    throw new Error("--replace-d1-sessions-from-source requires --resume-preserving-extras");
+  }
+  if (preserveAllD1OnlyChatQueueRows && !preserveExtrasArgument) {
+    throw new Error("--preserve-all-d1-only-chat-queue-rows requires --resume-preserving-extras");
+  }
+  if (recoverVerifiedProgress && !preserveExtrasArgument) {
+    throw new Error("--recover-verified-progress requires --resume-preserving-extras");
+  }
+  const requestedPreservedExtras = new Map();
+  if (preserveExtrasArgument) {
+    const value = preserveExtrasArgument.slice(preserveExtrasPrefix.length);
+    for (const tableEntry of value.split(";")) {
+      const separator = tableEntry.indexOf(":");
+      const tableName = tableEntry.slice(0, separator);
+      const rowIds = tableEntry.slice(separator + 1).split(",");
+      if (
+        separator <= 0
+        || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)
+        || requestedPreservedExtras.has(tableName)
+        || rowIds.length === 0
+        || rowIds.some(rowId => !/^[1-9]\d*$/.test(rowId) || !Number.isSafeInteger(Number(rowId)))
+        || new Set(rowIds).size !== rowIds.length
+      ) {
+        throw new Error(`Invalid preserved D1 row list: ${tableEntry}`);
+      }
+      requestedPreservedExtras.set(tableName, rowIds);
+    }
+  }
+  if (preserveAllD1OnlyChatQueueRows && requestedPreservedExtras.has("chat_push_queue")) {
+    throw new Error("Do not pass an explicit chat_push_queue list when preserving all D1-only chat queue rows");
+  }
+  const dynamicallyPreservedTables = preserveAllD1OnlyChatQueueRows
+    ? new Set(["chat_push_queue"])
+    : new Set();
+  const resume = process.argv.includes("--resume")
+    || Boolean(preserveExtrasArgument)
+    || replaceD1SessionsFromSource
+    || preserveAllD1OnlyChatQueueRows;
+  const replaceFromSourceTables = replaceD1SessionsFromSource ? new Set(["sessions"]) : new Set();
   if ([apply, dryRun, resume].filter(Boolean).length !== 1) {
-    throw new Error("Choose exactly one mode: --dry-run, --apply, or --resume. The default is not to write to D1.");
+    throw new Error("Choose exactly one mode: --dry-run, --apply, --resume, or --resume-preserving-extras. The default is not to write to D1.");
   }
 
   const temporaryPath = path.join(os.tmpdir(), `erp-production-${randomUUID()}.db`);
@@ -984,6 +1114,7 @@ async function run() {
   let sourceReport;
   let sourceTables = [];
   let snapshotSha256;
+  let preservedD1ExtrasByTable = {};
 
   try {
     const { client, bucket } = createR2Client();
@@ -1040,6 +1171,11 @@ async function run() {
       }
     }
     const orderedNames = orderTables(sourceTables, edges);
+    for (const tableName of replaceFromSourceTables) {
+      if (!orderedNames.includes(tableName)) {
+        throw new Error(`Cannot replace a D1 table that is missing from the source snapshot: ${tableName}`);
+      }
+    }
     const tableCounts = {};
     for (const table of sourceTables) {
       tableCounts[table.name] = safeNumber(
@@ -1198,34 +1334,62 @@ async function run() {
 
       const baselineCounts = await readD1Inventory(orderedNames);
       const baselineMismatches = orderedNames
-        .filter(name => baselineCounts[name] !== manifestProgress[name])
+        .filter(name => !replaceFromSourceTables.has(name) && baselineCounts[name] !== manifestProgress[name])
         .map(name => ({ table: name, manifest: manifestProgress[name], d1: baselineCounts[name] }));
-      if (baselineMismatches.length) {
+      const regressedBaselineCounts = baselineMismatches.filter(({ manifest, d1 }) => d1 < manifest);
+      if (baselineMismatches.length && (
+        !recoverVerifiedProgress
+        || regressedBaselineCounts.length > 0
+      )) {
         throw new Error(`Cannot resume: D1 row counts differ from the imported manifest: ${JSON.stringify(baselineMismatches)}`);
       }
+      preservedD1ExtrasByTable = preserveExtrasArgument
+        ? await verifyRequestedPreservedD1Extras(
+          db,
+          rowIdColumns,
+          sourceTables,
+          requestedPreservedExtras,
+          dynamicallyPreservedTables,
+        )
+        : {};
+      const comparableBaselineCounts = { ...baselineCounts };
+      for (const [tableName, rowIds] of Object.entries(preservedD1ExtrasByTable)) {
+        if (rowIds.length > comparableBaselineCounts[tableName]) {
+          throw new Error(`Cannot preserve more D1-only rows than exist in ${tableName}`);
+        }
+        comparableBaselineCounts[tableName] -= rowIds.length;
+      }
+      for (const tableName of replaceFromSourceTables) {
+        comparableBaselineCounts[tableName] = 0;
+      }
       const sourceCountRegressions = orderedNames
-        .filter(name => tableCounts[name] < baselineCounts[name])
-        .map(name => ({ table: name, source: tableCounts[name], d1: baselineCounts[name] }));
+        .filter(name => !replaceFromSourceTables.has(name) && tableCounts[name] < comparableBaselineCounts[name])
+        .map(name => ({ table: name, source: tableCounts[name], d1: comparableBaselineCounts[name] }));
       if (sourceCountRegressions.length) {
         throw new Error(`Cannot resume safely because source tables lost rows after the baseline: ${JSON.stringify(sourceCountRegressions)}`);
       }
 
-      console.info(`Verifying all ${Object.values(baselineCounts).reduce((sum, count) => sum + count, 0)} existing D1 rows against the latest R2 snapshot before reconciling appended rows`);
+      console.info(`Verifying all ${Object.values(comparableBaselineCounts).reduce((sum, count) => sum + count, 0)} source-backed D1 rows against the latest R2 snapshot before reconciling appended rows`);
       const baselineVerification = await validateEveryValue(
         db,
         orderedNames,
         tableInfo,
         rowIdColumns,
-        baselineCounts,
+        comparableBaselineCounts,
         markerSnapshotSha256,
-        { collectChanges: true },
+        {
+          collectChanges: !recoverVerifiedProgress,
+          excludedRowIdsByTable: preservedD1ExtrasByTable,
+          skipTables: replaceFromSourceTables,
+        },
       );
       await verifyOverflowValues(baselineVerification.oversized, markerSnapshotSha256);
 
       const additions = [];
       for (const tableName of orderedNames) {
-        const gap = tableCounts[tableName] - baselineCounts[tableName];
-        if (!gap) continue;
+        if (replaceFromSourceTables.has(tableName)) continue;
+        const gap = tableCounts[tableName] - comparableBaselineCounts[tableName];
+        if (gap <= 0) continue;
         const pseudoColumn = rowIdColumns.get(tableName);
         const maxRowId = await readD1MaxRowId(tableName, pseudoColumn);
         const sourceAddedCount = maxRowId == null
@@ -1240,12 +1404,20 @@ async function run() {
         additions.push({ tableName, gap, maxRowId });
       }
 
+      if (recoverVerifiedProgress) {
+        for (const { table, d1 } of baselineMismatches) {
+          manifestProgress[table] = d1;
+        }
+      }
       manifestCreated = true;
       preserveSnapshotOnFailure = true;
       await queryProductionD1(
-        `UPDATE d1_migration_manifest SET status='running', finished_at=NULL WHERE id=1`,
+        `UPDATE d1_migration_manifest
+         SET migrated_table_counts_json=?, status='running', finished_at=NULL
+         WHERE id=1`,
+        [JSON.stringify(manifestProgress)],
       );
-      if (additions.length || baselineVerification.changes.length) {
+      if (additions.length || baselineVerification.changes.length || replaceFromSourceTables.size) {
         await dropD1Triggers(triggers);
         triggersDropped = true;
       }
@@ -1254,6 +1426,26 @@ async function run() {
         snapshotSha256,
         rowIdColumns,
       );
+      for (const tableName of replaceFromSourceTables) {
+        await queryProductionD1(`DELETE FROM ${quoteIdentifier(tableName)}`);
+        const inserted = await importTable(
+          db,
+          tableName,
+          tableInfo,
+          rowIdColumns,
+          !keepsRowIdThroughPrimaryKey(tableInfo.get(tableName)),
+          markerSnapshotSha256,
+        );
+        if (inserted !== tableCounts[tableName]) {
+          throw new Error(`D1 source replacement count mismatch in ${tableName}: copied ${inserted}, expected ${tableCounts[tableName]}`);
+        }
+        manifestProgress[tableName] = inserted;
+        await queryProductionD1(
+          `UPDATE d1_migration_manifest SET migrated_table_counts_json=? WHERE id=1`,
+          [JSON.stringify(manifestProgress)],
+        );
+        console.info(`Replaced D1 ${tableName} from the approved SQLite source snapshot: ${inserted} row(s)`);
+      }
       for (const { tableName, gap, maxRowId } of additions) {
         const inserted = await importTable(
           db,
@@ -1267,7 +1459,7 @@ async function run() {
         if (inserted !== gap) {
           throw new Error(`D1 reconciliation count mismatch in ${tableName}: inserted ${inserted}, expected ${gap}`);
         }
-        manifestProgress[tableName] = tableCounts[tableName];
+        manifestProgress[tableName] = tableCounts[tableName] + (preservedD1ExtrasByTable[tableName]?.length ?? 0);
         await queryProductionD1(
           `UPDATE d1_migration_manifest SET migrated_table_counts_json=? WHERE id=1`,
           [JSON.stringify(manifestProgress)],
@@ -1332,8 +1524,13 @@ async function run() {
     if (!resume) await createD1IndexesAndTriggers(indexes, triggers);
     const d1Counts = await readD1Inventory(orderedNames);
     const countMismatches = orderedNames
-      .filter(name => d1Counts[name] !== tableCounts[name])
-      .map(name => ({ table: name, source: tableCounts[name], d1: d1Counts[name] }));
+      .filter(name => d1Counts[name] !== tableCounts[name] + (preservedD1ExtrasByTable[name]?.length ?? 0))
+      .map(name => ({
+        table: name,
+        source: tableCounts[name],
+        preservedD1Extras: preservedD1ExtrasByTable[name]?.length ?? 0,
+        d1: d1Counts[name],
+      }));
     if (countMismatches.length) {
       throw new Error(`D1 table count mismatches: ${JSON.stringify(countMismatches)}`);
     }
@@ -1391,11 +1588,29 @@ async function run() {
       rowIdColumns,
       tableCounts,
       markerSnapshotSha256,
+      { excludedRowIdsByTable: preservedD1ExtrasByTable },
     );
     const overflowVerification = await verifyOverflowValues(exactVerification.oversized, markerSnapshotSha256);
+    const preservedD1Extras = Object.entries(preservedD1ExtrasByTable)
+      .flatMap(([table, rowIds]) => rowIds.map(rowId => ({ table, rowId })));
+    const dynamicallyPreservedD1Tables = [...dynamicallyPreservedTables];
+    const replacedD1TablesFromSource = [...replaceFromSourceTables];
+    // Every preserved D1-only row is explicitly approved and listed in the report;
+    // its presence does not mean the source snapshot failed exact verification.
+    const migrationStatus = "completed";
+    const reportSchemaAdjustments = preservedD1Extras.length
+      || dynamicallyPreservedD1Tables.length
+      || replacedD1TablesFromSource.length
+      ? {
+        ...schemaAdjustments,
+        ...(preservedD1Extras.length ? { preservedD1Extras } : {}),
+        ...(dynamicallyPreservedD1Tables.length ? { dynamicallyPreservedD1Tables } : {}),
+        ...(replacedD1TablesFromSource.length ? { replacedD1TablesFromSource } : {}),
+      }
+      : schemaAdjustments;
 
     const report = {
-      status: "completed",
+      status: migrationStatus,
       migratedAt: new Date().toISOString(),
       source: sourceReport.source,
       migrationBaselineSource: baseSnapshot,
@@ -1409,6 +1624,9 @@ async function run() {
         d1: d1Counts[name],
         exactValueReadback: true,
       })),
+      preservedD1Extras,
+      dynamicallyPreservedD1Tables,
+      replacedD1TablesFromSource,
       foreignKeyViolationCount: sourceReport.foreignKeyViolationCount,
       foreignKeyViolations: sourceFkViolations,
       orphanRowsPreserved: orphanCheckResults,
@@ -1434,12 +1652,14 @@ async function run() {
 
     await queryProductionD1(
       `UPDATE d1_migration_manifest
-       SET migrated_table_counts_json=?, status='completed', finished_at=datetime('now'),
+       SET migrated_table_counts_json=?, schema_adjustments_json=?, status=?, finished_at=datetime('now'),
            final_source_etag=?, final_source_last_modified=?, final_source_size_bytes=?,
            final_source_sha256=?, final_source_table_count=?, final_source_row_count=?
        WHERE id=1`,
       [
         JSON.stringify(d1Counts),
+        JSON.stringify(reportSchemaAdjustments),
+        migrationStatus,
         sourceReport.source.etag,
         sourceReport.source.lastModified,
         sourceReport.source.sizeBytes,

@@ -1,11 +1,11 @@
 import { Router } from "express";
-import db from "../lib/db.js";
+import { execute, executeBatch, queryAll, queryOne } from "../lib/erp-sql.js";
 import { invalidateSlaCache } from "../lib/sla.js";
 
 const router = Router();
 
-function snapshotMutableTariffValues() {
-  db.prepare(`
+const snapshotMutableTariffStatements = [
+  { sql: `
     INSERT OR IGNORE INTO trip_tariff_expense_snapshots (trip_id, driver_expense)
     SELECT t.id, COALESCE((
       SELECT tf.driver_expense
@@ -19,9 +19,8 @@ function snapshotMutableTariffValues() {
       AND NOT EXISTS (
         SELECT 1 FROM trip_tariff_expense_snapshots s WHERE s.trip_id = t.id
       )
-  `).run();
-
-  db.prepare(`
+  ` },
+  { sql: `
     UPDATE loading_orders
     SET tariff_loading_place = COALESCE(tariff_loading_place, (
           SELECT tf.loading_place FROM tariffs tf WHERE tf.id = loading_orders.tariff_id
@@ -41,25 +40,25 @@ function snapshotMutableTariffValues() {
         tariff_loading_place IS NULL OR tariff_unloading_place IS NULL
         OR tariff_bonus IS NULL OR tariff_rental_per_ton IS NULL
       )
-  `).run();
-}
+  ` },
+] as const;
 
-function mutateTariffs<T>(mutation: () => T): T {
-  return db.transaction(() => {
-    snapshotMutableTariffValues();
-    return mutation();
-  })();
+async function mutateTariffs(statements: Array<{ sql: string; params?: unknown[] }>) {
+  return executeBatch([...snapshotMutableTariffStatements, ...statements]);
 }
 
 // GET /tariffs
-router.get("/tariffs", (_req, res) => {
-  const rows = db.prepare("SELECT * FROM tariffs ORDER BY loading_place, unloading_place").all() as { id: number }[];
-  const locations = db.prepare("SELECT id, tariff_id, kind, name, url FROM tariff_locations ORDER BY id").all() as
-    { id: number; tariff_id: number; kind: string; name: string; url: string }[];
+router.get("/tariffs", async (_req, res) => {
+  const [rows, locations, syncRow] = await Promise.all([
+    queryAll<{ id: number }>("SELECT * FROM tariffs ORDER BY loading_place, unloading_place"),
+    queryAll<{ id: number; tariff_id: number; kind: string; name: string; url: string }>(
+      "SELECT id, tariff_id, kind, name, url FROM tariff_locations ORDER BY id",
+    ),
+    queryOne<{ ts: string | null }>("SELECT MAX(synced_at) as ts FROM tariffs"),
+  ]);
   const byTariff = new Map<number, typeof locations>();
   locations.forEach(location => byTariff.set(location.tariff_id, [...(byTariff.get(location.tariff_id) || []), location]));
-  const syncedAt = (db.prepare("SELECT MAX(synced_at) as ts FROM tariffs").get() as { ts: string | null })?.ts;
-  res.json({ rows: rows.map(row => ({ ...row, locations: byTariff.get(row.id) || [] })), count: rows.length, synced_at: syncedAt });
+  res.json({ rows: rows.map(row => ({ ...row, locations: byTariff.get(row.id) || [] })), count: rows.length, synced_at: syncRow?.ts ?? null });
 });
 
 function parseLocation(body: Record<string, unknown>): { name: string; url: string } | null {
@@ -73,127 +72,132 @@ function parseLocation(body: Record<string, unknown>): { name: string; url: stri
   } catch { return null; }
 }
 
-router.post("/tariffs/:id/locations", (req, res) => {
+router.post("/tariffs/:id/locations", async (req, res) => {
   const tariffId = Number(req.params.id);
-  if (!Number.isSafeInteger(tariffId) || !db.prepare("SELECT 1 FROM tariffs WHERE id=?").get(tariffId))
+  if (!Number.isSafeInteger(tariffId) || !await queryOne("SELECT 1 FROM tariffs WHERE id=?", tariffId))
     return void res.status(404).json({ error: "التعريفة غير موجودة" });
   const kind = req.body?.kind;
   const location = parseLocation(req.body || {});
   if (!["loading", "unloading"].includes(kind) || !location)
     return void res.status(400).json({ error: "أدخل اسمًا ورابطًا صحيحًا للّوكيشن" });
-  const existing = db.prepare("SELECT id FROM tariff_locations WHERE tariff_id=? AND kind=? AND url=?")
-    .get(tariffId, kind, location.url) as { id: number } | undefined;
+  const existing = await queryOne<{ id: number }>(
+    "SELECT id FROM tariff_locations WHERE tariff_id=? AND kind=? AND url=?",
+    tariffId, kind, location.url,
+  );
   if (existing) return void res.status(409).json({ error: "هذا اللوكيشن موجود بالفعل في التعريفة", id: existing.id });
-  const result = db.prepare("INSERT INTO tariff_locations(tariff_id,kind,name,url) VALUES(?,?,?,?)")
-    .run(tariffId, kind, location.name, location.url);
+  const result = await execute(
+    "INSERT INTO tariff_locations(tariff_id,kind,name,url) VALUES(?,?,?,?)",
+    tariffId, kind, location.name, location.url,
+  );
   res.status(201).json({ id: result.lastInsertRowid, ...location, kind });
 });
 
-router.put("/tariffs/:id/locations/:locationId", (req, res) => {
+router.put("/tariffs/:id/locations/:locationId", async (req, res) => {
   const location = parseLocation(req.body || {});
   if (!location) return void res.status(400).json({ error: "أدخل اسمًا ورابطًا صحيحًا للّوكيشن" });
-  const current = db.prepare("SELECT kind FROM tariff_locations WHERE id=? AND tariff_id=?")
-    .get(req.params.locationId, req.params.id) as { kind: string } | undefined;
+  const current = await queryOne<{ kind: string }>(
+    "SELECT kind FROM tariff_locations WHERE id=? AND tariff_id=?",
+    req.params.locationId, req.params.id,
+  );
   if (!current) return void res.status(404).json({ error: "اللوكيشن غير موجود" });
-  if (db.prepare("SELECT 1 FROM tariff_locations WHERE tariff_id=? AND kind=? AND url=? AND id<>?")
-    .get(req.params.id, current.kind, location.url, req.params.locationId))
+  if (await queryOne("SELECT 1 FROM tariff_locations WHERE tariff_id=? AND kind=? AND url=? AND id<>?",
+    req.params.id, current.kind, location.url, req.params.locationId))
     return void res.status(409).json({ error: "هذا اللوكيشن موجود بالفعل في التعريفة" });
-  const result = db.prepare("UPDATE tariff_locations SET name=?, url=? WHERE id=? AND tariff_id=?")
-    .run(location.name, location.url, req.params.locationId, req.params.id);
+  const result = await execute(
+    "UPDATE tariff_locations SET name=?, url=? WHERE id=? AND tariff_id=?",
+    location.name, location.url, req.params.locationId, req.params.id,
+  );
   if (!result.changes) return void res.status(404).json({ error: "اللوكيشن غير موجود" });
   res.json({ ...location });
 });
 
-router.delete("/tariffs/:id/locations/:locationId", (req, res) => {
-  const result = db.prepare("DELETE FROM tariff_locations WHERE id=? AND tariff_id=?")
-    .run(req.params.locationId, req.params.id);
+router.delete("/tariffs/:id/locations/:locationId", async (req, res) => {
+  const result = await execute("DELETE FROM tariff_locations WHERE id=? AND tariff_id=?",
+    req.params.locationId, req.params.id);
   if (!result.changes) return void res.status(404).json({ error: "اللوكيشن غير موجود" });
   res.json({ message: "تم حذف اللوكيشن" });
 });
 
 // GET /tariffs/routes?loading=X — return unloading places + prices + vehicle_type + cargo_type
-router.get("/tariffs/routes", (req, res) => {
+router.get("/tariffs/routes", async (req, res) => {
   const { loading } = req.query as Record<string, string>;
   if (!loading) return void res.json([]);
-  const rows = db.prepare(`
+  const rows = await queryAll<{ unloading_place: string; driver_expense: number; rental: number; vehicle_type: string; cargo_type: string }>(`
     SELECT unloading_place, driver_expense, rental,
            COALESCE(vehicle_type,'') AS vehicle_type,
            COALESCE(cargo_type,'')   AS cargo_type
     FROM tariffs
     WHERE loading_place=? AND status='approved'
     ORDER BY unloading_place
-  `).all(loading) as { unloading_place: string; driver_expense: number; rental: number; vehicle_type: string; cargo_type: string }[];
+  `, loading);
   res.json(rows);
 });
 
 // GET /tariffs/route-bonus?loading=X&unloading=Y — lookup driver_expense for a route
-router.get("/tariffs/route-bonus", (req, res) => {
+router.get("/tariffs/route-bonus", async (req, res) => {
   const { loading, unloading } = req.query as Record<string, string>;
   if (!loading || !unloading) return void res.json({ bonus: 0, found: false });
-  const row = db.prepare(`
+  const row = await queryOne<{ driver_expense: number }>(`
     SELECT driver_expense FROM tariffs
     WHERE loading_place=? AND unloading_place=? AND status='approved'
     ORDER BY CASE WHEN (vehicle_type IS NULL OR vehicle_type='' OR vehicle_type='الكل') THEN 1 ELSE 0 END
     LIMIT 1
-  `).get(loading, unloading) as { driver_expense: number } | undefined;
+  `, loading, unloading);
   res.json({ bonus: row?.driver_expense || 0, found: !!row });
 });
 
 // GET /tariffs/loading-places
-router.get("/tariffs/loading-places", (_req, res) => {
-  const rows = db.prepare("SELECT DISTINCT loading_place FROM tariffs ORDER BY loading_place").all() as { loading_place: string }[];
+router.get("/tariffs/loading-places", async (_req, res) => {
+  const rows = await queryAll<{ loading_place: string }>("SELECT DISTINCT loading_place FROM tariffs ORDER BY loading_place");
   res.json(rows.map(r => r.loading_place));
 });
 
 // GET /tariffs/unloading-places
-router.get("/tariffs/unloading-places", (_req, res) => {
-  const rows = db.prepare("SELECT DISTINCT unloading_place FROM tariffs ORDER BY unloading_place").all() as { unloading_place: string }[];
+router.get("/tariffs/unloading-places", async (_req, res) => {
+  const rows = await queryAll<{ unloading_place: string }>("SELECT DISTINCT unloading_place FROM tariffs ORDER BY unloading_place");
   res.json(rows.map(r => r.unloading_place));
 });
 
 // POST /tariffs/import - import rows from uploaded file (Excel/CSV parsed on frontend)
-router.post("/tariffs/import", (req, res) => {
+router.post("/tariffs/import", async (req, res) => {
   const { rows, replace_existing } = req.body as { rows: Record<string, string | number>[]; replace_existing?: boolean };
   if (!Array.isArray(rows) || rows.length === 0)
     return void res.status(400).json({ error: "لا توجد صفوف للاستيراد" });
 
-  const ins = db.prepare(`
-    INSERT INTO tariffs (row_id, loading_place, unloading_place, driver_expense, rental, synced_at)
-    VALUES (?,?,?,?,?,datetime('now'))
-  `);
+  const statements: Array<{ sql: string; params?: unknown[] }> = [];
+  if (replace_existing) statements.push({ sql: "DELETE FROM tariffs WHERE row_id IS NOT NULL" });
   let imported = 0; let skipped = 0;
-  mutateTariffs(() => {
-    if (replace_existing) {
-      db.prepare("DELETE FROM tariffs WHERE row_id IS NOT NULL").run();
-    }
-    for (const row of rows) {
-      const loading   = String(row["مكان التحميل"]   || row["loading_place"]   || "").trim();
-      const unloading = String(row["مكان التنزيل"]  || row["unloading_place"]  || "").trim();
-      if (!loading || !unloading) { skipped++; continue; }
-      const rowId = parseInt(String(row["ID"] || row["id"] || "")) || null;
-      ins.run(
+  for (const row of rows) {
+    const loading = String(row["مكان التحميل"] || row["loading_place"] || "").trim();
+    const unloading = String(row["مكان التنزيل"] || row["unloading_place"] || "").trim();
+    if (!loading || !unloading) { skipped++; continue; }
+    const rowId = parseInt(String(row["ID"] || row["id"] || "")) || null;
+    statements.push({
+      sql: "INSERT INTO tariffs (row_id, loading_place, unloading_place, driver_expense, rental, synced_at) VALUES (?,?,?,?,?,datetime('now'))",
+      params: [
         rowId,
         loading,
         unloading,
         parseFloat(String(row["السعر"] || row["مصروف السائق"] || row["driver_expense"] || "0")) || 0,
         parseFloat(String(row["الايجار"] || row["الإيجار"] || row["rental"] || "0")) || 0,
-      );
-      imported++;
-    }
-  });
+      ],
+    });
+    imported++;
+  }
+  await mutateTariffs(statements);
   res.json({ imported, skipped, message: `تم استيراد ${imported} سطر${skipped ? ` وتخطي ${skipped} سطر فارغ` : ""}` });
 });
 
 // PUT /tariffs/:id
-router.put("/tariffs/:id", (req, res) => {
+router.put("/tariffs/:id", async (req, res) => {
   const { loading_place, unloading_place, driver_expense, rental, notes, vehicle_type,
           supplier, customer_name, loaded_meters, cargo_type, km_per_route, image_url } = req.body;
-  mutateTariffs(() => {
-    db.prepare(`UPDATE tariffs SET
+  await mutateTariffs([{
+    sql: `UPDATE tariffs SET
       loading_place=?, unloading_place=?, driver_expense=?, rental=?, notes=?, vehicle_type=?,
       supplier=?, customer_name=?, loaded_meters=?, cargo_type=?, km_per_route=?, image_url=?
-      WHERE id=?`)
-      .run(loading_place, unloading_place,
+      WHERE id=?`,
+    params: [loading_place, unloading_place,
            parseFloat(driver_expense)||0, parseFloat(rental)||0,
            notes||null, vehicle_type||null,
            supplier||null, customer_name||null,
@@ -201,46 +205,47 @@ router.put("/tariffs/:id", (req, res) => {
            cargo_type||null,
            km_per_route != null && km_per_route !== "" ? parseFloat(km_per_route)||null : null,
            image_url||null,
-           req.params.id);
-  });
+           req.params.id],
+  }]);
   res.json({ message: "تم التحديث" });
 });
 
 // PATCH /tariffs/:id/image — update only image_url (after upload)
-router.patch("/tariffs/:id/image", (req, res) => {
+router.patch("/tariffs/:id/image", async (req, res) => {
   const { image_url } = req.body;
-  mutateTariffs(() => db.prepare("UPDATE tariffs SET image_url=? WHERE id=?").run(image_url||null, req.params.id));
+  await mutateTariffs([{ sql: "UPDATE tariffs SET image_url=? WHERE id=?", params: [image_url || null, req.params.id] }]);
   res.json({ message: "تم تحديث الصورة" });
 });
 
 // DELETE /tariffs/:id
-router.delete("/tariffs/:id", (req, res) => {
-  mutateTariffs(() => db.prepare("DELETE FROM tariffs WHERE id=?").run(req.params.id));
+router.delete("/tariffs/:id", async (req, res) => {
+  await mutateTariffs([{ sql: "DELETE FROM tariffs WHERE id=?", params: [req.params.id] }]);
   res.json({ message: "تم الحذف" });
 });
 
 // POST /tariffs (manual add)
-router.post("/tariffs", (req, res) => {
+router.post("/tariffs", async (req, res) => {
   const { loading_place, unloading_place, driver_expense, rental, notes, vehicle_type,
           supplier, customer_name, loaded_meters, cargo_type, km_per_route } = req.body;
-  const r = mutateTariffs(() => db.prepare(`
-    INSERT INTO tariffs
+  const results = await mutateTariffs([{
+    sql: `INSERT INTO tariffs
       (loading_place, unloading_place, driver_expense, rental, notes, vehicle_type,
        supplier, customer_name, loaded_meters, cargo_type, km_per_route, status)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,'approved')
-  `).run(loading_place, unloading_place,
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,'approved')`,
+    params: [loading_place, unloading_place,
          parseFloat(driver_expense)||0, parseFloat(rental)||0,
          notes||null, vehicle_type||null,
          supplier||null, customer_name||null,
          loaded_meters != null ? parseFloat(String(loaded_meters))||null : null,
          cargo_type||null,
-         km_per_route != null && km_per_route !== "" ? parseFloat(String(km_per_route))||null : null));
-  res.status(201).json({ id: r.lastInsertRowid, message: "تم الإضافة" });
+         km_per_route != null && km_per_route !== "" ? parseFloat(String(km_per_route))||null : null],
+  }]);
+  res.status(201).json({ id: results[2]?.lastInsertRowid, message: "تم الإضافة" });
 });
 
 // GET /tariffs/from-trips — analyze existing trips for tariff suggestions
-router.get("/tariffs/from-trips", (_req, res) => {
-  const groups = db.prepare(`
+router.get("/tariffs/from-trips", async (_req, res) => {
+  const groups = await queryAll(`
     SELECT
       client_name,
       material_type,
@@ -259,75 +264,89 @@ router.get("/tariffs/from-trips", (_req, res) => {
     GROUP BY client_name, material_type, destination
     ORDER BY trip_count DESC, client_name
     LIMIT 200
-  `).all();
+  `);
   res.json(groups);
 });
 
 // POST /tariffs/propose — driver proposes new route
-router.post("/tariffs/propose", (req, res) => {
+router.post("/tariffs/propose", async (req, res) => {
   const { loading_place, unloading_place, proposed_by } = req.body;
   if (!loading_place || !unloading_place) return void res.status(400).json({ error: "مكان التحميل والتنزيل مطلوبان" });
-  const existing = db.prepare("SELECT id FROM tariffs WHERE loading_place=? AND unloading_place=? AND status='approved'").get(loading_place, unloading_place);
+  const existing = await queryOne("SELECT id FROM tariffs WHERE loading_place=? AND unloading_place=? AND status='approved'", loading_place, unloading_place);
   if (existing) return void res.status(409).json({ error: "هذا المسار موجود مسبقاً في التعريفة" });
-  const r = mutateTariffs(() => db.prepare("INSERT INTO tariffs (loading_place,unloading_place,driver_expense,rental,status,proposed_by) VALUES (?,?,0,0,'pending',?)")
-    .run(loading_place, unloading_place, proposed_by||null));
-  const sups = db.prepare("SELECT phone FROM users WHERE role='supervisor' AND active=1").all() as {phone:string}[];
-  sups.forEach(s => db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)").run(s.phone, "مسار جديد مقترح", `مسار: ${loading_place} → ${unloading_place} يحتاج تسعيراً`));
-  res.status(201).json({ id: r.lastInsertRowid, message: "تم إرسال اقتراح المسار للمشرف" });
+  const results = await mutateTariffs([{
+    sql: "INSERT INTO tariffs (loading_place,unloading_place,driver_expense,rental,status,proposed_by) VALUES (?,?,0,0,'pending',?)",
+    params: [loading_place, unloading_place, proposed_by || null],
+  }]);
+  const sups = await queryAll<{ phone: string }>("SELECT phone FROM users WHERE role='supervisor' AND active=1");
+  await Promise.all(sups.map(s => execute(
+    "INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+    s.phone, "مسار جديد مقترح", `مسار: ${loading_place} → ${unloading_place} يحتاج تسعيراً`,
+  )));
+  res.status(201).json({ id: results[2]?.lastInsertRowid, message: "تم إرسال اقتراح المسار للمشرف" });
 });
 
 // PUT /tariffs/:id/set-price — supervisor sets price
-router.put("/tariffs/:id/set-price", (req, res) => {
+router.put("/tariffs/:id/set-price", async (req, res) => {
   const { driver_expense, rental, set_by } = req.body;
-  mutateTariffs(() => db.prepare("UPDATE tariffs SET driver_expense=?,rental=?,price_set_by=? WHERE id=?")
-    .run(parseFloat(driver_expense)||0, parseFloat(rental)||0, set_by||null, req.params.id));
-  const tariff = db.prepare("SELECT * FROM tariffs WHERE id=?").get(req.params.id) as Record<string,unknown>|undefined;
-  const fins = db.prepare("SELECT phone FROM users WHERE role IN ('admin','finance') AND active=1").all() as {phone:string}[];
-  fins.forEach(f => db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)").run(f.phone, "تعريفة تنتظر الموافقة", `مسار ${tariff?.loading_place} → ${tariff?.unloading_place} جاهز للموافقة`));
+  await mutateTariffs([{
+    sql: "UPDATE tariffs SET driver_expense=?,rental=?,price_set_by=? WHERE id=?",
+    params: [parseFloat(driver_expense)||0, parseFloat(rental)||0, set_by||null, req.params.id],
+  }]);
+  const [tariff, fins] = await Promise.all([
+    queryOne<Record<string, unknown>>("SELECT * FROM tariffs WHERE id=?", req.params.id),
+    queryAll<{ phone: string }>("SELECT phone FROM users WHERE role IN ('admin','finance') AND active=1"),
+  ]);
+  await Promise.all(fins.map(f => execute("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+    f.phone, "تعريفة تنتظر الموافقة", `مسار ${tariff?.loading_place} → ${tariff?.unloading_place} جاهز للموافقة`)));
   res.json({ message: "تم تحديث السعر" });
 });
 
 // PUT /tariffs/:id/approve — finance approves
-router.put("/tariffs/:id/approve", (req, res) => {
-  mutateTariffs(() => db.prepare("UPDATE tariffs SET status='approved' WHERE id=?").run(req.params.id));
-  const tariff = db.prepare("SELECT * FROM tariffs WHERE id=?").get(req.params.id) as Record<string,unknown>|undefined;
-  if (tariff?.proposed_by) db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)").run(tariff.proposed_by, "تمت الموافقة على المسار", `مسار: ${tariff.loading_place} → ${tariff.unloading_place}`);
+router.put("/tariffs/:id/approve", async (req, res) => {
+  await mutateTariffs([{ sql: "UPDATE tariffs SET status='approved' WHERE id=?", params: [req.params.id] }]);
+  const tariff = await queryOne<Record<string, unknown>>("SELECT * FROM tariffs WHERE id=?", req.params.id);
+  if (tariff?.proposed_by) await execute("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+    tariff.proposed_by, "تمت الموافقة على المسار", `مسار: ${tariff.loading_place} → ${tariff.unloading_place}`);
   res.json({ message: "تمت الموافقة" });
 });
 
 // PUT /tariffs/:id/reject — finance rejects
-router.put("/tariffs/:id/reject", (req, res) => {
-  mutateTariffs(() => db.prepare("UPDATE tariffs SET status='rejected' WHERE id=?").run(req.params.id));
-  const tariff = db.prepare("SELECT * FROM tariffs WHERE id=?").get(req.params.id) as Record<string,unknown>|undefined;
-  if (tariff?.proposed_by) db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)").run(tariff.proposed_by, "رُفض المسار المقترح", `مسار: ${tariff.loading_place} → ${tariff.unloading_place}`);
+router.put("/tariffs/:id/reject", async (req, res) => {
+  await mutateTariffs([{ sql: "UPDATE tariffs SET status='rejected' WHERE id=?", params: [req.params.id] }]);
+  const tariff = await queryOne<Record<string, unknown>>("SELECT * FROM tariffs WHERE id=?", req.params.id);
+  if (tariff?.proposed_by) await execute("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+    tariff.proposed_by, "رُفض المسار المقترح", `مسار: ${tariff.loading_place} → ${tariff.unloading_place}`);
   res.json({ message: "تم الرفض" });
 });
 
 // GET /finance-settings
-router.get("/finance-settings", (_req, res) => {
-  const s = db.prepare("SELECT * FROM finance_settings WHERE id=1").get();
+router.get("/finance-settings", async (_req, res) => {
+  const s = await queryOne("SELECT * FROM finance_settings WHERE id=1");
   res.json(s || { supervisor_salary_pct:5, transport_pct:3, admin_pct:7, driver_salary_default:3000 });
 });
 
 // PUT /finance-settings
-router.put("/finance-settings", (req, res) => {
+router.put("/finance-settings", async (req, res) => {
   const { supervisor_salary_pct, transport_pct, admin_pct, driver_salary_default } = req.body;
-  db.prepare("UPDATE finance_settings SET supervisor_salary_pct=?,transport_pct=?,admin_pct=?,driver_salary_default=?,updated_at=datetime('now') WHERE id=1")
-    .run(parseFloat(supervisor_salary_pct)||5, parseFloat(transport_pct)||3, parseFloat(admin_pct)||7, parseFloat(driver_salary_default)||3000);
+  await execute(
+    "UPDATE finance_settings SET supervisor_salary_pct=?,transport_pct=?,admin_pct=?,driver_salary_default=?,updated_at=datetime('now') WHERE id=1",
+    parseFloat(supervisor_salary_pct)||5, parseFloat(transport_pct)||3, parseFloat(admin_pct)||7, parseFloat(driver_salary_default)||3000,
+  );
   res.json({ message: "تم حفظ الإعدادات" });
 });
 
 // GET /finance/report
-router.get("/finance/report", (req, res) => {
+router.get("/finance/report", async (req, res) => {
   const { from, to } = req.query as { from?:string; to?:string };
   const d = new Date(); d.setDate(1);
   const fromDate = from || d.toISOString().slice(0,10);
   const toDate   = to   || new Date().toISOString().slice(0,10);
 
-  const settings = (db.prepare("SELECT * FROM finance_settings WHERE id=1").get() as Record<string,number>|undefined)
-    || { supervisor_salary_pct:5, transport_pct:3, admin_pct:7, driver_salary_default:3000 };
+  const [settingsRow, orders, dieselRows, repairRows] = await Promise.all([
+    queryOne<Record<string, number>>("SELECT * FROM finance_settings WHERE id=1"),
 
-  const orders = db.prepare(`
+    queryAll<Record<string, unknown>>(`
     SELECT vehicle_plate, driver_name, driver_phone,
       COUNT(*) as trips,
       COALESCE(SUM(rental_amount),0) as revenue,
@@ -340,14 +359,24 @@ router.get("/finance/report", (req, res) => {
         OR (delivery_date IS NULL AND DATE(created_at) BETWEEN ? AND ?)
       )
     GROUP BY vehicle_plate, driver_name, driver_phone
-  `).all(fromDate, toDate, fromDate, toDate) as Record<string,unknown>[];
+    `, fromDate, toDate, fromDate, toDate),
 
+    queryAll<Record<string, unknown>>(
+      "SELECT driver_phone, COALESCE(SUM(amount),0) as total FROM driver_expenses WHERE expense_date BETWEEN ? AND ? GROUP BY driver_phone",
+      fromDate, toDate,
+    ),
+    queryAll<Record<string, unknown>>(
+      "SELECT car_id, COALESCE(SUM(amount),0) as total FROM fleet_expenses WHERE date BETWEEN ? AND ? GROUP BY car_id",
+      fromDate, toDate,
+    ),
+  ]);
+  const settings = settingsRow || { supervisor_salary_pct:5, transport_pct:3, admin_pct:7, driver_salary_default:3000 };
   const dieselMap = new Map<string,number>();
-  (db.prepare("SELECT driver_phone, COALESCE(SUM(amount),0) as total FROM driver_expenses WHERE expense_date BETWEEN ? AND ? GROUP BY driver_phone").all(fromDate,toDate) as Record<string,unknown>[])
+  dieselRows
     .forEach(r => dieselMap.set(r.driver_phone as string, r.total as number));
 
   const repairMap = new Map<string,number>();
-  (db.prepare("SELECT car_id, COALESCE(SUM(amount),0) as total FROM fleet_expenses WHERE date BETWEEN ? AND ? GROUP BY car_id").all(fromDate,toDate) as Record<string,unknown>[])
+  repairRows
     .forEach(r => repairMap.set(r.car_id as string, r.total as number));
 
   const report = orders.map(o => {
@@ -382,24 +411,23 @@ router.get("/finance/report", (req, res) => {
 });
 
 // ── SLA Settings ─────────────────────────────────────────────────────────────
-router.get("/company-settings/sla", (_req, res) => {
-  const rows = db.prepare("SELECT * FROM sla_settings ORDER BY id").all();
+router.get("/company-settings/sla", async (_req, res) => {
+  const rows = await queryAll("SELECT * FROM sla_settings ORDER BY id");
   res.json(rows);
 });
 
-router.put("/company-settings/sla", (req, res) => {
+router.put("/company-settings/sla", async (req, res) => {
   const { settings } = req.body as {
     settings: Array<{ stage: string; limit_minutes: number }>;
   };
   if (!Array.isArray(settings)) return void res.status(400).json({ error: "settings يجب أن يكون مصفوفة" });
 
-  const update = db.prepare(
-    "UPDATE sla_settings SET limit_minutes=?, updated_at=datetime('now') WHERE stage=?"
-  );
+  const updates = [];
   for (const s of settings) {
     if (!s.stage || typeof s.limit_minutes !== "number" || s.limit_minutes < 1) continue;
-    update.run(s.limit_minutes, s.stage);
+    updates.push({ sql: "UPDATE sla_settings SET limit_minutes=?, updated_at=datetime('now') WHERE stage=?", params: [s.limit_minutes, s.stage] });
   }
+  await executeBatch(updates);
 
   // Invalidate the in-memory SLA settings cache (imported at top)
   invalidateSlaCache();
@@ -407,70 +435,73 @@ router.put("/company-settings/sla", (req, res) => {
 });
 
 // ── Company Settings ─────────────────────────────────────────────────────────
-router.get("/company-settings", (_req, res) => {
-  const rows = db.prepare("SELECT * FROM company_settings WHERE active=1 ORDER BY id").all();
+router.get("/company-settings", async (_req, res) => {
+  const rows = await queryAll("SELECT * FROM company_settings WHERE active=1 ORDER BY id");
   res.json(rows);
 });
-router.get("/company-settings/:id", (req, res) => {
-  const row = db.prepare("SELECT * FROM company_settings WHERE id=?").get(req.params.id);
+router.get("/company-settings/:id", async (req, res) => {
+  const row = await queryOne("SELECT * FROM company_settings WHERE id=?", req.params.id);
   if (!row) return void res.status(404).json({ error: "غير موجود" });
   res.json(row);
 });
-router.put("/company-settings/:id", (req, res) => {
+router.put("/company-settings/:id", async (req, res) => {
   const { entity_name, tax_number, national_address, cr_number, phone } = req.body;
-  db.prepare("UPDATE company_settings SET entity_name=COALESCE(?,entity_name), tax_number=COALESCE(?,tax_number), national_address=COALESCE(?,national_address), cr_number=COALESCE(?,cr_number), phone=COALESCE(?,phone) WHERE id=?")
-    .run(entity_name||null, tax_number||null, national_address||null, cr_number||null, phone||null, req.params.id);
+  await execute(
+    "UPDATE company_settings SET entity_name=COALESCE(?,entity_name), tax_number=COALESCE(?,tax_number), national_address=COALESCE(?,national_address), cr_number=COALESCE(?,cr_number), phone=COALESCE(?,phone) WHERE id=?",
+    entity_name||null, tax_number||null, national_address||null, cr_number||null, phone||null, req.params.id,
+  );
   res.json({ message: "تم الحفظ" });
 });
-router.post("/company-settings", (req, res) => {
+router.post("/company-settings", async (req, res) => {
   const { entity_name, tax_number, national_address, cr_number, phone } = req.body;
   if (!entity_name) return void res.status(400).json({ error: "اسم الجهة مطلوب" });
-  const r = db.prepare("INSERT INTO company_settings (entity_name,tax_number,national_address,cr_number,phone) VALUES (?,?,?,?,?)")
-    .run(entity_name, tax_number||"", national_address||"", cr_number||"", phone||"");
+  const r = await execute("INSERT INTO company_settings (entity_name,tax_number,national_address,cr_number,phone) VALUES (?,?,?,?,?)",
+    entity_name, tax_number||"", national_address||"", cr_number||"", phone||"");
   res.status(201).json({ id: r.lastInsertRowid });
 });
-router.delete("/company-settings/:id", (req, res) => {
-  const row = db.prepare("SELECT id FROM company_settings WHERE id=? AND active=1").get(req.params.id);
+router.delete("/company-settings/:id", async (req, res) => {
+  const row = await queryOne("SELECT id FROM company_settings WHERE id=? AND active=1", req.params.id);
   if (!row) return void res.status(404).json({ error: "الفرع غير موجود" });
-  db.prepare("UPDATE company_settings SET active=0 WHERE id=?").run(req.params.id);
+  await execute("UPDATE company_settings SET active=0 WHERE id=?", req.params.id);
   res.json({ ok: true });
 });
 
 // ── Flatbed Route Multipliers ────────────────────────────────────────────────
-router.get("/flatbed-multipliers", (_req, res) => {
-  res.json(db.prepare("SELECT * FROM flatbed_multipliers ORDER BY id").all());
+router.get("/flatbed-multipliers", async (_req, res) => {
+  res.json(await queryAll("SELECT * FROM flatbed_multipliers ORDER BY id"));
 });
 
-router.post("/flatbed-multipliers", (req, res) => {
+router.post("/flatbed-multipliers", async (req, res) => {
   const { origin_city, dest_city, multiplier, notes } = req.body;
   if (!origin_city || !dest_city) return void res.status(400).json({ error: "مدينة الانطلاق والوجهة مطلوبتان" });
-  const r = db.prepare("INSERT INTO flatbed_multipliers (origin_city,dest_city,multiplier,notes) VALUES (?,?,?,?)")
-    .run(origin_city, dest_city, parseFloat(multiplier) || 2, notes || null);
+  const r = await execute("INSERT INTO flatbed_multipliers (origin_city,dest_city,multiplier,notes) VALUES (?,?,?,?)",
+    origin_city, dest_city, parseFloat(multiplier) || 2, notes || null);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put("/flatbed-multipliers/:id", (req, res) => {
+router.put("/flatbed-multipliers/:id", async (req, res) => {
   const { origin_city, dest_city, multiplier, notes } = req.body;
-  db.prepare("UPDATE flatbed_multipliers SET origin_city=?,dest_city=?,multiplier=?,notes=? WHERE id=?")
-    .run(origin_city, dest_city, parseFloat(multiplier) || 2, notes || null, req.params.id);
+  await execute("UPDATE flatbed_multipliers SET origin_city=?,dest_city=?,multiplier=?,notes=? WHERE id=?",
+    origin_city, dest_city, parseFloat(multiplier) || 2, notes || null, req.params.id);
   res.json({ message: "تم التحديث" });
 });
 
-router.delete("/flatbed-multipliers/:id", (req, res) => {
-  db.prepare("DELETE FROM flatbed_multipliers WHERE id=?").run(req.params.id);
+router.delete("/flatbed-multipliers/:id", async (req, res) => {
+  await execute("DELETE FROM flatbed_multipliers WHERE id=?", req.params.id);
   res.json({ message: "تم الحذف" });
 });
 
 // ── Order cancel ─────────────────────────────────────────────────────────────
-router.put("/workflow/orders/:id/cancel", (req, res) => {
+router.put("/workflow/orders/:id/cancel", async (req, res) => {
   const { cancelled_by, cancel_reason } = req.body;
-  const order = db.prepare("SELECT * FROM workflow_orders WHERE id=?").get(req.params.id) as Record<string,unknown>|undefined;
+  const order = await queryOne<Record<string,unknown>>("SELECT * FROM workflow_orders WHERE id=?", req.params.id);
   if (!order) return void res.status(404).json({ error: "الطلب غير موجود" });
   if (order.stage === "delivered") return void res.status(400).json({ error: "لا يمكن إلغاء طلب مسلّم" });
-  db.prepare("UPDATE workflow_orders SET stage='cancelled', cancelled_at=datetime('now'), cancelled_by=?, cancel_reason=? WHERE id=?")
-    .run(cancelled_by||null, cancel_reason||null, req.params.id);
+  await execute("UPDATE workflow_orders SET stage='cancelled', cancelled_at=datetime('now'), cancelled_by=?, cancel_reason=? WHERE id=?",
+    cancelled_by||null, cancel_reason||null, req.params.id);
   // Notify customer
-  if (order.customer_phone) db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)").run(order.customer_phone, "تم إلغاء طلبك", `رقم الطلب: ${order.order_number}${cancel_reason ? " — السبب: " + cancel_reason : ""}`);
+  if (order.customer_phone) await execute("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+    order.customer_phone, "تم إلغاء طلبك", `رقم الطلب: ${order.order_number}${cancel_reason ? " — السبب: " + cancel_reason : ""}`);
   res.json({ message: "تم الإلغاء" });
 });
 

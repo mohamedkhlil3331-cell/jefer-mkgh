@@ -1,9 +1,9 @@
 import { ReplitConnectors } from "@replit/connectors-sdk";
-import db from "./db.js";
+import { queryOne } from "./erp-sql.js";
 
-function setting(key: string): string {
+async function setting(key: string): Promise<string> {
   try {
-    const row = db.prepare("SELECT value FROM system_config WHERE key=?").get(key) as { value?: string } | undefined;
+    const row = await queryOne<{ value?: string }>("SELECT value FROM system_config WHERE key=?", key);
     return row?.value?.trim() || "";
   } catch {
     return "";
@@ -27,7 +27,7 @@ export async function sendRentalOtpSms(to: string, otp: string, purpose: "rental
     sid = payload.accounts?.[0]?.sid || "";
     if (!sid) throw new Error("تعذر إرسال رمز التحقق عبر Twilio: لم يتم العثور على حساب إرسال صالح.");
   }
-  let from = setting("twilio_from_number") || process.env.TWILIO_FROM_NUMBER?.trim() || "";
+  let from = await setting("twilio_from_number") || process.env.TWILIO_FROM_NUMBER?.trim() || "";
   if (!from) {
     const numbersResponse = await connector.proxy(
       "twilio",

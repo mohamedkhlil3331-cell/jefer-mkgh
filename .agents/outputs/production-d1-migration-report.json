@@ -1,12 +1,12 @@
 {
   "status": "completed",
-  "migratedAt": "2026-10-13T13:36:55.147Z",
+  "migratedAt": "2026-10-15T23:34:39.633Z",
   "source": {
     "objectKey": "db-backups/erp.db",
-    "etag": "\"544d77aaabd591a3dfb08dd17c40bd60\"",
-    "lastModified": "2026-10-13T13:31:42.000Z",
-    "sizeBytes": 63340544,
-    "sha256": "4a5a27a96f0c595b07eb3f7598d744f8d431c5a0ce9093e452cdfa81f8a95028"
+    "etag": "\"ff9b1be1baee95a0075d59b9f46e1dc5\"",
+    "lastModified": "2026-10-15T23:28:53.000Z",
+    "sizeBytes": 65761280,
+    "sha256": "bd02e50e4cbcbcca976378feeafd6775284be0445c0d3fabb024ceee270e97f3"
   },
   "migrationBaselineSource": {
     "objectKey": "db-backups/erp.db",
@@ -18,8 +18,8 @@
   },
   "sourceIntegrity": "ok",
   "tableCount": 139,
-  "totalSourceRows": 510711,
-  "totalD1SourceRows": 510711,
+  "totalSourceRows": 532019,
+  "totalD1SourceRows": 532101,
   "tableCounts": [
     {
       "table": "ai_messages",
@@ -65,8 +65,8 @@
     },
     {
       "table": "chat_push_queue",
-      "source": 278,
-      "d1": 278,
+      "source": 507,
+      "d1": 581,
       "exactValueReadback": true
     },
     {
@@ -107,8 +107,8 @@
     },
     {
       "table": "dev_audit_log",
-      "source": 497526,
-      "d1": 497526,
+      "source": 518191,
+      "d1": 518191,
       "exactValueReadback": true
     },
     {
@@ -131,8 +131,8 @@
     },
     {
       "table": "driver_expenses",
-      "source": 404,
-      "d1": 404,
+      "source": 414,
+      "d1": 414,
       "exactValueReadback": true
     },
     {
@@ -245,8 +245,8 @@
     },
     {
       "table": "maintenance_logs",
-      "source": 356,
-      "d1": 356,
+      "source": 363,
+      "d1": 363,
       "exactValueReadback": true
     },
     {
@@ -281,8 +281,8 @@
     },
     {
       "table": "notifications",
-      "source": 2645,
-      "d1": 2645,
+      "source": 2948,
+      "d1": 2948,
       "exactValueReadback": true
     },
     {
@@ -401,8 +401,8 @@
     },
     {
       "table": "routing_dispatches",
-      "source": 124,
-      "d1": 124,
+      "source": 134,
+      "d1": 134,
       "exactValueReadback": true
     },
     {
@@ -449,8 +449,8 @@
     },
     {
       "table": "statement_signatures",
-      "source": 13,
-      "d1": 13,
+      "source": 14,
+      "d1": 14,
       "exactValueReadback": true
     },
     {
@@ -467,14 +467,14 @@
     },
     {
       "table": "suppliers",
-      "source": 71,
-      "d1": 71,
+      "source": 72,
+      "d1": 72,
       "exactValueReadback": true
     },
     {
       "table": "supply_request_trips",
-      "source": 111,
-      "d1": 111,
+      "source": 121,
+      "d1": 121,
       "exactValueReadback": true
     },
     {
@@ -533,8 +533,8 @@
     },
     {
       "table": "trips",
-      "source": 944,
-      "d1": 944,
+      "source": 974,
+      "d1": 974,
       "exactValueReadback": true
     },
     {
@@ -623,8 +623,8 @@
     },
     {
       "table": "workshop_inventory_transactions",
-      "source": 1033,
-      "d1": 1033,
+      "source": 1068,
+      "d1": 1072,
       "exactValueReadback": true
     },
     {
@@ -677,8 +677,8 @@
     },
     {
       "table": "purchase_invoices",
-      "source": 454,
-      "d1": 454,
+      "source": 455,
+      "d1": 455,
       "exactValueReadback": true
     },
     {
@@ -785,8 +785,8 @@
     },
     {
       "table": "supply_requests",
-      "source": 179,
-      "d1": 179,
+      "source": 189,
+      "d1": 189,
       "exactValueReadback": true
     },
     {
@@ -803,7 +803,7 @@
     },
     {
       "table": "warehouse_items",
-      "source": 74,
+      "source": 70,
       "d1": 74,
       "exactValueReadback": true
     },
@@ -856,6 +856,342 @@
       "exactValueReadback": true
     }
   ],
+  "preservedD1Extras": [
+    {
+      "table": "warehouse_items",
+      "rowId": "269"
+    },
+    {
+      "table": "warehouse_items",
+      "rowId": "270"
+    },
+    {
+      "table": "warehouse_items",
+      "rowId": "271"
+    },
+    {
+      "table": "warehouse_items",
+      "rowId": "272"
+    },
+    {
+      "table": "workshop_inventory_transactions",
+      "rowId": "3960"
+    },
+    {
+      "table": "workshop_inventory_transactions",
+      "rowId": "3961"
+    },
+    {
+      "table": "workshop_inventory_transactions",
+      "rowId": "3962"
+    },
+    {
+      "table": "workshop_inventory_transactions",
+      "rowId": "3963"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "142"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "143"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "144"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "145"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "146"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "147"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "148"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "149"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "150"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "151"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "152"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "153"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "154"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "155"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "156"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "157"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "158"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "159"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "160"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "161"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "162"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "163"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "164"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "165"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "166"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "167"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "168"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "169"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "170"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "171"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "172"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "173"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "174"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "175"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "176"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "177"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "178"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "179"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "180"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "181"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "182"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "183"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "184"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "185"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "186"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "187"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "188"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "189"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "190"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "191"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "192"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "193"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "194"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "195"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "196"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "197"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "198"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "199"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "200"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "201"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "202"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "203"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "204"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "205"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "206"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "207"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "208"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "209"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "210"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "211"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "212"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "213"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "214"
+    },
+    {
+      "table": "chat_push_queue",
+      "rowId": "215"
+    }
+  ],
+  "dynamicallyPreservedD1Tables": [
+    "chat_push_queue"
+  ],
+  "replacedD1TablesFromSource": [
+    "sessions"
+  ],
   "foreignKeyViolationCount": 10,
   "foreignKeyViolations": [
     {
@@ -894,94 +1230,9 @@
     }
   ],
   "reconciliation": {
-    "changedCells": 12,
+    "changedCells": 0,
     "auditTable": "d1_migration_reconciliation_log",
-    "entries": [
-      {
-        "table": "products",
-        "rowid": "54",
-        "column": "stock",
-        "oldValueSha256": "c876821b30cf2ae828d56c8c5d1e7b7b8b2449299557b79ccc7e772850446721",
-        "newValueSha256": "36bd36f9488b27ba38690ad0e7a523c46c970af573fa4e8e628c8db7b7112ca4"
-      },
-      {
-        "table": "supply_request_trips",
-        "rowid": "167",
-        "column": "attachments_json",
-        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
-        "newValueSha256": "836083f3950f2dbb14acec9f42274e3b7ee3001027f78d9459dbc5793ee39018"
-      },
-      {
-        "table": "supply_request_trips",
-        "rowid": "167",
-        "column": "delivered_at",
-        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
-        "newValueSha256": "34ddad5320de1c3c765ddc6a00a6661e44573782ebcf62956ee84c4ee9439d47"
-      },
-      {
-        "table": "supply_request_trips",
-        "rowid": "167",
-        "column": "driver_loading_image",
-        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
-        "newValueSha256": "58727ce22e0607e371e6db4992d5ed8615d941607c1ae4f0e117c54dfe89f30d"
-      },
-      {
-        "table": "supply_request_trips",
-        "rowid": "167",
-        "column": "loaded_at",
-        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
-        "newValueSha256": "7b63dd7856e70a05ea73918517482ac3edec85aa3ff56d53081cda7a319ac385"
-      },
-      {
-        "table": "supply_request_trips",
-        "rowid": "167",
-        "column": "status",
-        "oldValueSha256": "68ae73c709b3fd2c29b3a71337c5f8d95041c478b0aae6fab2ee6fdd6094aac7",
-        "newValueSha256": "ddaaf029c115461cbef98583f7b7e928ff2e8339f37cc201dd9338adecd055b1"
-      },
-      {
-        "table": "supply_request_trips",
-        "rowid": "167",
-        "column": "updated_at",
-        "oldValueSha256": "d0ed39b3dec937c8c96195aee6115806e6b61927bd3ae4b332c27efb35a87ac6",
-        "newValueSha256": "34ddad5320de1c3c765ddc6a00a6661e44573782ebcf62956ee84c4ee9439d47"
-      },
-      {
-        "table": "trips",
-        "rowid": "25672",
-        "column": "image_url",
-        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
-        "newValueSha256": "58727ce22e0607e371e6db4992d5ed8615d941607c1ae4f0e117c54dfe89f30d"
-      },
-      {
-        "table": "trips",
-        "rowid": "25672",
-        "column": "notes",
-        "oldValueSha256": "79f592624c2d6f79f923b92dbf2b5762ae8d3367c32303669a97cab903a40663",
-        "newValueSha256": "1c83f476d490456b9a5ee140e5be24f990dfc951d22b7de5e9ec4d611f64b66d"
-      },
-      {
-        "table": "trips",
-        "rowid": "25672",
-        "column": "return_value_no_vat",
-        "oldValueSha256": "c876821b30cf2ae828d56c8c5d1e7b7b8b2449299557b79ccc7e772850446721",
-        "newValueSha256": "aecc9d0f6c3bda450a4dcbe9290686adac636e07ab88bf5d3bccbb38efc623d3"
-      },
-      {
-        "table": "warehouse_items",
-        "rowid": "102",
-        "column": "last_updated",
-        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
-        "newValueSha256": "34ddad5320de1c3c765ddc6a00a6661e44573782ebcf62956ee84c4ee9439d47"
-      },
-      {
-        "table": "warehouse_items",
-        "rowid": "102",
-        "column": "quantity",
-        "oldValueSha256": "c876821b30cf2ae828d56c8c5d1e7b7b8b2449299557b79ccc7e772850446721",
-        "newValueSha256": "6bb887f4e7ef9f6353b1264c0be32c8cc50c114b5efc035cdad29f244b6c1e6e"
-      }
-    ]
+    "entries": []
   },
   "schema": {
     "copiedTables": 139,
@@ -1016,7 +1267,7 @@
       "reconstructionVerified": true
     }
   ],
-  "exactRowsReadBack": 510711,
+  "exactRowsReadBack": 532019,
   "d1IntegrityCheck": "ok",
   "developmentDatabaseChanged": false,
   "publishedApplicationCutOverToD1": false,

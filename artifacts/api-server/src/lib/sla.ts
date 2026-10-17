@@ -9,7 +9,7 @@
  *   vehicle_assigned   → vehicle_assign_date
  *   invoiced           → invoice_date
  */
-import db from "./db.js";
+import { queryAll } from "./erp-sql.js";
 
 export type SlaStatusLevel = "ok" | "warning" | "breached";
 
@@ -45,9 +45,9 @@ let _cachedSettings: Map<string, number> | null = null;
 let _cacheTs = 0;
 
 /** Returns a map of stage → limit_minutes, cached for 60 s */
-export function getSlaSettings(): Map<string, number> {
+export async function getSlaSettings(): Promise<Map<string, number>> {
   if (_cachedSettings && Date.now() - _cacheTs < 60_000) return _cachedSettings;
-  const rows = db.prepare("SELECT stage, limit_minutes FROM sla_settings").all() as SlaRow[];
+  const rows = await queryAll<SlaRow>("SELECT stage, limit_minutes FROM sla_settings");
   const m = new Map<string, number>(rows.map(r => [r.stage, r.limit_minutes]));
   _cachedSettings = m;
   _cacheTs = Date.now();
@@ -76,7 +76,7 @@ export function getSlaStatus(
   const tsVal = order[tsCol] as string | undefined;
   if (!tsVal) return null;
 
-  const settings = settingsOverride ?? getSlaSettings();
+  const settings = settingsOverride ?? _cachedSettings ?? new Map<string, number>();
   const limit = settings.get(stage);
   if (!limit) return null;
 

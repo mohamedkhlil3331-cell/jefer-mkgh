@@ -72,3 +72,7 @@ defaultBucketID = "replit-objstore-e24f7dc6-17ef-498a-a1a0-196a18e01da2"
 [userenv.shared]
 CLOUDFLARE_R2_BUCKET_NAME = "jefer"
 CLOUDFLARE_R2_ACCOUNT_ID = "7ec23c43e87f05d2f7b789b9981a206f"
+
+[userenv.development]
+ERP_D1_REPLICA_DATABASE_ID = "4e4532e2-07cd-4aff-ae3f-1e3d4015bda1"
+ERP_D1_PRIMARY_DATABASE_ID = "ab7499bc-3c49-433e-aa51-147060396274"

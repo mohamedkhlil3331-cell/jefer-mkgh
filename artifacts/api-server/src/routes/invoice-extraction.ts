@@ -1,6 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from "express";
 import { Readable } from "stream";
-import db from "../lib/db.js";
+import { execute, executeBatch, queryAll, queryOne } from "../lib/erp-sql.js";
 import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage.js";
 import { isSysAdminToken } from "./auth.js";
 
@@ -13,18 +13,18 @@ const MAX_IMAGES = 6;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024;
 
-function requireTripLogAccess(req: Request, res: Response, next: NextFunction) {
+async function requireTripLogAccess(req: Request, res: Response, next: NextFunction) {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
   if (!token || token === "guest") return void res.status(401).json({ error: "يجب تسجيل الدخول" });
-  if (isSysAdminToken(token)) return next();
+  if (await isSysAdminToken(token)) return next();
 
-  const user = db.prepare(`
+  const user = await queryOne<{ role: string; permissions: string | null }>(`
     SELECT u.role, u.permissions
     FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token=? AND datetime(s.expires_at)>datetime('now') AND u.active=1
       AND s.rowid=(SELECT MAX(current.rowid) FROM sessions current WHERE current.user_id=s.user_id)
     LIMIT 1
-  `).get(token) as { role: string; permissions: string | null } | undefined;
+  `, token);
   if (!user) return void res.status(401).json({ error: "الجلسة منتهية" });
   if (ALLOWED_ROLES.has(user.role)) {
     next();
@@ -56,17 +56,20 @@ function requireTripLogAccess(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-router.get("/trips/:id/invoice-images", requireTripLogAccess, (req, res) => {
-  const trip = db.prepare("SELECT id, client_request_id FROM trips WHERE id=?").get(req.params.id) as
-    { id: number; client_request_id: string | null } | undefined;
+router.get("/trips/:id/invoice-images", requireTripLogAccess, async (req, res) => {
+  const trip = await queryOne<{ id: number; client_request_id: string | null }>(
+    "SELECT id, client_request_id FROM trips WHERE id=?", req.params.id,
+  );
   if (!trip) return void res.status(404).json({ error: "الرحلة غير موجودة" });
-  const invoiceImages = db.prepare("SELECT * FROM trip_invoice_images WHERE trip_id=? ORDER BY id DESC").all(trip.id) as
-    Array<Record<string, unknown>>;
+  const invoiceImages = await queryAll<Record<string, unknown>>(
+    "SELECT * FROM trip_invoice_images WHERE trip_id=? ORDER BY id DESC", trip.id,
+  );
   const match = String(trip.client_request_id || "").match(/^routing-trip:(\d+)$/);
   const routedAttachments = match
-    ? (() => {
-      const child = db.prepare("SELECT attachments_json FROM supply_request_trips WHERE id=?")
-        .get(Number(match[1])) as { attachments_json: string | null } | undefined;
+    ? await (async () => {
+      const child = await queryOne<{ attachments_json: string | null }>(
+        "SELECT attachments_json FROM supply_request_trips WHERE id=?", Number(match[1]),
+      );
       if (!child?.attachments_json) return [];
       try {
         const parsed = JSON.parse(child.attachments_json);
@@ -85,14 +88,14 @@ router.get("/trips/:id/invoice-images", requireTripLogAccess, (req, res) => {
   res.json([...invoiceImages, ...routedAttachments]);
 });
 
-router.use((req, res, next) => {
+router.use(async (req, res, next) => {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
   if (!token || token === "guest") return void res.status(401).json({ error: "يجب تسجيل الدخول" });
-  if (isSysAdminToken(token)) return next();
-  const user = db.prepare(`
+  if (await isSysAdminToken(token)) return next();
+  const user = await queryOne<{ role: string }>(`
     SELECT u.role FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token=? AND datetime(s.expires_at)>datetime('now') AND u.active=1 LIMIT 1
-  `).get(token) as { role: string } | undefined;
+  `, token);
   if (!user) return void res.status(401).json({ error: "الجلسة منتهية" });
   if (!ALLOWED_ROLES.has(user.role)) return void res.status(403).json({ error: "صلاحيات إدارة الرحلات مطلوبة" });
   next();
@@ -212,21 +215,26 @@ function parseJsonResponse(raw: string): ExtractedInvoice {
   };
 }
 
-function resolveTariff(result: ExtractedInvoice, templateId?: number) {
+async function resolveTariff(result: ExtractedInvoice, templateId?: number) {
   const template = templateId
-    ? db.prepare("SELECT tariff_id FROM invoice_templates WHERE id=? AND active=1").get(templateId) as { tariff_id: number | null } | undefined
+    ? await queryOne<{ tariff_id: number | null }>(
+      "SELECT tariff_id FROM invoice_templates WHERE id=? AND active=1", templateId,
+    )
     : undefined;
   if (template?.tariff_id) {
-    const tariff = db.prepare("SELECT id, loading_place, unloading_place, driver_expense, rental, vehicle_type, cargo_type, supplier, customer_name FROM tariffs WHERE id=?").get(template.tariff_id);
+    const tariff = await queryOne(
+      "SELECT id, loading_place, unloading_place, driver_expense, rental, vehicle_type, cargo_type, supplier, customer_name FROM tariffs WHERE id=?",
+      template.tariff_id,
+    );
     if (tariff) return { tariff, score: 100, matched_by: "نموذج الفاتورة" };
   }
 
-  const rows = db.prepare(`
+  const rows = await queryAll<Record<string, unknown>>(`
     SELECT id, loading_place, unloading_place, driver_expense, rental, vehicle_type,
            cargo_type, supplier, customer_name
     FROM tariffs
     WHERE status='approved' OR status IS NULL
-  `).all() as Array<Record<string, unknown>>;
+  `);
   const loading = normalizeText(result.loading_place);
   const unloading = normalizeText(result.unloading_place);
   const supplier = normalizeText(result.supplier);
@@ -251,11 +259,15 @@ function resolveTariff(result: ExtractedInvoice, templateId?: number) {
   return { ...best, matched_by: matchedBy };
 }
 
-function resolveTemplate(result: ExtractedInvoice, requestedTemplateId?: number) {
+async function resolveTemplate(result: ExtractedInvoice, requestedTemplateId?: number) {
   if (requestedTemplateId) {
-    return db.prepare("SELECT * FROM invoice_templates WHERE id=? AND active=1").get(requestedTemplateId) as Record<string, unknown> | undefined;
+    return queryOne<Record<string, unknown>>(
+      "SELECT * FROM invoice_templates WHERE id=? AND active=1", requestedTemplateId,
+    );
   }
-  const templates = db.prepare("SELECT * FROM invoice_templates WHERE active=1 ORDER BY updated_at DESC").all() as Array<Record<string, unknown>>;
+  const templates = await queryAll<Record<string, unknown>>(
+    "SELECT * FROM invoice_templates WHERE active=1 ORDER BY updated_at DESC",
+  );
   const supplier = normalizeText(result.supplier);
   const cargo = normalizeText(result.material_type);
   let best: { row: Record<string, unknown>; score: number } | null = null;
@@ -298,23 +310,25 @@ type InvoiceExtractionPayload = {
 
 async function extractInvoiceForTrip(tripId: number, requestedTemplateId?: number): Promise<InvoiceExtractionPayload> {
   if (!AI_BASE_URL || !AI_API_KEY) throw new Error("خدمة قراءة الفواتير غير متاحة حالياً");
-  const trip = db.prepare("SELECT * FROM trips WHERE id=?").get(tripId) as Record<string, unknown> | undefined;
+  const trip = await queryOne<Record<string, unknown>>("SELECT * FROM trips WHERE id=?", tripId);
   if (!trip) throw new Error("الرحلة غير موجودة");
   const tripImagePath = cleanObjectPath(trip.image_url);
   if (!tripImagePath) throw new Error("لا توجد صورة حمولة محفوظة في هذه الرحلة");
 
   const requestedTemplate = requestedTemplateId
-    ? db.prepare("SELECT * FROM invoice_templates WHERE id=? AND active=1 AND tariff_id IS NOT NULL").get(requestedTemplateId) as Record<string, unknown> | undefined
+    ? await queryOne<Record<string, unknown>>(
+      "SELECT * FROM invoice_templates WHERE id=? AND active=1 AND tariff_id IS NOT NULL", requestedTemplateId,
+    )
     : undefined;
   const referenceTemplates = requestedTemplate
     ? [requestedTemplate]
-    : db.prepare(`
+    : await queryAll<Record<string, unknown>>(`
         SELECT it.*, t.loading_place, t.unloading_place
         FROM invoice_templates it
         JOIN tariffs t ON t.id=it.tariff_id
         WHERE it.active=1 AND it.tariff_id IS NOT NULL AND it.sample_images <> '[]'
         ORDER BY it.updated_at DESC LIMIT 12
-      `).all() as Array<Record<string, unknown>>;
+      `);
   let templateRules = "";
   if (requestedTemplate) {
     let rules: unknown = {};
@@ -384,9 +398,11 @@ field_confidence (كائن ثقة لكل حقل من 0 إلى 1)، notes.
     .map(Number)
     .find(id => Number.isFinite(id) && candidateTemplateIds.has(id));
   const matchedTemplate = candidateId
-    ? db.prepare("SELECT * FROM invoice_templates WHERE id=? AND active=1 AND tariff_id IS NOT NULL").get(candidateId) as Record<string, unknown> | undefined
+    ? await queryOne<Record<string, unknown>>(
+      "SELECT * FROM invoice_templates WHERE id=? AND active=1 AND tariff_id IS NOT NULL", candidateId,
+    )
     : undefined;
-  const tariffMatch = resolveTariff(extracted, matchedTemplate ? Number(matchedTemplate.id) : undefined);
+  const tariffMatch = await resolveTariff(extracted, matchedTemplate ? Number(matchedTemplate.id) : undefined);
   const tariff = tariffMatch?.tariff as Record<string, unknown> | undefined;
   const meterTon = (extracted.weight ?? extracted.quantity ?? Number(trip.meter_ton)) || 0;
   const unitPrice = tariff ? Number(tariff.rental) || 0 : Number(trip.unit_price) || 0;
@@ -441,9 +457,12 @@ const invoiceRestorableColumns = [
   "invoice_data_status", "invoice_data_run_id", "invoice_identity_status", "invoice_identity_updated_at",
 ] as const;
 
-function applyInvoiceExtraction(tripId: number, values: Record<string, unknown>, source: "auto" | "manual", runId?: number) {
-  const trip = db.prepare("SELECT * FROM trips WHERE id=?").get(tripId) as Record<string, unknown> | undefined;
-  if (!trip) throw new Error("الرحلة غير موجودة");
+function buildInvoiceExtractionUpdate(
+  trip: Record<string, unknown>,
+  values: Record<string, unknown>,
+  source: "auto" | "manual",
+  runId?: number,
+) {
   const updates: Record<string, unknown> = { trips_count: 1 };
   const allowed: Record<string, "text" | "number"> = {
     date: "text", material_type: "text", meter_ton: "number", payment_voucher: "text", loading_card_no: "text",
@@ -474,11 +493,7 @@ function applyInvoiceExtraction(tripId: number, values: Record<string, unknown>,
     updates.invoice_identity_status = "success";
     updates.invoice_identity_updated_at = new Date().toISOString();
   }
-  const columns = Object.keys(updates);
-  db.prepare(`UPDATE trips SET ${columns.map(column => `${column}=?`).join(", ")} WHERE id=?`)
-    .run(...columns.map(column => updates[column]), tripId);
-  const after = db.prepare("SELECT * FROM trips WHERE id=?").get(tripId);
-  return { before: trip, after, updated: columns };
+  return { updates, updated: Object.keys(updates) };
 }
 
 const invoiceIdentityQueue: number[] = [];
@@ -495,10 +510,10 @@ async function processInvoiceIdentityQueue() {
         const result = await extractInvoiceForTrip(tripId);
         const invoiceNumber = nullableString(result.extracted.invoice_number || result.extracted.permit_number);
         const invoiceDate = normalizeInvoiceDate(result.extracted.invoice_date);
-        const current = db.prepare("SELECT loading_card_no, date FROM trips WHERE id=?").get(tripId) as {
+        const current = await queryOne<{
           loading_card_no: string | null;
           date: string | null;
-        } | undefined;
+        }>("SELECT loading_card_no, date FROM trips WHERE id=?", tripId);
         if (!current) continue;
 
         const updates: Record<string, unknown> = {};
@@ -508,14 +523,14 @@ async function processInvoiceIdentityQueue() {
         updates.invoice_identity_updated_at = new Date().toISOString();
 
         const columns = Object.keys(updates);
-        db.prepare(`UPDATE trips SET ${columns.map(column => `${column}=?`).join(", ")} WHERE id=?`)
-          .run(...columns.map(column => updates[column]), tripId);
+        await execute(`UPDATE trips SET ${columns.map(column => `${column}=?`).join(", ")} WHERE id=?`,
+          ...columns.map(column => updates[column]), tripId);
       } catch {
-        db.prepare(`
+        await execute(`
           UPDATE trips
           SET invoice_identity_status='error', invoice_identity_updated_at=datetime('now')
           WHERE id=?
-        `).run(tripId);
+        `, tripId);
       } finally {
         queuedInvoiceIdentityTripIds.delete(tripId);
       }
@@ -525,52 +540,52 @@ async function processInvoiceIdentityQueue() {
   }
 }
 
-export function queueTripInvoiceIdentityExtraction(tripId: number, force = false): boolean {
+export async function queueTripInvoiceIdentityExtraction(tripId: number, force = false): Promise<boolean> {
   if (!Number.isFinite(tripId) || queuedInvoiceIdentityTripIds.has(tripId)) return false;
-  const trip = db.prepare(`
+  const trip = await queryOne<{ image_url: string | null; invoice_identity_status: string | null }>(`
     SELECT image_url, invoice_identity_status
     FROM trips
     WHERE id=?
-  `).get(tripId) as { image_url: string | null; invoice_identity_status: string | null } | undefined;
+  `, tripId);
   if (!trip || !cleanObjectPath(trip.image_url)) return false;
   if (!force && trip.invoice_identity_status) return false;
 
-  db.prepare(`
+  await execute(`
     UPDATE trips
     SET invoice_identity_status='pending', invoice_identity_updated_at=datetime('now')
     WHERE id=?
-  `).run(tripId);
+  `, tripId);
   queuedInvoiceIdentityTripIds.add(tripId);
   invoiceIdentityQueue.push(tripId);
   void processInvoiceIdentityQueue();
   return true;
 }
 
-router.get("/invoice-templates", (req, res) => {
+router.get("/invoice-templates", async (req, res) => {
   const includeInactive = req.query.include_inactive === "1";
-  const rows = db.prepare(`
+  const rows = await queryAll<Record<string, unknown>>(`
     SELECT it.*, t.loading_place, t.unloading_place, t.driver_expense, t.rental
     FROM invoice_templates it
     LEFT JOIN tariffs t ON t.id=it.tariff_id
     ${includeInactive ? "" : "WHERE it.active=1"}
     ORDER BY it.active DESC, it.updated_at DESC, it.id DESC
-  `).all() as Array<Record<string, unknown>>;
+  `);
   res.json(rows.map(templateRow));
 });
 
-router.post("/invoice-templates", (req, res) => {
+router.post("/invoice-templates", async (req, res) => {
   const body = req.body as TemplateBody;
   if (!body.name?.trim()) return void res.status(400).json({ error: "اسم النموذج مطلوب" });
-  if (!body.tariff_id || !db.prepare("SELECT id FROM tariffs WHERE id=?").get(body.tariff_id)) {
+  if (!body.tariff_id || !await queryOne("SELECT id FROM tariffs WHERE id=?", body.tariff_id)) {
     return void res.status(400).json({ error: "يجب ربط تعليم الصورة بتعريفة موجودة" });
   }
   const rules = JSON.stringify(body.rules && typeof body.rules === "object" ? body.rules : {});
   const sampleImages = JSON.stringify(Array.isArray(body.sample_images) ? body.sample_images.slice(0, 12).map(cleanObjectPath) : []);
-  const result = db.prepare(`
+  const result = await execute(`
     INSERT INTO invoice_templates
       (name, description, supplier, cargo_type, marker_text, rules_json, tariff_id, sample_images, active, updated_at)
     VALUES (?,?,?,?,?,?,?,?,1,datetime('now'))
-  `).run(
+  `,
     body.name.trim(), nullableString(body.description), nullableString(body.supplier),
     nullableString(body.cargo_type), nullableString(body.marker_text), rules,
     body.tariff_id || null, sampleImages,
@@ -578,19 +593,21 @@ router.post("/invoice-templates", (req, res) => {
   res.status(201).json({ id: result.lastInsertRowid });
 });
 
-router.put("/invoice-templates/:id", (req, res) => {
+router.put("/invoice-templates/:id", async (req, res) => {
   const body = req.body as TemplateBody;
   if (!body.name?.trim()) return void res.status(400).json({ error: "اسم النموذج مطلوب" });
-  const existing = db.prepare("SELECT id, tariff_id FROM invoice_templates WHERE id=?").get(req.params.id) as { id: number; tariff_id: number | null } | undefined;
+  const existing = await queryOne<{ id: number; tariff_id: number | null }>(
+    "SELECT id, tariff_id FROM invoice_templates WHERE id=?", req.params.id,
+  );
   if (!existing) return void res.status(404).json({ error: "النموذج غير موجود" });
   if (!existing.tariff_id) return void res.status(400).json({ error: "هذا نموذج قديم غير مرتبط بتعريفة" });
   const rules = JSON.stringify(body.rules && typeof body.rules === "object" ? body.rules : {});
   const sampleImages = JSON.stringify(Array.isArray(body.sample_images) ? body.sample_images.slice(0, 12).map(cleanObjectPath) : []);
-  db.prepare(`
+  await execute(`
     UPDATE invoice_templates SET name=?, description=?, supplier=?, cargo_type=?, marker_text=?,
       rules_json=?, tariff_id=?, sample_images=?, active=?, updated_at=datetime('now')
     WHERE id=?
-  `).run(
+  `,
     body.name.trim(), nullableString(body.description), nullableString(body.supplier),
     nullableString(body.cargo_type), nullableString(body.marker_text), rules,
     existing.tariff_id, sampleImages, body.active === false || body.active === 0 ? 0 : 1,
@@ -599,14 +616,14 @@ router.put("/invoice-templates/:id", (req, res) => {
   res.json({ message: "تم تحديث نموذج الفاتورة" });
 });
 
-router.post("/invoice-templates/:id/duplicate", (req, res) => {
-  const source = db.prepare("SELECT * FROM invoice_templates WHERE id=?").get(req.params.id) as Record<string, unknown> | undefined;
+router.post("/invoice-templates/:id/duplicate", async (req, res) => {
+  const source = await queryOne<Record<string, unknown>>("SELECT * FROM invoice_templates WHERE id=?", req.params.id);
   if (!source) return void res.status(404).json({ error: "النموذج غير موجود" });
-  const result = db.prepare(`
+  const result = await execute(`
     INSERT INTO invoice_templates
       (name, description, supplier, cargo_type, marker_text, rules_json, tariff_id, sample_images, active, updated_at)
     VALUES (?,?,?,?,?,?,?,?,1,datetime('now'))
-  `).run(
+  `,
     `${source.name} — نسخة`, source.description || null, source.supplier || null,
     source.cargo_type || null, source.marker_text || null, source.rules_json || "{}",
     source.tariff_id || null, source.sample_images || "[]",
@@ -614,34 +631,33 @@ router.post("/invoice-templates/:id/duplicate", (req, res) => {
   res.status(201).json({ id: result.lastInsertRowid });
 });
 
-router.post("/trips/:id/invoice-images", (req, res) => {
-  const trip = db.prepare("SELECT id FROM trips WHERE id=?").get(req.params.id);
+router.post("/trips/:id/invoice-images", async (req, res) => {
+  const trip = await queryOne("SELECT id FROM trips WHERE id=?", req.params.id);
   if (!trip) return void res.status(404).json({ error: "الرحلة غير موجودة" });
   const images = Array.isArray(req.body?.images) ? req.body.images : [];
   if (!images.length || images.length > 12) return void res.status(400).json({ error: "أرفق من 1 إلى 12 صورة فاتورة" });
-  const insert = db.prepare(`
-    INSERT INTO trip_invoice_images (trip_id, object_path, file_name)
-    VALUES (?,?,?)
-  `);
   const inserted: number[] = [];
   for (const image of images) {
     const objectPath = cleanObjectPath(image?.object_path);
     if (!objectPath.startsWith("/objects/")) continue;
-    const result = insert.run(req.params.id, objectPath, nullableString(image?.file_name));
+    const result = await execute(`
+      INSERT INTO trip_invoice_images (trip_id, object_path, file_name)
+      VALUES (?,?,?)
+    `, req.params.id, objectPath, nullableString(image?.file_name));
     inserted.push(Number(result.lastInsertRowid));
   }
   if (!inserted.length) return void res.status(400).json({ error: "مسارات الصور غير صالحة" });
   res.status(201).json({ ids: inserted });
 });
 
-router.delete("/trips/:tripId/invoice-images/:imageId", (req, res) => {
-  db.prepare("DELETE FROM trip_invoice_images WHERE id=? AND trip_id=?").run(req.params.imageId, req.params.tripId);
+router.delete("/trips/:tripId/invoice-images/:imageId", async (req, res) => {
+  await execute("DELETE FROM trip_invoice_images WHERE id=? AND trip_id=?", req.params.imageId, req.params.tripId);
   res.json({ message: "تم حذف مصدر الفاتورة" });
 });
 
 router.post("/trips/:id/extract-invoice-data", async (req, res) => {
   if (!AI_BASE_URL || !AI_API_KEY) return void res.status(503).json({ error: "خدمة قراءة الفواتير غير متاحة حالياً" });
-  const trip = db.prepare("SELECT * FROM trips WHERE id=?").get(req.params.id) as Record<string, unknown> | undefined;
+  const trip = await queryOne<Record<string, unknown>>("SELECT * FROM trips WHERE id=?", req.params.id);
   if (!trip) return void res.status(404).json({ error: "الرحلة غير موجودة" });
 
   const tripImagePath = cleanObjectPath(trip.image_url);
@@ -650,17 +666,19 @@ router.post("/trips/:id/extract-invoice-data", async (req, res) => {
   try {
     const requestedTemplateId = Number(req.body?.template_id) || undefined;
     const requestedTemplate = requestedTemplateId
-      ? db.prepare("SELECT * FROM invoice_templates WHERE id=? AND active=1").get(requestedTemplateId) as Record<string, unknown> | undefined
+      ? await queryOne<Record<string, unknown>>(
+        "SELECT * FROM invoice_templates WHERE id=? AND active=1", requestedTemplateId,
+      )
       : undefined;
     const referenceTemplates = requestedTemplate
       ? [requestedTemplate]
-      : db.prepare(`
+      : await queryAll<Record<string, unknown>>(`
           SELECT it.*, t.loading_place, t.unloading_place
           FROM invoice_templates it
           JOIN tariffs t ON t.id=it.tariff_id
           WHERE it.active=1 AND it.tariff_id IS NOT NULL AND it.sample_images <> '[]'
           ORDER BY it.updated_at DESC LIMIT 12
-        `).all() as Array<Record<string, unknown>>;
+        `);
     let templateRules = "";
     if (requestedTemplate) {
       let rules: unknown = {};
@@ -735,10 +753,12 @@ field_confidence (كائن ثقة لكل حقل من 0 إلى 1)، notes.
       .map(Number)
       .find(id => Number.isFinite(id) && candidateTemplateIds.has(id));
     const matchedTemplate = candidateId
-      ? db.prepare("SELECT * FROM invoice_templates WHERE id=? AND active=1 AND tariff_id IS NOT NULL").get(candidateId) as Record<string, unknown> | undefined
+      ? await queryOne<Record<string, unknown>>(
+        "SELECT * FROM invoice_templates WHERE id=? AND active=1 AND tariff_id IS NOT NULL", candidateId,
+      )
       : undefined;
     const templateId = matchedTemplate ? Number(matchedTemplate.id) : undefined;
-    const tariffMatch = resolveTariff(extracted, templateId);
+    const tariffMatch = await resolveTariff(extracted, templateId);
     const tariff = tariffMatch?.tariff as Record<string, unknown> | undefined;
 
     const preview = {
@@ -788,10 +808,10 @@ field_confidence (كائن ثقة لكل حقل من 0 إلى 1)، notes.
       signature_question: signatureQuestion,
       signature_needs_confirmation: signatureNeedsConfirmation,
     });
-    db.prepare(`
+    await execute(`
       INSERT INTO trip_invoice_extractions (trip_id, image_ids, template_id, result_json, confidence)
       VALUES (?,?,?,?,?)
-    `).run(req.params.id, "[]", templateId || null, rawResult, extracted.confidence);
+    `, req.params.id, "[]", templateId || null, rawResult, extracted.confidence);
     res.json({
       extracted,
       preview,
@@ -809,21 +829,21 @@ field_confidence (كائن ثقة لكل حقل من 0 إلى 1)، notes.
   }
 });
 
-router.get("/trips/bulk-invoice-extraction/last", (_req, res) => {
-  const run = db.prepare(`
+router.get("/trips/bulk-invoice-extraction/last", async (_req, res) => {
+  const run = await queryOne<Record<string, unknown>>(`
     SELECT r.*, COUNT(c.id) AS changed_count
     FROM trip_invoice_bulk_runs r
     LEFT JOIN trip_invoice_bulk_changes c ON c.run_id=r.id
     WHERE r.status='completed'
     GROUP BY r.id
     ORDER BY r.id DESC LIMIT 1
-  `).get() as Record<string, unknown> | undefined;
+  `);
   res.json(run || null);
 });
 
 router.post("/trips/bulk-invoice-extraction", async (req, res) => {
   if (!AI_BASE_URL || !AI_API_KEY) return void res.status(503).json({ error: "خدمة قراءة الفواتير غير متاحة حالياً" });
-  const candidates = db.prepare(`
+  const candidates = await queryAll<Record<string, unknown>>(`
     SELECT *
     FROM trips
     WHERE COALESCE(TRIM(image_url), '')<>''
@@ -832,8 +852,8 @@ router.post("/trips/bulk-invoice-extraction", async (req, res) => {
         OR COALESCE(TRIM(loading_region), '')=''
         OR COALESCE(TRIM(unloading_region), '')=''
       )
-  `).all() as Array<Record<string, unknown>>;
-  const run = db.prepare("INSERT INTO trip_invoice_bulk_runs (status) VALUES ('running')").run();
+  `);
+  const run = await execute("INSERT INTO trip_invoice_bulk_runs (status) VALUES ('running')");
   const runId = Number(run.lastInsertRowid);
   const results = { processed: 0, saved: 0, skipped: 0, no_image: 0, no_match: 0, errors: 0, run_id: runId };
 
@@ -841,7 +861,7 @@ router.post("/trips/bulk-invoice-extraction", async (req, res) => {
     for (const trip of candidates) {
       results.processed++;
       if (!cleanObjectPath(trip.image_url)) {
-        db.prepare("UPDATE trips SET invoice_data_source='system', invoice_data_status='skipped_no_image', invoice_data_run_id=NULL WHERE id=?").run(trip.id);
+        await execute("UPDATE trips SET invoice_data_source='system', invoice_data_status='skipped_no_image', invoice_data_run_id=NULL WHERE id=?", trip.id);
         results.skipped++;
         results.no_image++;
         continue;
@@ -853,86 +873,97 @@ router.post("/trips/bulk-invoice-extraction", async (req, res) => {
           extracted.extracted.recipient_signature_matches_template === true,
         );
         if (!confidentVisualMatch) {
-          db.prepare("UPDATE trips SET invoice_data_source='system', invoice_data_status='skipped_no_match', invoice_data_run_id=NULL WHERE id=?").run(trip.id);
+          await execute("UPDATE trips SET invoice_data_source='system', invoice_data_status='skipped_no_match', invoice_data_run_id=NULL WHERE id=?", trip.id);
           results.skipped++;
           results.no_match++;
           continue;
         }
-        const saved = db.transaction(() => {
-          const before = db.prepare("SELECT * FROM trips WHERE id=?").get(trip.id) as Record<string, unknown>;
-          const applied = applyInvoiceExtraction(Number(trip.id), extracted.preview, "auto", runId);
-          db.prepare(`
-            INSERT INTO trip_invoice_bulk_changes (run_id, trip_id, before_json, after_json)
-            VALUES (?,?,?,?)
-          `).run(runId, trip.id, JSON.stringify(before), JSON.stringify(applied.after));
-          return applied;
-        })();
-        if (saved) results.saved++;
+        const before = await queryOne<Record<string, unknown>>("SELECT * FROM trips WHERE id=?", trip.id);
+        if (!before) throw new Error("الرحلة غير موجودة");
+        const applied = buildInvoiceExtractionUpdate(before, extracted.preview, "auto", runId);
+        const after = { ...before, ...applied.updates };
+        await executeBatch([
+          {
+            sql: `UPDATE trips SET ${applied.updated.map(column => `${column}=?`).join(", ")} WHERE id=?`,
+            params: [...applied.updated.map(column => applied.updates[column]), trip.id],
+          },
+          {
+            sql: `INSERT INTO trip_invoice_bulk_changes (run_id, trip_id, before_json, after_json)
+                  VALUES (?,?,?,?)`,
+            params: [runId, trip.id, JSON.stringify(before), JSON.stringify(after)],
+          },
+        ]);
+        results.saved++;
       } catch {
-        db.prepare("UPDATE trips SET invoice_data_source='system', invoice_data_status='skipped_error', invoice_data_run_id=NULL WHERE id=?").run(trip.id);
+        await execute("UPDATE trips SET invoice_data_source='system', invoice_data_status='skipped_error', invoice_data_run_id=NULL WHERE id=?", trip.id);
         results.skipped++;
         results.errors++;
       }
     }
-    db.prepare("UPDATE trip_invoice_bulk_runs SET status='completed' WHERE id=?").run(runId);
+    await execute("UPDATE trip_invoice_bulk_runs SET status='completed' WHERE id=?", runId);
     res.json(results);
   } catch (error) {
-    db.prepare("UPDATE trip_invoice_bulk_runs SET status='failed' WHERE id=?").run(runId);
+    await execute("UPDATE trip_invoice_bulk_runs SET status='failed' WHERE id=?", runId);
     req.log.error({ err: error }, "bulk invoice extraction failed");
     res.status(500).json({ error: "فشل السحب الجماعي", run_id: runId });
   }
 });
 
-router.post("/trips/bulk-invoice-extraction/undo", (_req, res) => {
-  const run = db.prepare(`
+router.post("/trips/bulk-invoice-extraction/undo", async (_req, res) => {
+  const run = await queryOne<{ id: number }>(`
     SELECT * FROM trip_invoice_bulk_runs
     WHERE status='completed' AND EXISTS (
       SELECT 1 FROM trip_invoice_bulk_changes c WHERE c.run_id=trip_invoice_bulk_runs.id AND c.undone_at IS NULL
     )
     ORDER BY id DESC LIMIT 1
-  `).get() as { id: number } | undefined;
+  `);
   if (!run) return void res.status(404).json({ error: "لا توجد عملية سحب جماعي قابلة للتراجع" });
 
-  const changes = db.prepare(`
+  const changes = await queryAll<Record<string, unknown>>(`
     SELECT c.*, t.invoice_data_run_id, t.invoice_data_source, t.invoice_data_status
     FROM trip_invoice_bulk_changes c
     JOIN trips t ON t.id=c.trip_id
     WHERE c.run_id=? AND c.undone_at IS NULL
-  `).all(run.id) as Array<Record<string, unknown>>;
+  `, run.id);
   let restored = 0;
   let protectedCount = 0;
-  const restore = db.transaction(() => {
-    for (const change of changes) {
-      if (Number(change.invoice_data_run_id) !== run.id ||
-          change.invoice_data_source !== "auto" ||
-          change.invoice_data_status !== "auto_success") {
-        protectedCount++;
-        continue;
-      }
-      let before: Record<string, unknown>;
-      try { before = JSON.parse(String(change.before_json)); } catch { protectedCount++; continue; }
-      const values = invoiceRestorableColumns.map(column => before[column] ?? null);
-      db.prepare(`
-        UPDATE trips SET ${invoiceRestorableColumns.map(column => `${column}=?`).join(", ")} WHERE id=?
-      `).run(...values, change.trip_id);
-      db.prepare("UPDATE trip_invoice_bulk_changes SET undone_at=datetime('now') WHERE id=?").run(change.id);
-      restored++;
+  const statements: Array<{ sql: string; params: unknown[] }> = [];
+  for (const change of changes) {
+    if (Number(change.invoice_data_run_id) !== run.id ||
+        change.invoice_data_source !== "auto" ||
+        change.invoice_data_status !== "auto_success") {
+      protectedCount++;
+      continue;
     }
-    db.prepare("UPDATE trip_invoice_bulk_runs SET status=?, undone_at=datetime('now') WHERE id=?")
-      .run(protectedCount === 0 ? "undone" : "undone_partial", run.id);
+    let before: Record<string, unknown>;
+    try { before = JSON.parse(String(change.before_json)); } catch { protectedCount++; continue; }
+    const values = invoiceRestorableColumns.map(column => before[column] ?? null);
+    statements.push({
+      sql: `UPDATE trips SET ${invoiceRestorableColumns.map(column => `${column}=?`).join(", ")} WHERE id=?`,
+      params: [...values, change.trip_id],
+    });
+    statements.push({
+      sql: "UPDATE trip_invoice_bulk_changes SET undone_at=datetime('now') WHERE id=?",
+      params: [change.id],
+    });
+    restored++;
+  }
+  statements.push({
+    sql: "UPDATE trip_invoice_bulk_runs SET status=?, undone_at=datetime('now') WHERE id=?",
+    params: [protectedCount === 0 ? "undone" : "undone_partial", run.id],
   });
-  restore();
+  await executeBatch(statements);
   res.json({ message: "تم التراجع عن آخر سحب جماعي", restored, protected: protectedCount });
 });
 
-router.put("/trips/:id/invoice-extraction", (req, res) => {
-  const trip = db.prepare("SELECT * FROM trips WHERE id=?").get(req.params.id) as Record<string, unknown> | undefined;
+router.put("/trips/:id/invoice-extraction", async (req, res) => {
+  const trip = await queryOne<Record<string, unknown>>("SELECT * FROM trips WHERE id=?", req.params.id);
   if (!trip) return void res.status(404).json({ error: "الرحلة غير موجودة" });
   const body = req.body?.values as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object") return void res.status(400).json({ error: "بيانات المراجعة مطلوبة" });
-  const latest = db.prepare(`
+  const latest = await queryOne<{ result_json: string }>(`
     SELECT result_json FROM trip_invoice_extractions WHERE trip_id=? ORDER BY id DESC LIMIT 1
-  `).get(req.params.id) as { result_json: string } | undefined;
+  `, req.params.id);
   if (latest) {
     try {
       const result = JSON.parse(latest.result_json) as {
@@ -991,7 +1022,7 @@ router.put("/trips/:id/invoice-extraction", (req, res) => {
   const columns = Object.keys(updates);
   if (columns.length) {
     const sql = `UPDATE trips SET ${columns.map(column => `${column}=?`).join(", ")} WHERE id=?`;
-    db.prepare(sql).run(...columns.map(column => updates[column]), req.params.id);
+    await execute(sql, ...columns.map(column => updates[column]), req.params.id);
   }
   res.json({ message: columns.length ? "تم استكمال بيانات الرحلة" : "لا توجد حقول ناقصة للحفظ", updated: columns, skipped });
 });

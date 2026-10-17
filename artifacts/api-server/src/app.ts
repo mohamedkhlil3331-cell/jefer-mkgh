@@ -7,12 +7,21 @@ import path from "path";
 import { fileURLToPath } from "url";
 import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
-import db, { UPLOADS_PATH } from "./lib/db.js";
-import { isBackupWriterFenced, isFilesystemStorageMode, makeStorage } from "./lib/db-sync.js";
+import { execute, queryOne } from "./lib/erp-sql.js";
+import {
+  getAppDataDir,
+  isBackupWriterFenced,
+  isFilesystemDatabaseMode,
+  isFilesystemStorageMode,
+  makeStorage,
+} from "./lib/db-sync.js";
 import { mutationSessionGuard } from "./middlewares/mutation-session-guard.js";
-import { getR2Object, isR2Configured } from "./lib/r2-storage.js";
+import { getR2Object, isR2ObjectStorageBackend } from "./lib/r2-storage.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const UPLOADS_PATH = isFilesystemStorageMode() || isFilesystemDatabaseMode()
+  ? path.join(getAppDataDir(), "uploads")
+  : path.join(__dirname, "..", "uploads");
 
 const app: Express = express();
 
@@ -56,24 +65,26 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   if (p.startsWith("/uploads") || p.startsWith("/public")) return next();
 
   res.on("finish", () => {
-    try {
+    void (async () => {
       let userId: number | null = null, userName: string | null = null, userRole: string | null = null;
       const auth = req.headers.authorization;
       if (auth?.startsWith("Bearer ")) {
         const tok = auth.slice(7);
         // No expiry check here — we just want to know who made the call
-        const row = db.prepare(
-          "SELECT u.id, u.name, u.role FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=?"
-        ).get(tok) as { id: number; name: string; role: string } | undefined;
+        const row = await queryOne<{ id: number; name: string; role: string }>(
+          "SELECT u.id, u.name, u.role FROM sessions s JOIN users u ON s.user_id=u.id WHERE s.token=?",
+          tok,
+        );
         if (row) { userId = row.id; userName = row.name; userRole = row.role; }
       }
       const ip = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0].trim()
         ?? req.socket?.remoteAddress
         ?? null;
-      db.prepare(
-        "INSERT INTO dev_audit_log (method, path, user_id, user_name, user_role, ip_address, status_code) VALUES (?,?,?,?,?,?,?)"
-      ).run(req.method, p.split("?")[0], userId, userName, userRole, ip, res.statusCode);
-    } catch { /* non-blocking */ }
+      await execute(
+        "INSERT INTO dev_audit_log (method, path, user_id, user_name, user_role, ip_address, status_code) VALUES (?,?,?,?,?,?,?)",
+        req.method, p.split("?")[0], userId, userName, userRole, ip, res.statusCode,
+      );
+    })().catch(() => { /* non-blocking */ });
   });
   next();
 });
@@ -85,7 +96,7 @@ app.use("/api/uploads", express.static(UPLOADS_PATH));
 app.get("/api/uploads/:file", async (req, res, next) => {
   const name = req.params.file;
   if (typeof name !== "string" || !/^[A-Za-z0-9._-]+$/.test(name)) return next();
-  if (isR2Configured) {
+  if (isR2ObjectStorageBackend()) {
     try {
       const object = await getR2Object(`app-uploads/${name}`);
       if (object?.Body) {

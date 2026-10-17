@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
 const router = Router();
@@ -14,22 +14,22 @@ function genOrderNumber() {
 }
 
 // ── Convert workflow order (fsohat_pending) to factory order ─────────────────
-router.post("/factory-orders/from-workflow/:workflow_order_id", (req, res) => {
+router.post("/factory-orders/from-workflow/:workflow_order_id", async (req, res) => {
   const workflowId = Number(req.params.workflow_order_id);
-  const wo = db.prepare("SELECT * FROM workflow_orders WHERE id=?").get(workflowId) as Record<string, unknown> | undefined;
+  const wo = await queryOne<Record<string, unknown>>("SELECT * FROM workflow_orders WHERE id=?", workflowId);
   if (!wo) return void res.status(404).json({ error: "الطلب غير موجود" });
   if (wo.stage !== "fsohat_pending") return void res.status(400).json({ error: "الطلب ليس في مرحلة انتظار الفسحة" });
 
   // Check if already converted
-  const existing = db.prepare("SELECT id FROM factory_orders WHERE workflow_order_id=?").get(workflowId) as { id: number } | undefined;
+  const existing = await queryOne<{ id: number }>("SELECT id FROM factory_orders WHERE workflow_order_id=?", workflowId);
   if (existing) return void res.status(400).json({ error: "تم إنشاء طلبية مصنع لهذا الطلب مسبقاً" });
 
   const orderNumber = genOrderNumber();
-  const r = db.prepare(`
+  const r = await execute(`
     INSERT INTO factory_orders
       (order_number, product_name, quantity, unit, delivery_site, notes, workflow_order_id, created_by_phone)
     VALUES (?,?,?,?,?,?,?,?)
-  `).run(
+  `,
     orderNumber,
     wo.product_name as string,
     (wo.quantity as number) || 0,
@@ -41,50 +41,48 @@ router.post("/factory-orders/from-workflow/:workflow_order_id", (req, res) => {
   );
 
   // Update workflow order stage to fsohat_processing
-  db.prepare("UPDATE workflow_orders SET stage='fsohat_processing' WHERE id=?").run(workflowId);
+  await execute("UPDATE workflow_orders SET stage='fsohat_processing' WHERE id=?", workflowId);
 
   res.status(201).json({ id: r.lastInsertRowid, order_number: orderNumber });
 });
 
 // ── GET all (fsohat / admin) ──────────────────────────────────────────────────
-router.get("/factory-orders", (req, res) => {
+router.get("/factory-orders", async (req, res) => {
   const { status, vehicle_plate } = req.query as Record<string, string>;
   let sql = "SELECT * FROM factory_orders WHERE 1=1";
   const params: unknown[] = [];
   if (status)        { sql += " AND status=?";        params.push(status); }
   if (vehicle_plate) { sql += " AND vehicle_plate=?"; params.push(vehicle_plate); }
   sql += " ORDER BY created_at DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
 // ── GET: driver — orders for my vehicle ──────────────────────────────────────
-router.get("/factory-orders/driver", (req, res) => {
+router.get("/factory-orders/driver", async (req, res) => {
   const { plate, phone } = req.query as Record<string, string>;
 
   let vehiclePlate = plate || null;
 
   if (!vehiclePlate && phone) {
-    const u = db.prepare("SELECT vehicle_plate, name FROM users WHERE phone=? LIMIT 1")
-      .get(phone) as Record<string, string> | undefined;
+    const u = await queryOne<Record<string, string>>("SELECT vehicle_plate, name FROM users WHERE phone=? LIMIT 1", phone);
     vehiclePlate = u?.vehicle_plate || null;
 
     if (!vehiclePlate && u?.name) {
-      const fv = db.prepare("SELECT plate_number FROM fleet_vehicles WHERE driver_name=? LIMIT 1")
-        .get(u.name) as Record<string, string> | undefined;
+      const fv = await queryOne<Record<string, string>>("SELECT plate_number FROM fleet_vehicles WHERE driver_name=? LIMIT 1", u.name);
       vehiclePlate = fv?.plate_number || null;
     }
   }
 
   if (!vehiclePlate) return void res.json([]);
 
-  const rows = db.prepare(
+  const rows = await queryAll(
     "SELECT * FROM factory_orders WHERE vehicle_plate=? AND status IN ('permit_issued','loaded','delivered') ORDER BY created_at DESC"
-  ).all(vehiclePlate);
+  , vehiclePlate);
   res.json(rows);
 });
 
 // ── POST: create ──────────────────────────────────────────────────────────────
-router.post("/factory-orders", (req, res) => {
+router.post("/factory-orders", async (req, res) => {
   const {
     vehicle_plate, driver_name, driver_phone,
     product_name, quantity, unit,
@@ -94,12 +92,12 @@ router.post("/factory-orders", (req, res) => {
   if (!product_name) return void res.status(400).json({ error: "اسم المنتج مطلوب" });
 
   const order_number = genOrderNumber();
-  const r = db.prepare(`
+  const r = await execute(`
     INSERT INTO factory_orders
       (order_number, vehicle_plate, driver_name, driver_phone,
        product_name, quantity, unit, delivery_site, notes, created_by_phone)
     VALUES (?,?,?,?,?,?,?,?,?,?)
-  `).run(
+  `,
     order_number,
     vehicle_plate  || null,
     driver_name    || null,
@@ -116,14 +114,14 @@ router.post("/factory-orders", (req, res) => {
 });
 
 // ── PUT: upload factory permit (فسحة) ────────────────────────────────────────
-router.put("/factory-orders/:id/permit", upload.single("permit_doc"), (req, res) => {
-  const existing = db.prepare("SELECT id FROM factory_orders WHERE id=?").get(req.params.id);
+router.put("/factory-orders/:id/permit", upload.single("permit_doc"), async (req, res) => {
+  const existing = await queryOne("SELECT id FROM factory_orders WHERE id=?", req.params.id);
   if (!existing) return void res.status(404).json({ error: "الطلبية غير موجودة" });
 
   const permit_doc_url = req.file ? `/api/uploads/${req.file.filename}` : null;
   const { permit_number } = req.body;
 
-  db.prepare(`
+  await execute(`
     UPDATE factory_orders
     SET permit_number=?,
         permit_doc_url=COALESCE(?, permit_doc_url),
@@ -131,62 +129,61 @@ router.put("/factory-orders/:id/permit", upload.single("permit_doc"), (req, res)
         permit_issued_at=datetime('now'),
         updated_at=datetime('now')
     WHERE id=?
-  `).run(permit_number || null, permit_doc_url, req.params.id);
+  `, permit_number || null, permit_doc_url, req.params.id);
 
   res.json({ success: true });
 });
 
 // ── PUT: update delivery site ─────────────────────────────────────────────────
-router.put("/factory-orders/:id/delivery-site", (req, res) => {
+router.put("/factory-orders/:id/delivery-site", async (req, res) => {
   const { delivery_site } = req.body;
-  db.prepare("UPDATE factory_orders SET delivery_site=?, updated_at=datetime('now') WHERE id=?")
-    .run(delivery_site || null, req.params.id);
+  await execute("UPDATE factory_orders SET delivery_site=?, updated_at=datetime('now') WHERE id=?", delivery_site || null, req.params.id);
   res.json({ success: true });
 });
 
 // ── PUT: driver uploads loading order (أمر التحميل) ────────────────────────────
-router.put("/factory-orders/:id/loading-order", upload.single("loading_order_doc"), (req, res) => {
+router.put("/factory-orders/:id/loading-order", upload.single("loading_order_doc"), async (req, res) => {
   const loading_order_url = req.file ? `/api/uploads/${req.file.filename}` : null;
   if (!loading_order_url) return void res.status(400).json({ error: "يرجى إرفاق صورة أمر التحميل" });
 
-  db.prepare(`
+  await execute(`
     UPDATE factory_orders
     SET loading_order_url=?,
         status='loaded',
         loading_confirmed_at=datetime('now'),
         updated_at=datetime('now')
     WHERE id=?
-  `).run(loading_order_url, req.params.id);
+  `, loading_order_url, req.params.id);
 
   res.json({ success: true });
 });
 
 // ── PUT: driver confirms delivery ─────────────────────────────────────────────
-router.put("/factory-orders/:id/deliver", (req, res) => {
+router.put("/factory-orders/:id/deliver", async (req, res) => {
   const { delivery_notes } = req.body;
 
   // Read before update to get vehicle/driver info for trips log
-  const fo = db.prepare("SELECT * FROM factory_orders WHERE id=?")
-    .get(req.params.id) as Record<string, unknown> | undefined;
+  const fo = await queryOne<Record<string, unknown>>("SELECT * FROM factory_orders WHERE id=?", req.params.id);
 
-  db.prepare(`
+  await execute(`
     UPDATE factory_orders
     SET status='delivered',
         delivery_notes=?,
         delivered_at=datetime('now'),
         updated_at=datetime('now')
     WHERE id=?
-  `).run(delivery_notes || null, req.params.id);
+  `, delivery_notes || null, req.params.id);
 
   // ── Auto-add trip to سجل الرحلات ──────────────────────────────────────────
   if (fo?.vehicle_plate) {
     const today = new Date().toISOString().slice(0, 10);
-    const fvTrailer = (db.prepare("SELECT linked_trailer_number FROM fleet_vehicles WHERE plate_number=? LIMIT 1")
-      .get(fo.vehicle_plate) as { linked_trailer_number: string | null } | undefined)?.linked_trailer_number || null;
-    db.prepare(`
+    const fvTrailer = (await queryOne<{ linked_trailer_number: string | null }>(
+      "SELECT linked_trailer_number FROM fleet_vehicles WHERE plate_number=? LIMIT 1", fo.vehicle_plate,
+    ))?.linked_trailer_number || null;
+    await execute(`
       INSERT INTO trips (date, car_id, driver_name, driver_phone, material_type, destination, trips_count, notes, trailer_number)
       VALUES (?,?,?,?,?,?,1,?,?)
-    `).run(
+    `,
       today,
       fo.vehicle_plate,
       fo.driver_name    || null,

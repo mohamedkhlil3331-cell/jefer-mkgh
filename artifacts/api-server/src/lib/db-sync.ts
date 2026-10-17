@@ -8,6 +8,8 @@ import { createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { getR2Client, getR2Object, headR2Object, isR2Configured, r2BucketName } from "./r2-storage.js";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
+import { isD1DatabaseMode } from "./database-mode.js";
+export { isD1DatabaseMode } from "./database-mode.js";
 
 const BUCKET_ID = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
 // Use separate backup keys for production vs development so they never
@@ -87,15 +89,16 @@ export function isFilesystemStorageMode(): boolean {
 }
 
 /**
+ * D1 is a production-only SQL backend. Development must keep using its
+ * independently backed-up SQLite database.
+ */
+/**
  * Database persistence can be local even when uploaded objects are stored in R2.
  * ERP_STORAGE_BACKEND=filesystem remains the legacy combined mode.
  */
 export function isFilesystemDatabaseMode(): boolean {
-  const backend = process.env.ERP_DATABASE_BACKEND;
-  if (backend && backend !== "filesystem") {
-    throw new Error(`[db-sync] Unsupported ERP_DATABASE_BACKEND: ${backend}`);
-  }
-  return backend === "filesystem" || isFilesystemStorageMode();
+  return !isD1DatabaseMode()
+    && (process.env.ERP_DATABASE_BACKEND === "filesystem" || isFilesystemStorageMode());
 }
 
 function assertDevelopmentWriterLock(operation: string): void {
@@ -452,6 +455,9 @@ export function getAppDataDir(): string {
   const apiServerRoot = path.basename(cwd) === "api-server"
     ? cwd
     : path.join(cwd, "artifacts", "api-server");
+  if (isD1DatabaseMode()) {
+    throw new Error("[db-sync] The SQLite data directory is unavailable while the production D1 backend is selected");
+  }
   if (!isFilesystemDatabaseMode()) return path.join(apiServerRoot, "data");
 
   const configuredDir = process.env.ERP_DATA_DIR?.trim();

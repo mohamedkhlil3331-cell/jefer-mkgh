@@ -613,6 +613,82 @@ try { db.exec(`ALTER TABLE workshop_inventory ADD COLUMN updated_by TEXT`); } ca
 // Unique index on item_code (non-null only) — prevents duplicate codes
 try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uidx_workshop_inv_item_code ON workshop_inventory(item_code) WHERE item_code IS NOT NULL AND item_code != ''`); } catch { /* already exists */ }
 
+// Teidarat registry schema is initialized here so the route stays async-only.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS teidarat (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL,
+    seq_no INTEGER NOT NULL UNIQUE,
+    vehicle_plate TEXT,
+    notes TEXT,
+    created_at TEXT DEFAULT (datetime('now')),
+    teidara_number TEXT,
+    teidara_type TEXT,
+    length_m REAL,
+    width_m REAL,
+    height_m REAL,
+    capacity REAL,
+    weight_kg REAL,
+    image_url TEXT
+  )
+`);
+for (const column of [
+  "teidara_number TEXT",
+  "teidara_type TEXT",
+  "length_m REAL",
+  "width_m REAL",
+  "height_m REAL",
+  "capacity REAL",
+  "weight_kg REAL",
+  "image_url TEXT",
+]) {
+  try { db.exec(`ALTER TABLE teidarat ADD COLUMN ${column}`); } catch { /* already exists */ }
+}
+const teidaratSchema = String(
+  (db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='teidarat'").get() as { sql?: string } | undefined)?.sql ?? "",
+);
+if (teidaratSchema.includes("UNIQUE(category, seq_no)")) {
+  const rows = db.prepare(
+    "SELECT * FROM teidarat ORDER BY category, seq_no ASC, id ASC",
+  ).all() as Record<string, unknown>[];
+  db.exec("DROP TABLE IF EXISTS teidarat_v2");
+  db.exec(`
+    CREATE TABLE teidarat_v2 (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      category TEXT NOT NULL,
+      seq_no INTEGER NOT NULL UNIQUE,
+      vehicle_plate TEXT,
+      notes TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      teidara_number TEXT,
+      teidara_type TEXT,
+      length_m REAL,
+      width_m REAL,
+      height_m REAL,
+      capacity REAL,
+      weight_kg REAL,
+      image_url TEXT
+    )
+  `);
+  const insertTeidarat = db.prepare(`
+    INSERT INTO teidarat_v2
+      (id, category, seq_no, vehicle_plate, notes, created_at,
+       teidara_number, teidara_type, length_m, width_m, height_m, capacity, weight_kg, image_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  db.transaction(() => {
+    rows.forEach((row, index) => insertTeidarat.run(
+      row.id, row.category, index + 1,
+      row.vehicle_plate ?? null, row.notes ?? null, row.created_at ?? null,
+      row.teidara_number ?? null, row.teidara_type ?? null,
+      row.length_m ?? null, row.width_m ?? null, row.height_m ?? null,
+      row.capacity ?? null, row.weight_kg ?? null, row.image_url ?? null,
+    ));
+  })();
+  db.exec("DROP TABLE teidarat");
+  db.exec("ALTER TABLE teidarat_v2 RENAME TO teidarat");
+}
+
 // ─── Purchase Requests (طلبات الشراء) ─────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS purchase_requests (
@@ -2673,6 +2749,8 @@ try { db.exec("ALTER TABLE routing_dispatches ADD COLUMN cargo_type TEXT"); } ca
 try { db.exec("ALTER TABLE routing_dispatches ADD COLUMN customer_type TEXT"); } catch { /* already exists */ }
 try { db.exec("ALTER TABLE routing_dispatches ADD COLUMN rep_phone TEXT"); } catch { /* already exists */ }
 try { db.exec("ALTER TABLE routing_dispatches ADD COLUMN permit_image_url TEXT"); } catch { /* already exists */ }
+try { db.exec("ALTER TABLE trips ADD COLUMN client_request_id TEXT"); } catch { /* already exists */ }
+db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_trips_client_request_id ON trips(client_request_id) WHERE client_request_id IS NOT NULL");
 try { db.exec("ALTER TABLE routing_dispatches ADD COLUMN client_request_id TEXT"); } catch { /* already exists */ }
 try { db.exec("ALTER TABLE routing_dispatches ADD COLUMN loading_location_name TEXT"); } catch { /* already exists */ }
 try { db.exec("ALTER TABLE routing_dispatches ADD COLUMN loading_location_url TEXT"); } catch { /* already exists */ }

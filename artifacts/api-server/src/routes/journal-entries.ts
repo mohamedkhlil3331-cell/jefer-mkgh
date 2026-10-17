@@ -1,27 +1,26 @@
 import { Router, type Request, type Response } from "express";
 import * as XLSX from "xlsx";
-import db from "../lib/db.js";
-import { createJournalEntry } from "../lib/journal.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 
 const router = Router();
 
 // ── Auth helper — admin-only guard ────────────────────────────────────────────
-function requireAdmin(req: Request, res: Response): { ok: true; actorName: string } | { ok: false } {
+async function requireAdmin(req: Request, res: Response): Promise<{ ok: true; actorName: string } | { ok: false }> {
   const token = req.headers.authorization?.replace("Bearer ", "").trim();
   if (!token || token === "guest") {
     res.status(401).json({ error: "غير مصرح" });
     return { ok: false };
   }
-  const session = db.prepare(
+  const session = await queryOne<{ user_id: number }>(
     "SELECT user_id FROM sessions WHERE token = ? AND expires_at > datetime('now')"
-  ).get(token) as { user_id: number } | undefined;
+  , token);
   if (!session) {
     res.status(401).json({ error: "الجلسة منتهية" });
     return { ok: false };
   }
-  const user = db.prepare(
+  const user = await queryOne<{ name: string; role: string }>(
     "SELECT name, role FROM users WHERE id = ? AND active = 1"
-  ).get(session.user_id) as { name: string; role: string } | undefined;
+  , session.user_id);
   if (!user || !["admin", "finance"].includes(user.role)) {
     res.status(403).json({ error: "صلاحيات المدير أو المحاسب مطلوبة" });
     return { ok: false };
@@ -30,7 +29,7 @@ function requireAdmin(req: Request, res: Response): { ok: true; actorName: strin
 }
 
 // ── GET /journal-entries — list with filters ──────────────────────────────────
-router.get("/journal-entries", (req, res) => {
+router.get("/journal-entries", async (req, res) => {
   const { from, to, account, reference_type, limit: lim } = req.query as Record<string, string>;
   let sql = `
     SELECT je.*,
@@ -48,17 +47,17 @@ router.get("/journal-entries", (req, res) => {
   if (reference_type) { sql += " AND je.reference_type = ?"; params.push(reference_type); }
   sql += " ORDER BY je.created_at DESC";
   if (lim)            { sql += " LIMIT ?"; params.push(Number(lim)); }
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
 // ── GET /chart-of-accounts — all accounts ─────────────────────────────────────
-router.get("/chart-of-accounts", (_req, res) => {
-  res.json(db.prepare("SELECT * FROM chart_of_accounts ORDER BY code").all());
+router.get("/chart-of-accounts", async (_req, res) => {
+  res.json(await queryAll("SELECT * FROM chart_of_accounts ORDER BY code"));
 });
 
 // ── POST /journal-entries — manual entry (admin/finance only) ─────────────────
-router.post("/journal-entries", (req, res) => {
-  const auth = requireAdmin(req, res);
+router.post("/journal-entries", async (req, res) => {
+  const auth = await requireAdmin(req, res);
   if (!auth.ok) return;
 
   const { debit_account, credit_account, amount, description, entry_date, reference_id } = req.body;
@@ -70,23 +69,18 @@ router.post("/journal-entries", (req, res) => {
     return void res.status(400).json({ error: "سبب القيد اليدوي إلزامي (5 أحرف على الأقل)" });
 
   // Verify accounts exist
-  const dAcc = db.prepare("SELECT code FROM chart_of_accounts WHERE code=?").get(debit_account);
-  const cAcc = db.prepare("SELECT code FROM chart_of_accounts WHERE code=?").get(credit_account);
+  const dAcc = await queryOne("SELECT code FROM chart_of_accounts WHERE code=?", debit_account);
+  const cAcc = await queryOne("SELECT code FROM chart_of_accounts WHERE code=?", credit_account);
   if (!dAcc) return void res.status(400).json({ error: `الحساب المدين غير موجود: ${debit_account}` });
   if (!cAcc) return void res.status(400).json({ error: `الحساب الدائن غير موجود: ${credit_account}` });
 
   try {
-    const id = createJournalEntry({
-      reference_type: "manual",
-      reference_id: reference_id || undefined,
-      debit_account,
-      credit_account,
-      amount: Number(amount),
-      description,
-      created_by: auth.actorName,   // derived from session, not client-supplied
-      entry_date: entry_date || undefined,
-    });
-    res.status(201).json({ id, message: "تم إنشاء القيد اليدوي" });
+    const result = await execute(`
+      INSERT INTO journal_entries
+        (entry_date, reference_type, reference_id, debit_account, credit_account, amount, description, created_by)
+      VALUES (COALESCE(?,date('now')), 'manual', ?, ?, ?, ?, ?, ?)
+    `, entry_date || null, reference_id || null, debit_account, credit_account, Number(amount), description, auth.actorName);
+    res.status(201).json({ id: result.lastInsertRowid, message: "تم إنشاء القيد اليدوي" });
   } catch (err) {
     console.error("[journal-entries] manual insert failed:", err);
     res.status(500).json({ error: "فشل إنشاء القيد — حاول مرة أخرى", detail: String(err) });
@@ -94,29 +88,26 @@ router.post("/journal-entries", (req, res) => {
 });
 
 // ── POST /journal-entries/:id/reverse — reverse an entry (admin/finance only) ─
-router.post("/journal-entries/:id/reverse", (req, res) => {
-  const auth = requireAdmin(req, res);
+router.post("/journal-entries/:id/reverse", async (req, res) => {
+  const auth = await requireAdmin(req, res);
   if (!auth.ok) return;
 
   const { reason } = req.body;
   if (!reason || String(reason).trim().length < 3)
     return void res.status(400).json({ error: "سبب العكس إلزامي (3 أحرف على الأقل)" });
 
-  const entry = db.prepare("SELECT * FROM journal_entries WHERE id=?").get(req.params.id) as Record<string, unknown> | undefined;
+  const entry = await queryOne<Record<string, unknown>>("SELECT * FROM journal_entries WHERE id=?", req.params.id);
   if (!entry) return void res.status(404).json({ error: "القيد غير موجود" });
   if (entry.reference_type === "reversal") return void res.status(400).json({ error: "لا يمكن عكس قيد عكسي" });
 
   try {
-    const id = createJournalEntry({
-      reference_type: "reversal",
-      reference_id: String(entry.id),
-      debit_account: String(entry.credit_account),   // swap
-      credit_account: String(entry.debit_account),   // swap
-      amount: Number(entry.amount),
-      description: `عكس قيد #${entry.id}: ${reason}`,
-      created_by: auth.actorName,   // derived from session, not client-supplied
-    });
-    res.status(201).json({ id, message: "تم إنشاء القيد العكسي" });
+    const result = await execute(`
+      INSERT INTO journal_entries
+        (entry_date, reference_type, reference_id, debit_account, credit_account, amount, description, created_by)
+      VALUES (date('now'), 'reversal', ?, ?, ?, ?, ?, ?)
+    `, String(entry.id), String(entry.credit_account), String(entry.debit_account), Number(entry.amount),
+    `عكس قيد #${entry.id}: ${reason}`, auth.actorName);
+    res.status(201).json({ id: result.lastInsertRowid, message: "تم إنشاء القيد العكسي" });
   } catch (err) {
     console.error("[journal-entries] reversal insert failed:", err);
     res.status(500).json({ error: "فشل إنشاء القيد العكسي", detail: String(err) });
@@ -124,14 +115,14 @@ router.post("/journal-entries/:id/reverse", (req, res) => {
 });
 
 // ── GET /trial-balance — aggregated per account ────────────────────────────────
-router.get("/trial-balance", (req, res) => {
+router.get("/trial-balance", async (req, res) => {
   const { from, to } = req.query as Record<string, string>;
   let dateFilter = "1=1";
   const params: string[] = [];
   if (from) { dateFilter += " AND substr(je.entry_date,1,10) >= ?"; params.push(from); }
   if (to)   { dateFilter += " AND substr(je.entry_date,1,10) <= ?"; params.push(to); }
 
-  const rows = db.prepare(`
+  const rows = await queryAll<Record<string, unknown>>(`
     WITH debits AS (
       SELECT debit_account AS code, SUM(amount) AS total_debit
       FROM journal_entries je WHERE ${dateFilter}
@@ -154,7 +145,7 @@ router.get("/trial-balance", (req, res) => {
     LEFT JOIN debits  d  ON d.code  = c.code
     LEFT JOIN credits cr ON cr.code = c.code
     ORDER BY c.code
-  `).all(...params, ...params) as Record<string, unknown>[];
+  `, ...params, ...params);
 
   const totalDebit  = (rows as { total_debit:  number }[]).reduce((s, r) => s + r.total_debit,  0);
   const totalCredit = (rows as { total_credit: number }[]).reduce((s, r) => s + r.total_credit, 0);
@@ -163,7 +154,7 @@ router.get("/trial-balance", (req, res) => {
 });
 
 // ── GET /journal-entries/export — Excel export ────────────────────────────────
-router.get("/journal-entries/export", (req, res) => {
+router.get("/journal-entries/export", async (req, res) => {
   const { from, to, account, reference_type } = req.query as Record<string, string>;
   let sql = `
     SELECT je.*,
@@ -181,7 +172,7 @@ router.get("/journal-entries/export", (req, res) => {
   if (reference_type) { sql += " AND je.reference_type = ?"; params.push(reference_type); }
   sql += " ORDER BY je.created_at DESC";
 
-  const entries = db.prepare(sql).all(...params) as Record<string, unknown>[];
+  const entries = await queryAll<Record<string, unknown>>(sql, ...params);
 
   const RTYPE_LABELS: Record<string, string> = {
     invoice:            "فاتورة",

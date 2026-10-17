@@ -14,6 +14,22 @@ const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY?.replace(/[\
 
 export const isR2Configured = Boolean(accountId && bucket && accessKeyId && secretAccessKey);
 
+/**
+ * Keep the current Replit Object Storage fallback until a production cutover
+ * is explicitly configured. In R2 mode, never silently issue new uploads to
+ * Replit when R2 credentials are missing.
+ */
+export function isR2ObjectStorageBackend(): boolean {
+  const selected = process.env.ERP_OBJECT_STORAGE_BACKEND?.trim();
+  if (selected && selected !== "r2") {
+    throw new Error(`[r2-storage] Unsupported ERP_OBJECT_STORAGE_BACKEND: ${selected}`);
+  }
+  if (selected === "r2" && !isR2Configured) {
+    throw new Error("[r2-storage] ERP_OBJECT_STORAGE_BACKEND=r2 requires complete Cloudflare R2 configuration");
+  }
+  return selected === "r2" || (!selected && isR2Configured);
+}
+
 let client: S3Client | null = null;
 export function getR2Client(): S3Client {
   if (!isR2Configured || !accountId || !accessKeyId || !secretAccessKey) {
@@ -134,6 +150,10 @@ export async function deleteR2Object(key: string): Promise<void> {
 export function r2MulterStorage(makeFilename: (originalName: string) => string): StorageEngine {
   return {
     _handleFile(_req, file, callback) {
+      if (!isR2Configured) {
+        callback(new Error("Cloudflare R2 is not configured for direct file uploads"));
+        return;
+      }
       const key = makeFilename(file.originalname);
       const chunks: Buffer[] = [];
       let size = 0;

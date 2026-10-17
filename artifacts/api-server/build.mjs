@@ -3,16 +3,81 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { readFile, readdir, rm, writeFile } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
 
+const D1_DUAL_BACKEND_MODULES = new Set([
+  "index.ts",
+  "lib/erp-sql.ts",
+  "routes/products.ts",
+  "routes/warehouses.ts",
+]);
+
+async function collectD1SqliteBlockers(directory) {
+  const blockers = [];
+  const pending = [
+    "index.ts",
+    "app.ts",
+    "lib/d1-readiness.ts",
+    "lib/cloudflare-d1.ts",
+    "routes/index.ts",
+    "routes/system-backup-d1.ts",
+  ]
+    .map(file => path.resolve(directory, file));
+  const visited = new Set();
+  const importPattern = /\b(?:import|export)\s+(?:type\s+)?(?:[^;]*?\s+from\s*)?["']([^"']+)["']/g;
+
+  while (pending.length) {
+    const filePath = pending.pop();
+    if (!filePath || visited.has(filePath)) continue;
+    visited.add(filePath);
+    let source;
+    try {
+      source = await readFile(filePath, "utf8");
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    const relativePath = path.relative(directory, filePath).split(path.sep).join("/");
+    const importsSqlite = /import\s+db(?:\s*,\s*\{[^}]*\})?\s+from\s+["'][^"']*\/(?:lib\/)?db\.js["']/.test(source)
+      || /import\s*\{\s*[^}]*\bdb\b[^}]*\}\s*from\s+["'][^"']*\/(?:lib\/)?db\.js["']/.test(source);
+    const callsSqlite = /\bdb\s*\.\s*(?:prepare|exec|transaction|pragma)\s*\(/.test(source);
+    if ((importsSqlite || callsSqlite) && !D1_DUAL_BACKEND_MODULES.has(relativePath)) {
+      blockers.push({
+        file: relativePath,
+        importsSqlite,
+        callsSqlite,
+      });
+    }
+
+    for (const match of source.matchAll(importPattern)) {
+      const specifier = match[1];
+      if (!specifier.startsWith(".")) continue;
+      let dependency = path.resolve(path.dirname(filePath), specifier);
+      if (dependency.endsWith(".js")) dependency = dependency.slice(0, -3) + ".ts";
+      else if (!path.extname(dependency)) dependency += ".ts";
+      if (dependency.startsWith(`${directory}${path.sep}`)) pending.push(dependency);
+    }
+  }
+  return blockers.sort((a, b) => a.file.localeCompare(b.file));
+}
+
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
   await rm(distDir, { recursive: true, force: true });
+  const sourceDir = path.resolve(artifactDir, "src");
+  const routesIndex = await readFile(path.join(sourceDir, "routes/index.ts"), "utf8");
+  if (
+    /import\s+\w+\s+from\s+["']\.\/system-backup\.js["']/.test(routesIndex)
+    || !/isD1DatabaseMode\(\)\s*\?\s*\(await\s+import\(["']\.\/system-backup-d1\.js["']\)\)\.default\s*:\s*\(await\s+import\(["']\.\/system-backup\.js["']\)\)\.default/s.test(routesIndex)
+  ) {
+    throw new Error("D1 startup requires system-backup routes to be selected dynamically by database mode");
+  }
+  const sqliteBlockers = await collectD1SqliteBlockers(sourceDir);
 
   await esbuild({
     entryPoints: [
@@ -121,6 +186,11 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
     `,
     },
   });
+
+  await writeFile(
+    path.join(distDir, "d1-readiness.json"),
+    `${JSON.stringify({ version: 1, sqliteBlockers }, null, 2)}\n`,
+  );
 }
 
 buildAll().catch((err) => {

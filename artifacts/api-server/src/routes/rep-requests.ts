@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
 const upload = multer({ storage: r2MulterStorage(name => uniqueUploadName("rep-", name)), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -8,13 +8,13 @@ const upload = multer({ storage: r2MulterStorage(name => uniqueUploadName("rep-"
 const router = Router();
 
 // ── List reps ────────────────────────────────────────────────────────────────
-router.get("/reps", (_req, res) => {
-  const reps = db.prepare("SELECT id, name, phone FROM users WHERE role='rep' AND active=1 ORDER BY name").all();
+router.get("/reps", async (_req, res) => {
+  const reps = await queryAll("SELECT id, name, phone FROM users WHERE role='rep' AND active=1 ORDER BY name");
   res.json(reps);
 });
 
 // ── List rep requests ────────────────────────────────────────────────────────
-router.get("/rep-requests", (req, res) => {
+router.get("/rep-requests", async (req, res) => {
   const { status, created_by, rep_phone, driver_phone, needs_vehicle, needs_permit } = req.query as Record<string, string>;
   let sql = "SELECT * FROM rep_requests WHERE 1=1";
   const params: unknown[] = [];
@@ -27,7 +27,7 @@ router.get("/rep-requests", (req, res) => {
   if (needs_permit  === "1") { sql += " AND status='vehicle_assigned'"; }
 
   sql += " ORDER BY created_at DESC";
-  const rows = db.prepare(sql).all(...params) as Record<string, unknown>[];
+  const rows = await queryAll<Record<string, unknown>>(sql, ...params);
   res.json(rows.map(r => ({
     ...r,
     loading_locations: (() => { try { return JSON.parse(r.loading_locations as string || "[]"); } catch { return []; } })(),
@@ -35,16 +35,16 @@ router.get("/rep-requests", (req, res) => {
 });
 
 // ── Create rep request ───────────────────────────────────────────────────────
-router.post("/rep-requests", (req, res) => {
+router.post("/rep-requests", async (req, res) => {
   const { product_name, loading_locations, delivery_location, rep_name, rep_phone, notes, created_by } = req.body as Record<string, unknown>;
   if (!product_name) return void res.status(400).json({ error: "اسم المنتج مطلوب" });
 
   const no = `RR${Date.now()}`;
-  const r = db.prepare(`
+  const r = await execute(`
     INSERT INTO rep_requests
       (request_no, product_name, loading_locations, delivery_location, rep_name, rep_phone, notes, created_by)
     VALUES (?,?,?,?,?,?,?,?)
-  `).run(
+  `,
     no,
     String(product_name),
     JSON.stringify(Array.isArray(loading_locations) ? loading_locations : []),
@@ -58,59 +58,59 @@ router.post("/rep-requests", (req, res) => {
 });
 
 // ── Supervisor: assign vehicle ────────────────────────────────────────────────
-router.put("/rep-requests/:id/assign-vehicle", (req, res) => {
+router.put("/rep-requests/:id/assign-vehicle", async (req, res) => {
   const { vehicle_plate, driver_name, driver_phone } = req.body as Record<string, string>;
   if (!vehicle_plate) return void res.status(400).json({ error: "رقم اللوحة مطلوب" });
-  db.prepare(`
+  await execute(`
     UPDATE rep_requests
     SET status='vehicle_assigned', vehicle_plate=?, driver_name=?, driver_phone=?, assigned_at=datetime('now')
     WHERE id=?
-  `).run(vehicle_plate, driver_name || null, driver_phone || null, req.params.id);
+  `, vehicle_plate, driver_name || null, driver_phone || null, req.params.id);
   res.json({ ok: true });
 });
 
 // ── Fsohat: upload permit ─────────────────────────────────────────────────────
-router.put("/rep-requests/:id/upload-permit", upload.single("permit_photo"), (req, res) => {
+router.put("/rep-requests/:id/upload-permit", upload.single("permit_photo"), async (req, res) => {
   const photoUrl = req.file ? `/api/uploads/${req.file.filename}` : null;
   if (!photoUrl) return void res.status(400).json({ error: "صورة الفسحة مطلوبة" });
-  db.prepare(`
+  await execute(`
     UPDATE rep_requests
     SET status='permit_uploaded', permit_photo_url=?, permit_uploaded_at=datetime('now')
     WHERE id=?
-  `).run(photoUrl, req.params.id);
+  `, photoUrl, req.params.id);
   res.json({ ok: true, permit_photo_url: photoUrl });
 });
 
 // ── Driver: load + upload invoice photo ──────────────────────────────────────
-router.put("/rep-requests/:id/load", upload.single("invoice_photo"), (req, res) => {
+router.put("/rep-requests/:id/load", upload.single("invoice_photo"), async (req, res) => {
   const photoUrl = req.file ? `/api/uploads/${req.file.filename}` : null;
-  db.prepare(`
+  await execute(`
     UPDATE rep_requests
     SET status='loaded', invoice_photo_url=?, loaded_at=datetime('now')
     WHERE id=?
-  `).run(photoUrl, req.params.id);
+  `, photoUrl, req.params.id);
   res.json({ ok: true, invoice_photo_url: photoUrl });
 });
 
 // ── Driver: deliver ───────────────────────────────────────────────────────────
-router.put("/rep-requests/:id/deliver", (req, res) => {
-  db.prepare(`
+router.put("/rep-requests/:id/deliver", async (req, res) => {
+  await execute(`
     UPDATE rep_requests SET status='delivered', delivered_at=datetime('now') WHERE id=?
-  `).run(req.params.id);
+  `, req.params.id);
   res.json({ ok: true });
 });
 
 // ── Cancel ────────────────────────────────────────────────────────────────────
-router.put("/rep-requests/:id/cancel", (req, res) => {
-  db.prepare("UPDATE rep_requests SET status='cancelled' WHERE id=?").run(req.params.id);
+router.put("/rep-requests/:id/cancel", async (req, res) => {
+  await execute("UPDATE rep_requests SET status='cancelled' WHERE id=?", req.params.id);
   res.json({ ok: true });
 });
 
 // ── Delete ────────────────────────────────────────────────────────────────────
-router.delete("/rep-requests/:id", (req, res) => {
-  const row = db.prepare("SELECT id FROM rep_requests WHERE id=?").get(req.params.id);
+router.delete("/rep-requests/:id", async (req, res) => {
+  const row = await queryOne("SELECT id FROM rep_requests WHERE id=?", req.params.id);
   if (!row) return void res.status(404).json({ error: "الطلب غير موجود" });
-  db.prepare("DELETE FROM rep_requests WHERE id=?").run(req.params.id);
+  await execute("DELETE FROM rep_requests WHERE id=?", req.params.id);
   res.json({ ok: true });
 });
 

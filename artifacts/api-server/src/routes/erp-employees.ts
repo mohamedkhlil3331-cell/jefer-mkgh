@@ -1,32 +1,16 @@
 import { Router } from "express";
-import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 
 const router = Router();
 
-// ── Migration: add new employee fields ─────────────────────────────────────────
-const newCols: [string, string][] = [
-  ["entity",      "TEXT"],
-  ["iqama_amount","REAL DEFAULT 0"],
-  ["passport_end","TEXT"],
-  ["vehicle_plate","TEXT"],
-  ["efficiency",  "TEXT DEFAULT 'جيد'"],
-  ["penalties",   "REAL DEFAULT 0"],
-  ["allowances",  "REAL DEFAULT 0"],
-  ["bonus",       "REAL DEFAULT 0"],
-  ["rewards",     "REAL DEFAULT 0"],
-];
-for (const [col, type] of newCols) {
-  try { db.exec(`ALTER TABLE employees ADD COLUMN ${col} ${type}`); } catch {}
-}
-
 // ── Employee list ───────────────────────────────────────────────────────────────
-router.get("/employees", (_req, res) => {
-  const rows = db.prepare("SELECT * FROM employees ORDER BY id").all();
+router.get("/employees", async (_req, res) => {
+  const rows = await queryAll("SELECT * FROM employees ORDER BY id");
   res.json(rows);
 });
 
-router.get("/employees/stats", (_req, res) => {
-  const employees = db.prepare("SELECT * FROM employees").all() as Record<string, unknown>[];
+router.get("/employees/stats", async (_req, res) => {
+  const employees = await queryAll<Record<string, unknown>>("SELECT * FROM employees");
   const active = employees.filter(e => e.status === "يعمل" || e.status === "active");
   const totalSalary = active.reduce((s, e) => s + (Number(e.salary) || 0), 0);
   const totalAllowances = active.reduce((s, e) => s + (Number(e.allowances) || 0), 0);
@@ -55,15 +39,15 @@ router.get("/employees/stats", (_req, res) => {
   });
 });
 
-router.get("/employees/:id", (req, res) => {
-  const row = db.prepare("SELECT * FROM employees WHERE id = ?").get(req.params.id);
+router.get("/employees/:id", async (req, res) => {
+  const row = await queryOne("SELECT * FROM employees WHERE id = ?", req.params.id);
   if (!row) return void res.status(404).json({ error: "Not found" });
   res.json(row);
 });
 
-router.post("/employees", (req, res) => {
+router.post("/employees", async (req, res) => {
   const f = req.body;
-  const result = db.prepare(`
+  const result = await execute(`
     INSERT INTO employees
       (name, job_title, department, entity, nationality, phone, email, password, role,
        status, salary, allowances, bonus, rewards, penalties,
@@ -71,7 +55,7 @@ router.post("/employees", (req, res) => {
        work_permit_start, work_permit_end, driver_license_no, driver_license_end,
        passport_end, vehicle_plate, efficiency, permissions)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(
+  `,
     f.name, f.job_title||null, f.department||null, f.entity||null,
     f.nationality||null, f.phone||null, f.email||null, f.password||null, f.role||"worker",
     f.status||"يعمل",
@@ -88,9 +72,9 @@ router.post("/employees", (req, res) => {
   res.status(201).json({ id: result.lastInsertRowid, message: "تم إضافة الموظف" });
 });
 
-router.put("/employees/:id", (req, res) => {
+router.put("/employees/:id", async (req, res) => {
   const f = req.body;
-  db.prepare(`
+  await execute(`
     UPDATE employees SET
       name=?, job_title=?, department=?, entity=?, nationality=?, phone=?, email=?,
       role=?, status=?, salary=?, allowances=?, bonus=?, rewards=?, penalties=?,
@@ -99,7 +83,7 @@ router.put("/employees/:id", (req, res) => {
       driver_license_no=?, driver_license_end=?,
       passport_end=?, vehicle_plate=?, efficiency=?, permissions=?
     WHERE id=?
-  `).run(
+  `,
     f.name, f.job_title||null, f.department||null, f.entity||null,
     f.nationality||null, f.phone||null, f.email||null,
     f.role||"worker", f.status||"يعمل",
@@ -117,13 +101,13 @@ router.put("/employees/:id", (req, res) => {
   res.json({ message: "تم التحديث" });
 });
 
-router.delete("/employees/:id", (req, res) => {
-  db.prepare("DELETE FROM employees WHERE id = ?").run(req.params.id);
+router.delete("/employees/:id", async (req, res) => {
+  await execute("DELETE FROM employees WHERE id = ?", req.params.id);
   res.json({ message: "تم الحذف" });
 });
 
 // ── Bulk import ─────────────────────────────────────────────────────────────────
-router.post("/employees/import", (req, res) => {
+router.post("/employees/import", async (req, res) => {
   const rows: Record<string, unknown>[] = req.body?.rows ?? [];
   if (!Array.isArray(rows) || rows.length === 0)
     return void res.status(400).json({ error: "لا توجد بيانات" });
@@ -152,14 +136,6 @@ router.post("/employees/import", (req, res) => {
     "الكفاءة":"efficiency","efficiency":"efficiency",
   };
 
-  const ins = db.prepare(`
-    INSERT INTO employees
-      (name,job_title,department,entity,nationality,phone,status,salary,allowances,
-       bonus,rewards,penalties,hire_date,iqama_no,iqama_amount,iqama_end,
-       driver_license_no,driver_license_end,passport_end,vehicle_plate,efficiency)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `);
-
   let imported = 0;
   for (const raw of rows) {
     const m: Record<string, unknown> = {};
@@ -168,7 +144,13 @@ router.post("/employees/import", (req, res) => {
       if (field) m[field] = v;
     }
     if (!m.name) continue;
-    ins.run(
+    await execute(`
+      INSERT INTO employees
+        (name,job_title,department,entity,nationality,phone,status,salary,allowances,
+         bonus,rewards,penalties,hire_date,iqama_no,iqama_amount,iqama_end,
+         driver_license_no,driver_license_end,passport_end,vehicle_plate,efficiency)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `,
       m.name, m.job_title||null, m.department||null, m.entity||null,
       m.nationality||null, m.phone||null, m.status||"يعمل",
       parseFloat(String(m.salary||0))||0, parseFloat(String(m.allowances||0))||0,
@@ -184,31 +166,31 @@ router.post("/employees/import", (req, res) => {
 });
 
 // ── Leave requests (legacy) ─────────────────────────────────────────────────────
-router.get("/leave-requests", (_req, res) => {
-  res.json(db.prepare("SELECT * FROM leave_requests ORDER BY created_at DESC").all());
+router.get("/leave-requests", async (_req, res) => {
+  res.json(await queryAll("SELECT * FROM leave_requests ORDER BY created_at DESC"));
 });
-router.post("/leave-requests", (req, res) => {
+router.post("/leave-requests", async (req, res) => {
   const { employee_id, employee_name, leave_type, from_date, to_date, reason } = req.body;
   const d1 = new Date(from_date), d2 = new Date(to_date);
   const days = Math.max(1, Math.round((d2.getTime() - d1.getTime()) / 86400000) + 1);
-  const result = db.prepare(
+  const result = await execute(
     "INSERT INTO leave_requests (employee_id,employee_name,leave_type,from_date,to_date,days,reason) VALUES (?,?,?,?,?,?,?)"
-  ).run(employee_id, employee_name, leave_type, from_date, to_date, days, reason);
+  , employee_id, employee_name, leave_type, from_date, to_date, days, reason);
   res.status(201).json({ id: result.lastInsertRowid, days, message: "تم تقديم طلب الإجازة" });
 });
-router.put("/leave-requests/:id/status", (req, res) => {
+router.put("/leave-requests/:id/status", async (req, res) => {
   const { status, reviewed_by } = req.body;
-  db.prepare("UPDATE leave_requests SET status=?,reviewed_by=? WHERE id=?").run(status, reviewed_by, req.params.id);
+  await execute("UPDATE leave_requests SET status=?,reviewed_by=? WHERE id=?", status, reviewed_by, req.params.id);
   res.json({ message: "تم تحديث الحالة" });
 });
-router.delete("/leave-requests/:id", (req, res) => {
-  db.prepare("DELETE FROM leave_requests WHERE id=?").run(req.params.id);
+router.delete("/leave-requests/:id", async (req, res) => {
+  await execute("DELETE FROM leave_requests WHERE id=?", req.params.id);
   res.json({ message: "تم الحذف" });
 });
 
 // ── HR Requests (الطلبات الوظيفية) ─────────────────────────────────────────────
 
-router.get("/hr-requests", (req, res) => {
+router.get("/hr-requests", async (req, res) => {
   const { status, type, employee_id } = req.query;
   let sql = "SELECT * FROM hr_requests WHERE 1=1";
   const params: unknown[] = [];
@@ -216,11 +198,11 @@ router.get("/hr-requests", (req, res) => {
   if (type && type !== "الكل")     { sql += " AND request_type=?"; params.push(type); }
   if (employee_id)                 { sql += " AND employee_id=?"; params.push(employee_id); }
   sql += " ORDER BY created_at DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
-router.get("/hr-requests/stats", (_req, res) => {
-  const rows = db.prepare("SELECT status,request_type FROM hr_requests").all() as {status:string;request_type:string}[];
+router.get("/hr-requests/stats", async (_req, res) => {
+  const rows = await queryAll<{status:string;request_type:string}>("SELECT status,request_type FROM hr_requests");
   const pending  = rows.filter(r => r.status === "pending").length;
   const approved = rows.filter(r => r.status === "approved").length;
   const rejected = rows.filter(r => r.status === "rejected").length;
@@ -231,7 +213,7 @@ router.get("/hr-requests/stats", (_req, res) => {
   res.json({ total: rows.length, pending, approved, rejected, vacation, sick, salary, resign });
 });
 
-router.post("/hr-requests", (req, res) => {
+router.post("/hr-requests", async (req, res) => {
   const { employee_id, employee_name, employee_job, employee_dept,
           request_type, details, from_date, to_date } = req.body;
   if (!employee_name || !request_type)
@@ -240,35 +222,37 @@ router.post("/hr-requests", (req, res) => {
   if (from_date && to_date) {
     days = Math.max(1, Math.round((new Date(to_date).getTime() - new Date(from_date).getTime()) / 86400000) + 1);
   }
-  const result = db.prepare(`
+  const result = await execute(`
     INSERT INTO hr_requests (employee_id,employee_name,employee_job,employee_dept,
       request_type,details,from_date,to_date,days)
     VALUES (?,?,?,?,?,?,?,?,?)
-  `).run(employee_id||null, employee_name, employee_job||null, employee_dept||null,
-         request_type, details||null, from_date||null, to_date||null, days);
+  `, employee_id||null, employee_name, employee_job||null, employee_dept||null,
+  request_type, details||null, from_date||null, to_date||null, days);
   res.status(201).json({ id: result.lastInsertRowid, days, message: "تم تقديم الطلب" });
 });
 
-router.put("/hr-requests/:id/status", (req, res) => {
+router.put("/hr-requests/:id/status", async (req, res) => {
   const { status, reviewed_by, review_notes } = req.body;
-  db.prepare(`UPDATE hr_requests SET status=?,reviewed_by=?,review_notes=?,
-    updated_at=datetime('now') WHERE id=?`)
-    .run(status, reviewed_by||null, review_notes||null, req.params.id);
+  await execute(`UPDATE hr_requests SET status=?,reviewed_by=?,review_notes=?,
+    updated_at=datetime('now') WHERE id=?`,
+  status, reviewed_by||null, review_notes||null, req.params.id);
   res.json({ message: "تم تحديث حالة الطلب" });
 });
 
-router.delete("/hr-requests/:id", (req, res) => {
-  db.prepare("DELETE FROM hr_requests WHERE id=?").run(req.params.id);
+router.delete("/hr-requests/:id", async (req, res) => {
+  await execute("DELETE FROM hr_requests WHERE id=?", req.params.id);
   res.json({ message: "تم الحذف" });
 });
 
 // ── Employee portal login ────────────────────────────────────────────────────────
-router.post("/employee-portal/login", (req, res) => {
+router.post("/employee-portal/login", async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password)
     return void res.status(400).json({ error: "الإيميل وكلمة المرور مطلوبان" });
-  const emp = db.prepare("SELECT * FROM employees WHERE email=? AND password=?")
-    .get(email.trim().toLowerCase(), password) as Record<string,unknown> | undefined;
+  const emp = await queryOne<Record<string, unknown>>(
+    "SELECT * FROM employees WHERE email=? AND password=?",
+    email.trim().toLowerCase(), password,
+  );
   if (!emp) return void res.status(401).json({ error: "الإيميل أو كلمة المرور غير صحيحة" });
   const { password: _pw, ...safe } = emp;
   res.json({ employee: safe });

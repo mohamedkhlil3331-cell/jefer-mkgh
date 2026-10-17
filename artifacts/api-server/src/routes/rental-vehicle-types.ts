@@ -1,40 +1,40 @@
 import { Router } from "express";
-import db from "../lib/db.js";
+import { execute, queryAll } from "../lib/erp-sql.js";
 
 const router = Router();
 
-router.get("/rental-vehicle-types", (_req, res) => {
-  res.json(db.prepare("SELECT * FROM rental_vehicle_types WHERE active=1 ORDER BY sort_order,name").all());
+router.get("/rental-vehicle-types", async (_req, res) => {
+  res.json(await queryAll("SELECT * FROM rental_vehicle_types WHERE active=1 ORDER BY sort_order,name"));
 });
 
-router.get("/rental-vehicle-types/all", (_req, res) => {
-  res.json(db.prepare("SELECT * FROM rental_vehicle_types ORDER BY sort_order,name").all());
+router.get("/rental-vehicle-types/all", async (_req, res) => {
+  res.json(await queryAll("SELECT * FROM rental_vehicle_types ORDER BY sort_order,name"));
 });
 
-router.post("/rental-vehicle-types", (req, res) => {
+router.post("/rental-vehicle-types", async (req, res) => {
   const { name, description, icon, sort_order, rate_per_km } = req.body;
   if (!name) return void res.status(400).json({ error: "الاسم مطلوب" });
   try {
-    const r = db.prepare(
+    const r = await execute(
       "INSERT INTO rental_vehicle_types (name,description,icon,sort_order,rate_per_km) VALUES (?,?,?,?,?)"
-    ).run(name, description||null, icon||"🚛", parseInt(sort_order)||0, parseFloat(rate_per_km)||0);
+    , name, description||null, icon||"🚛", parseInt(sort_order)||0, parseFloat(rate_per_km)||0);
     res.status(201).json({ id: r.lastInsertRowid });
   } catch {
     res.status(400).json({ error: "الاسم مكرر" });
   }
 });
 
-router.put("/rental-vehicle-types/:id", (req, res) => {
+router.put("/rental-vehicle-types/:id", async (req, res) => {
   const { name, description, icon, sort_order, active, rate_per_km } = req.body;
-  db.prepare(`
+  await execute(`
     UPDATE rental_vehicle_types SET name=?,description=?,icon=?,sort_order=?,active=?,rate_per_km=? WHERE id=?
-  `).run(name, description||null, icon||"🚛", parseInt(sort_order)||0,
+  `, name, description||null, icon||"🚛", parseInt(sort_order)||0,
          active===false||active===0?0:1, parseFloat(rate_per_km)||0, req.params.id);
   res.json({ message: "تم التحديث" });
 });
 
-router.delete("/rental-vehicle-types/:id", (req, res) => {
-  db.prepare("DELETE FROM rental_vehicle_types WHERE id=?").run(req.params.id);
+router.delete("/rental-vehicle-types/:id", async (req, res) => {
+  await execute("DELETE FROM rental_vehicle_types WHERE id=?", req.params.id);
   res.json({ message: "تم الحذف" });
 });
 

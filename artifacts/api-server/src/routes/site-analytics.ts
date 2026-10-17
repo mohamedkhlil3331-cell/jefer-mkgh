@@ -3,24 +3,24 @@ import {
   GetSiteAnalyticsSummaryQueryParams,
   TrackSiteAnalyticsPageviewBody,
 } from "@workspace/api-zod";
-import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 import { isSysAdminToken } from "./auth.js";
 
 const router = Router();
 
-function isCurrentAdmin(req: Request): boolean {
+async function isCurrentAdmin(req: Request): Promise<boolean> {
   const authorization = req.headers.authorization?.trim() ?? "";
   const token = authorization.replace(/^Bearer\s+/i, "").trim();
   if (!token) return false;
-  if (isSysAdminToken(token)) return true;
-  const row = db.prepare(`
+  if (await isSysAdminToken(token)) return true;
+  const row = await queryOne(`
     SELECT u.id
     FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token=? AND datetime(s.expires_at)>datetime('now')
       AND u.active=1 AND u.role='admin'
       AND s.rowid=(SELECT MAX(newest.rowid) FROM sessions newest
                    WHERE newest.user_id=u.id AND datetime(newest.expires_at)>datetime('now'))
-  `).get(token);
+  `, token);
   return Boolean(row);
 }
 
@@ -51,7 +51,7 @@ function sourceHost(referrer: string, requestHost: string): string {
   }
 }
 
-router.post("/site-analytics/pageview", (req, res) => {
+router.post("/site-analytics/pageview", async (req, res) => {
   const parsed = TrackSiteAnalyticsPageviewBody.safeParse(req.body);
   if (!parsed.success) return void res.status(400).json({ error: "بيانات الزيارة غير صالحة" });
   if (process.env.HOSTINGER_SITE_ANALYTICS !== "1") {
@@ -61,50 +61,50 @@ router.post("/site-analytics/pageview", (req, res) => {
   const pagePath = sanitizePath(parsed.data.page_path);
   const visitorId = parsed.data.visitor_id;
   const source = sourceHost(parsed.data.referrer ?? "", req.get("host") ?? "");
-  db.prepare(`
+  await execute(`
     INSERT INTO site_analytics_events (visitor_id, page_path, source_host)
     VALUES (?, ?, ?)
-  `).run(visitorId, pagePath, source);
+  `, visitorId, pagePath, source);
   return void res.status(202).json({ accepted: true });
 });
 
-router.get("/site-analytics/summary", (req, res) => {
-  if (!isCurrentAdmin(req)) {
+router.get("/site-analytics/summary", async (req, res) => {
+  if (!await isCurrentAdmin(req)) {
     return void res.status(403).json({ error: "صلاحيات المدير مطلوبة لعرض إحصاءات الزيارات" });
   }
   const query = GetSiteAnalyticsSummaryQueryParams.safeParse(req.query);
   if (!query.success) return void res.status(400).json({ error: "نطاق الأيام يجب أن يكون بين 7 و365 يوماً" });
   const days = query.data.days ?? 30;
   const range = `-${days} days`;
-  const totals = db.prepare(`
+  const totals = await queryOne<{ page_views: number; sessions: number }>(`
     SELECT COUNT(*) AS page_views, COUNT(DISTINCT visitor_id) AS sessions
     FROM site_analytics_events
     WHERE created_at >= datetime('now', ?)
-  `).get(range) as { page_views: number; sessions: number };
-  const daily = db.prepare(`
+  `, range) as { page_views: number; sessions: number };
+  const daily = await queryAll<{ day: string; page_views: number; sessions: number }>(`
     SELECT date(created_at) AS day, COUNT(*) AS page_views,
       COUNT(DISTINCT visitor_id) AS sessions
     FROM site_analytics_events
     WHERE created_at >= datetime('now', ?)
     GROUP BY date(created_at)
     ORDER BY day DESC
-  `).all(range) as Array<{ day: string; page_views: number; sessions: number }>;
-  const topPages = db.prepare(`
+  `, range);
+  const topPages = await queryAll<{ label: string; count: number }>(`
     SELECT page_path AS label, COUNT(*) AS count
     FROM site_analytics_events
     WHERE created_at >= datetime('now', ?)
     GROUP BY page_path
     ORDER BY count DESC, label
     LIMIT 10
-  `).all(range) as Array<{ label: string; count: number }>;
-  const topSources = db.prepare(`
+  `, range);
+  const topSources = await queryAll<{ label: string; count: number }>(`
     SELECT source_host AS label, COUNT(*) AS count
     FROM site_analytics_events
     WHERE created_at >= datetime('now', ?)
     GROUP BY source_host
     ORDER BY count DESC, label
     LIMIT 10
-  `).all(range) as Array<{ label: string; count: number }>;
+  `, range);
   return res.json({
     days,
     page_views: totals.page_views,

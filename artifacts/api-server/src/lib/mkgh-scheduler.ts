@@ -5,25 +5,26 @@
  */
 import nodemailer from "nodemailer";
 import * as XLSX from "xlsx";
-import db from "./db.js";
+import { execute, queryAll, queryOne } from "./erp-sql.js";
 import { logger } from "./logger.js";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function cfg(key: string): string {
+async function cfg(key: string): Promise<string> {
   try {
-    return (db.prepare("SELECT value FROM mkgh_email_settings WHERE key=?").get(key) as any)?.value?.trim() ?? "";
+    return (await queryOne<{ value?: string }>("SELECT value FROM mkgh_email_settings WHERE key=?", key))?.value?.trim() ?? "";
   } catch { return ""; }
 }
 
-function sysCfg(key: string): string {
+async function sysCfg(key: string): Promise<string> {
   try {
-    return (db.prepare("SELECT value FROM system_config WHERE key=?").get(key) as any)?.value?.trim() ?? "";
+    return (await queryOne<{ value?: string }>("SELECT value FROM system_config WHERE key=?", key))?.value?.trim() ?? "";
   } catch { return ""; }
 }
 
 // ── Report builder (mirrors /mkgh/export logic) ───────────────────────────────
-export function buildMkghXlsx(): Buffer {
-  const driverRows = db.prepare(`
+export async function buildMkghXlsx(): Promise<Buffer> {
+  const [driverRows, vehicleRows, monthlyRows, matrixRows] = await Promise.all([
+    queryAll<Record<string, unknown>>(`
     SELECT
       driver_name                                                             AS "السائق",
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)               AS "الإيرادات",
@@ -35,9 +36,9 @@ export function buildMkghXlsx(): Buffer {
     WHERE driver_name IS NOT NULL AND driver_name != ''
     GROUP BY driver_name
     ORDER BY "صافي الربح" DESC
-  `).all() as Record<string, unknown>[];
+    `),
 
-  const vehicleRows = db.prepare(`
+    queryAll<Record<string, unknown>>(`
     SELECT
       cost_center                                                            AS "السيارة",
       MAX(activity)                                                          AS "النشاط",
@@ -52,9 +53,9 @@ export function buildMkghXlsx(): Buffer {
     WHERE cost_center IS NOT NULL AND cost_center != ''
     GROUP BY cost_center
     ORDER BY "صافي الربح" DESC
-  `).all() as Record<string, unknown>[];
+    `),
 
-  const monthlyRows = db.prepare(`
+    queryAll<Record<string, unknown>>(`
     SELECT
       printf('%d-%02d', year, month)                                        AS "الفترة",
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)              AS "الإيرادات",
@@ -64,9 +65,9 @@ export function buildMkghXlsx(): Buffer {
     WHERE year IS NOT NULL AND month IS NOT NULL
     GROUP BY year, month
     ORDER BY year ASC, month ASC
-  `).all() as Record<string, unknown>[];
+    `),
 
-  const matrixRows = db.prepare(`
+    queryAll<Record<string, unknown>>(`
     SELECT
       driver_name                        AS "السائق",
       cost_center                        AS "السيارة",
@@ -79,7 +80,8 @@ export function buildMkghXlsx(): Buffer {
            OR account_name LIKE '%غيار زيت%')
     GROUP BY driver_name, cost_center
     ORDER BY "عدد أوامر الورشة" DESC
-  `).all() as Record<string, unknown>[];
+    `),
+  ]);
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(driverRows.length  ? driverRows  : [{}]), "تصنيف السائقين");
@@ -91,17 +93,15 @@ export function buildMkghXlsx(): Buffer {
 }
 
 // ── Notify all admin users of a send failure ──────────────────────────────────
-function notifyAdmins(title: string, body: string): void {
+async function notifyAdmins(title: string, body: string): Promise<void> {
   try {
-    const admins = db.prepare(
+    const admins = await queryAll<{ phone: string }>(
       "SELECT phone FROM users WHERE role='admin' AND active=1"
-    ).all() as { phone: string }[];
-    const insert = db.prepare(
-      "INSERT INTO notifications (user_phone, title, body, data) VALUES (?,?,?,?)"
     );
-    for (const { phone } of admins) {
-      insert.run(phone, title, body, JSON.stringify({ type: "mkgh_send_failure" }));
-    }
+    await Promise.all(admins.map(({ phone }) => execute(
+      "INSERT INTO notifications (user_phone, title, body, data) VALUES (?,?,?,?)",
+      phone, title, body, JSON.stringify({ type: "mkgh_send_failure" }),
+    )));
   } catch (err) {
     logger.warn({ err }, "[mkgh-scheduler] notifyAdmins failed — non-fatal");
   }
@@ -143,9 +143,8 @@ async function sendFallbackAlert(
 
 // ── Send function ─────────────────────────────────────────────────────────────
 export async function sendMkghReport(triggeredBy = "scheduler"): Promise<{ ok: boolean; error?: string }> {
-  const recipients: string[] = (() => {
-    try { return JSON.parse(cfg("recipients") || "[]"); } catch { return []; }
-  })();
+  let recipients: string[];
+  try { recipients = JSON.parse(await cfg("recipients") || "[]"); } catch { recipients = []; }
 
   const now         = new Date();
   const periodLabel = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -154,35 +153,35 @@ export async function sendMkghReport(triggeredBy = "scheduler"): Promise<{ ok: b
   // Deduped per period_label: only one alert per month regardless of how many
   // hourly retries occur on the send day.
   async function fail(msg: string, gmailUser?: string, gmailPass?: string): Promise<{ ok: boolean; error: string }> {
-    const alreadyNotified = cfg("last_failure_notified") === periodLabel;
+    const alreadyNotified = await cfg("last_failure_notified") === periodLabel;
     if (!alreadyNotified) {
-      notifyAdmins("⚠️ فشل إرسال تقرير MKGH", `${periodLabel}: ${msg}`);
-      const fallbackEmail = cfg("fallback_email");
+      await notifyAdmins("⚠️ فشل إرسال تقرير MKGH", `${periodLabel}: ${msg}`);
+      const fallbackEmail = await cfg("fallback_email");
       if (fallbackEmail && gmailUser && gmailPass) {
         await sendFallbackAlert(gmailUser, gmailPass, fallbackEmail, periodLabel, msg);
       }
       try {
-        db.prepare("UPDATE mkgh_email_settings SET value=? WHERE key='last_failure_notified'").run(periodLabel);
+        await execute("UPDATE mkgh_email_settings SET value=? WHERE key='last_failure_notified'", periodLabel);
       } catch {}
     }
     return { ok: false, error: msg };
   }
 
   if (!recipients.length) {
-    db.prepare(
+    await execute(
       "INSERT INTO mkgh_report_log (period_label, recipients, status, error, triggered_by) VALUES (?,?,?,?,?)"
-    ).run(periodLabel, "", "error", "لا يوجد مستلمون", triggeredBy);
+    , periodLabel, "", "error", "لا يوجد مستلمون", triggeredBy);
     return await fail("لا يوجد مستلمون");
   }
 
-  const gmailUser = sysCfg("gmail_user") || process.env.GMAIL_USER?.trim();
-  const gmailPass = sysCfg("gmail_pass") || process.env.GMAIL_APP_PASSWORD?.trim();
+  const gmailUser = await sysCfg("gmail_user") || process.env.GMAIL_USER?.trim();
+  const gmailPass = await sysCfg("gmail_pass") || process.env.GMAIL_APP_PASSWORD?.trim();
 
   if (!gmailUser || !gmailPass) {
     const msg = "بيانات Gmail غير مُعدَّة (gmail_user / gmail_pass)";
-    db.prepare(
+    await execute(
       "INSERT INTO mkgh_report_log (period_label, recipients, status, error, triggered_by) VALUES (?,?,?,?,?)"
-    ).run(periodLabel, recipients.join(", "), "error", msg, triggeredBy);
+    , periodLabel, recipients.join(", "), "error", msg, triggeredBy);
     // No Gmail creds → can't send fallback email; route through fail() for in-app dedup
     return await fail(msg);
   }
@@ -192,12 +191,12 @@ export async function sendMkghReport(triggeredBy = "scheduler"): Promise<{ ok: b
 
   let xlsxBuf: Buffer;
   try {
-    xlsxBuf = buildMkghXlsx();
+    xlsxBuf = await buildMkghXlsx();
   } catch (err) {
     const msg = `فشل توليد الملف: ${String(err)}`;
-    db.prepare(
+    await execute(
       "INSERT INTO mkgh_report_log (period_label, recipients, status, error, triggered_by) VALUES (?,?,?,?,?)"
-    ).run(periodLabel, recipients.join(", "), "error", msg, triggeredBy);
+    , periodLabel, recipients.join(", "), "error", msg, triggeredBy);
     return await fail(msg, gmailUser, gmailPass);
   }
 
@@ -227,19 +226,19 @@ export async function sendMkghReport(triggeredBy = "scheduler"): Promise<{ ok: b
     });
 
     // Mark this month as sent and clear any previous failure notification state
-    db.prepare("UPDATE mkgh_email_settings SET value=? WHERE key='last_sent'").run(periodLabel);
-    db.prepare("UPDATE mkgh_email_settings SET value='' WHERE key='last_failure_notified'").run();
-    db.prepare(
+    await execute("UPDATE mkgh_email_settings SET value=? WHERE key='last_sent'", periodLabel);
+    await execute("UPDATE mkgh_email_settings SET value='' WHERE key='last_failure_notified'");
+    await execute(
       "INSERT INTO mkgh_report_log (period_label, recipients, status, triggered_by) VALUES (?,?,?,?)"
-    ).run(periodLabel, recipients.join(", "), "ok", triggeredBy);
+    , periodLabel, recipients.join(", "), "ok", triggeredBy);
 
     logger.info({ recipients, periodLabel }, "[mkgh-scheduler] Monthly report sent");
     return { ok: true };
   } catch (err) {
     const msg = String(err);
-    db.prepare(
+    await execute(
       "INSERT INTO mkgh_report_log (period_label, recipients, status, error, triggered_by) VALUES (?,?,?,?,?)"
-    ).run(periodLabel, recipients.join(", "), "error", msg, triggeredBy);
+    , periodLabel, recipients.join(", "), "error", msg, triggeredBy);
     logger.warn({ err }, "[mkgh-scheduler] Failed to send monthly report");
     return await fail(msg, gmailUser, gmailPass);
   }
@@ -251,10 +250,10 @@ export function startMkghScheduler(): void {
 
   async function check() {
     try {
-      if (cfg("enabled") !== "1") return;
+      if (await cfg("enabled") !== "1") return;
 
-      const sendDay  = parseInt(cfg("send_day") || "1", 10);
-      const lastSent = cfg("last_sent"); // "YYYY-MM"
+      const sendDay  = parseInt(await cfg("send_day") || "1", 10);
+      const lastSent = await cfg("last_sent"); // "YYYY-MM"
       const now      = new Date();
       const today    = now.getDate();
       const thisPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -263,7 +262,7 @@ export function startMkghScheduler(): void {
       if (lastSent === thisPeriod) return; // already sent this month
 
       // Check if there is data to report
-      const rowCount = (db.prepare("SELECT COUNT(*) AS c FROM mkgh_transactions").get() as { c: number }).c;
+      const rowCount = (await queryOne<{ c: number }>("SELECT COUNT(*) AS c FROM mkgh_transactions"))?.c || 0;
       if (rowCount === 0) {
         logger.info("[mkgh-scheduler] No data — skipping monthly send");
         return;

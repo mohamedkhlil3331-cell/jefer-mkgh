@@ -11,7 +11,7 @@ import {
   GetCompanyBranchDocumentsResponseItem,
   GetCompanyBranchDocumentFileParams,
 } from "@workspace/api-zod";
-import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 import { ObjectNotFoundError, ObjectStorageService } from "../lib/objectStorage.js";
 import { isSysAdminToken } from "./auth.js";
 
@@ -37,12 +37,12 @@ type BranchDocumentRow = {
   created_at: string;
 };
 
-function branchDocumentAccess(req: Request): "allowed" | "unauthenticated" | "forbidden" {
+async function branchDocumentAccess(req: Request): Promise<"allowed" | "unauthenticated" | "forbidden"> {
   const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (!token || token === "guest") return "unauthenticated";
-  if (isSysAdminToken(token)) return "allowed";
+  if (await isSysAdminToken(token)) return "allowed";
 
-  const session = db.prepare(`
+  const session = await queryOne<{ role: string }>(`
     SELECT u.role
     FROM sessions s
     JOIN users u ON u.id=s.user_id
@@ -52,14 +52,14 @@ function branchDocumentAccess(req: Request): "allowed" | "unauthenticated" | "fo
         FROM sessions current
         WHERE current.user_id=s.user_id
       )
-  `).get(token) as { role: string } | undefined;
+  `, token);
 
   if (!session) return "unauthenticated";
   return session.role === "admin" ? "allowed" : "forbidden";
 }
 
-function requireBranchAdmin(req: Request, res: Response): boolean {
-  const access = branchDocumentAccess(req);
+async function requireBranchAdmin(req: Request, res: Response): Promise<boolean> {
+  const access = await branchDocumentAccess(req);
   if (access === "allowed") return true;
   res.status(access === "unauthenticated" ? 401 : 403).json({
     error: access === "unauthenticated" ? "تسجيل الدخول مطلوب" : "صلاحية مدير النظام مطلوبة",
@@ -67,8 +67,8 @@ function requireBranchAdmin(req: Request, res: Response): boolean {
   return false;
 }
 
-function getActiveBranch(branchId: number) {
-  return db.prepare("SELECT id FROM company_settings WHERE id=? AND active=1").get(branchId);
+async function getActiveBranch(branchId: number) {
+  return queryOne("SELECT id FROM company_settings WHERE id=? AND active=1", branchId);
 }
 
 function formatDocument(row: BranchDocumentRow) {
@@ -85,14 +85,14 @@ function formatDocument(row: BranchDocumentRow) {
 }
 
 router.post("/company-settings/:id/documents/upload-url", async (req: Request, res: Response) => {
-  if (!requireBranchAdmin(req, res)) return;
+  if (!await requireBranchAdmin(req, res)) return;
   const params = CreateCompanyBranchDocumentUploadUrlParams.safeParse(req.params);
   const body = CreateCompanyBranchDocumentUploadUrlBody.safeParse(req.body);
   if (!params.success || !body.success) {
     res.status(400).json({ error: "بيانات الملف غير صحيحة" });
     return;
   }
-  if (!getActiveBranch(params.data.id)) {
+  if (!await getActiveBranch(params.data.id)) {
     res.status(404).json({ error: "الفرع غير موجود" });
     return;
   }
@@ -112,19 +112,19 @@ router.post("/company-settings/:id/documents/upload-url", async (req: Request, r
   }
 });
 
-router.get("/company-settings/:id/documents", (req: Request, res: Response) => {
-  if (!requireBranchAdmin(req, res)) return;
+router.get("/company-settings/:id/documents", async (req: Request, res: Response) => {
+  if (!await requireBranchAdmin(req, res)) return;
   const params = GetCompanyBranchDocumentsParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: "رقم الفرع غير صحيح" });
     return;
   }
-  if (!getActiveBranch(params.data.id)) {
+  if (!await getActiveBranch(params.data.id)) {
     res.status(404).json({ error: "الفرع غير موجود" });
     return;
   }
 
-  const rows = db.prepare(`
+  const rows = await queryAll<BranchDocumentRow>(`
     SELECT id, branch_id, document_type, title, object_path, file_name, content_type, file_size, created_at
     FROM company_branch_documents
     WHERE branch_id=?
@@ -134,12 +134,12 @@ router.get("/company-settings/:id/documents", (req: Request, res: Response) => {
       WHEN 'national_address' THEN 3
       ELSE 4
     END, id
-  `).all(params.data.id) as BranchDocumentRow[];
+  `, params.data.id);
   res.json(GetCompanyBranchDocumentsResponse.parse(rows.map(formatDocument)));
 });
 
 router.post("/company-settings/:id/documents", async (req: Request, res: Response) => {
-  if (!requireBranchAdmin(req, res)) return;
+  if (!await requireBranchAdmin(req, res)) return;
   const params = CreateCompanyBranchDocumentParams.safeParse(req.params);
   const body = CreateCompanyBranchDocumentBody.safeParse(req.body);
   if (!params.success || !body.success) {
@@ -147,7 +147,7 @@ router.post("/company-settings/:id/documents", async (req: Request, res: Respons
     return;
   }
   const branchId = params.data.id;
-  if (!getActiveBranch(branchId)) {
+  if (!await getActiveBranch(branchId)) {
     res.status(404).json({ error: "الفرع غير موجود" });
     return;
   }
@@ -171,7 +171,7 @@ router.post("/company-settings/:id/documents", async (req: Request, res: Respons
     res.status(400).json({ error: "عنوان المستند واسم الملف مطلوبان" });
     return;
   }
-  if (db.prepare("SELECT 1 FROM company_branch_documents WHERE object_path=?").get(input.object_path)) {
+  if (await queryOne("SELECT 1 FROM company_branch_documents WHERE object_path=?", input.object_path)) {
     res.status(409).json({ error: "هذا الملف مرتبط بمرفق آخر" });
     return;
   }
@@ -192,37 +192,45 @@ router.post("/company-settings/:id/documents", async (req: Request, res: Respons
     }
 
     const replaceCurrent = input.document_type !== "custom";
-    const saveDocument = db.transaction(() => {
-      if (replaceCurrent) {
-        const existing = db.prepare(`
+    let savedId: number;
+    if (replaceCurrent) {
+        const existing = await queryOne<{ id: number; object_path: string }>(`
           SELECT id, object_path FROM company_branch_documents
           WHERE branch_id=? AND document_type=?
-        `).get(branchId, input.document_type) as { id: number; object_path: string } | undefined;
+        `, branchId, input.document_type);
 
         if (existing) {
-          db.prepare(`
+          await execute(`
             UPDATE company_branch_documents
             SET title=?, object_path=?, file_name=?, content_type=?, file_size=?, created_at=datetime('now')
             WHERE id=?
-          `).run(title, input.object_path, fileName, actualContentType, actualSize, existing.id);
+          `, title, input.object_path, fileName, actualContentType, actualSize, existing.id);
           // Keep the old private object: a stored SQLite backup may still reference its path.
-          return { id: existing.id };
+          savedId = existing.id;
+        } else {
+          const inserted = await execute(`
+            INSERT INTO company_branch_documents
+              (branch_id, document_type, title, object_path, file_name, content_type, file_size)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `, branchId, input.document_type, title, input.object_path, fileName, actualContentType, actualSize);
+          savedId = Number(inserted.lastInsertRowid);
         }
-      }
-
-      const inserted = db.prepare(`
+    } else {
+      const inserted = await execute(`
         INSERT INTO company_branch_documents
           (branch_id, document_type, title, object_path, file_name, content_type, file_size)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(branchId, input.document_type, title, input.object_path, fileName, actualContentType, actualSize);
-      return { id: Number(inserted.lastInsertRowid) };
-    });
-
-    const saved = saveDocument();
-    const row = db.prepare(`
+      `, branchId, input.document_type, title, input.object_path, fileName, actualContentType, actualSize);
+      savedId = Number(inserted.lastInsertRowid);
+    }
+    const row = await queryOne<BranchDocumentRow>(`
       SELECT id, branch_id, document_type, title, object_path, file_name, content_type, file_size, created_at
       FROM company_branch_documents WHERE id=?
-    `).get(saved.id) as BranchDocumentRow;
+    `, savedId);
+    if (!row) {
+      res.status(500).json({ error: "تعذر قراءة المرفق بعد حفظه" });
+      return;
+    }
     res.status(201).json(formatDocument(row));
   } catch (error) {
     if (error instanceof ObjectNotFoundError) {
@@ -235,21 +243,21 @@ router.post("/company-settings/:id/documents", async (req: Request, res: Respons
 });
 
 router.get("/company-settings/:id/documents/:documentId/file", async (req: Request, res: Response) => {
-  if (!requireBranchAdmin(req, res)) return;
+  if (!await requireBranchAdmin(req, res)) return;
   const params = GetCompanyBranchDocumentFileParams.safeParse(req.params);
   if (!params.success) {
     res.status(400).json({ error: "بيانات المرفق غير صحيحة" });
     return;
   }
-  const row = db.prepare(`
-    SELECT object_path, file_name, content_type
-    FROM company_branch_documents
-    WHERE id=? AND branch_id=?
-  `).get(params.data.documentId, params.data.id) as {
+  const row = await queryOne<{
     object_path: string;
     file_name: string;
     content_type: string;
-  } | undefined;
+  }>(`
+    SELECT object_path, file_name, content_type
+    FROM company_branch_documents
+    WHERE id=? AND branch_id=?
+  `, params.data.documentId, params.data.id);
   if (!row) {
     res.status(404).json({ error: "مرفق الفرع غير موجود" });
     return;

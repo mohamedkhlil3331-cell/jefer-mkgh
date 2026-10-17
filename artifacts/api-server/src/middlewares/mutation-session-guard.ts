@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import db from "../lib/db.js";
+import { queryOne } from "../lib/erp-sql.js";
 import { isBackupWriterFenced, isFilesystemStorageMode } from "../lib/db-sync.js";
 import { acquireActorLock } from "../lib/session-control.js";
 import { isSpecialSessionValid } from "../lib/special-sessions.js";
@@ -18,17 +18,17 @@ const PUBLIC_MUTATION_PATHS = new Set([
 
 type CurrentSession = { user_id: number };
 
-function actorFor(authorization: string): string | null {
+async function actorFor(authorization: string): Promise<string | null> {
   if (authorization.startsWith("DevAuth ")) {
     const token = authorization.slice(8).trim();
-    return isSpecialSessionValid("developer-admin", token) ? "developer-admin" : null;
+    return await isSpecialSessionValid("developer-admin", token) ? "developer-admin" : null;
   }
 
   const token = authorization.replace(/^Bearer\s+/i, "").trim();
   if (!token || token === "guest") return null;
-  if (isSpecialSessionValid("system-admin", token)) return "system-admin";
+  if (await isSpecialSessionValid("system-admin", token)) return "system-admin";
 
-  const session = db.prepare(`
+  const session = await queryOne<CurrentSession>(`
     SELECT s.user_id
     FROM sessions s
     WHERE s.token=?
@@ -39,7 +39,7 @@ function actorFor(authorization: string): string | null {
         WHERE current.user_id=s.user_id
           AND datetime(current.expires_at) > datetime('now')
       )
-  `).get(token) as CurrentSession | undefined;
+  `, token);
   return session ? `user:${session.user_id}` : null;
 }
 
@@ -73,7 +73,7 @@ export async function mutationSessionGuard(req: Request, res: Response, next: Ne
     });
   }
 
-  const actorKey = actorFor(authorization);
+  const actorKey = await actorFor(authorization);
   if (!actorKey) {
     return void res.status(401).json({
       code: "SESSION_REPLACED",
@@ -82,7 +82,7 @@ export async function mutationSessionGuard(req: Request, res: Response, next: Ne
   }
 
   const release = await acquireActorLock(actorKey);
-  if (actorFor(authorization) !== actorKey) {
+  if (await actorFor(authorization) !== actorKey) {
     release();
     return void res.status(401).json({
       code: "SESSION_REPLACED",

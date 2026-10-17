@@ -26,3 +26,33 @@ R2 production backups at `db-backups/erp.db` can be overwritten, and this accoun
 **Why:** The D1 copy lagged behind the R2 backup while verification ran: a later snapshot added audit rows and updated existing cells. Object version listing could not retrieve the earlier object, so the staged D1 copy had to be reconciled to a newer snapshot with an audit log before exact verification.
 
 **How to apply:** Treat a row-count match as insufficient. Verify all current D1 rows and values, refuse deletion/non-append drift, retain before/after values for approved changes, and repeat exact read-back against the captured R2 file before marking the D1 copy complete.
+
+Cloudflare D1 HTTP API writes require the API token's `D1:Edit` permission; `D1:Read` plus edit access to another product is no longer sufficient. Migrations that insert data in multiple remote requests can also leave D1 ahead of its table-level progress manifest when a later request fails. A failed command does not prove that no rows were written; resume only after exact rowid/value comparison against a fixed source snapshot, and adopt only verified append-prefix progress.
+
+**Why:** Cloudflare fixed a D1 HTTP API permissions bug, and repeated 403 responses can leave earlier migration requests committed while the recorded table progress lags behind.
+
+**How to apply:** Ensure the existing Cloudflare connection has D1 write permission before migrating. Preserve a failed source snapshot, compare all existing source-backed D1 rows, reject count decreases or non-append differences, and never replay from an old manifest count without verification.
+
+Cloudflare D1 Time Travel provides automatic bookmarks for backups, but restoring to a bookmark cancels in-flight queries and transactions. SQL export/import also makes the target D1 unavailable to serve queries. The app-side Cloudflare connector rejected D1 export POSTs even though Time Travel bookmark/restore calls worked. The user does not accept interruption on the active primary.
+
+**Why:** Cloudflare documents query cancellation during Time Travel restore; live tests succeeded when restore targeted only a separate writable shadow and the R2-backed mutation journal caught it up.
+
+**How to apply:** Capture a bookmark under the replica replay lock, restore only the writable shadow, clear the restored lock, replay ordered R2-journaled operations, then require exact parity. Do not claim the archive is a portable SQL backup, and never restore the active primary as part of a zero-downtime operation.
+
+Keep the production D1 startup gate closed until every route and schema check passes and source-to-target data parity is verified. Development stays on its separate SQLite database and backup.
+
+**Why:** The user approved building and testing the D1 path without switching the published app; the existing development database and production SQLite rollback source must remain intact.
+
+**How to apply:** Keep D1 IDs and feature flags test-only until all API routes pass against migrated test data and exact parity checks; never flip the published backend as an automatic consequence of a successful synthetic integration test.
+
+New D1 databases may contain a Cloudflare-managed `_cf_KV` table before application tables are created.
+
+**Why:** Live tests against newly created empty D1 databases showed `_cf_KV` even though no user or application data had been added.
+
+**How to apply:** When asserting that an isolated test D1 database is empty, ignore only `_cf_KV`; do not broadly ignore other tables.
+
+Some `dev_audit_log.path` values can trigger HTTP 403 when sent as ordinary D1 query parameters through the Cloudflare connector. A UTF-8 hex literal cast back to TEXT preserved exact values and passed read-back verification.
+
+**Why:** The proxy rejected selected path strings in the request payload even though the same query shape and other fields succeeded.
+
+**How to apply:** Isolate the failing column with a duplicate-key no-op probe, encode only the confirmed field as a safe hex literal, then require full exact-value verification; never drop or rewrite the source data.

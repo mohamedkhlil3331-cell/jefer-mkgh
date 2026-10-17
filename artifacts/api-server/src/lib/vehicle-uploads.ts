@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import db, { UPLOADS_PATH } from "./db.js";
+import { queryAll } from "./erp-sql.js";
+import { UPLOADS_PATH } from "./upload-paths.js";
 import { makeStorage } from "./db-sync.js";
 import { ObjectNotFoundError, ObjectStorageService } from "./objectStorage.js";
 
@@ -111,15 +112,15 @@ function quoteIdentifier(value: string): string {
   return `"${value.replace(/"/g, "\"\"")}"`;
 }
 
-export function countVehicleAttachmentReferences(identity: VehicleAttachmentIdentity): number {
-  const tables = db.prepare(
+export async function countVehicleAttachmentReferences(identity: VehicleAttachmentIdentity): Promise<number> {
+  const tables = await queryAll<{ name: string }>(
     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-  ).all() as { name: string }[];
+  );
   let references = 0;
 
   for (const { name: tableName } of tables) {
     const table = quoteIdentifier(tableName);
-    const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    const columns = await queryAll<{ name: string }>("SELECT name FROM pragma_table_info(?)", tableName);
 
     for (const { name: columnName } of columns) {
       if (
@@ -128,13 +129,13 @@ export function countVehicleAttachmentReferences(identity: VehicleAttachmentIden
       ) continue;
 
       const column = quoteIdentifier(columnName);
-      const rows = db.prepare(`
+      const rows = await queryAll<{ value: unknown }>(`
         SELECT ${column} AS value
         FROM ${table}
         WHERE ${column} LIKE ?
            OR ${column} LIKE ?
            OR ${column} LIKE ?
-      `).all("%/api/uploads/%", "%/objects/%", "https://storage.googleapis.com/%") as { value: unknown }[];
+      `, "%/api/uploads/%", "%/objects/%", "https://storage.googleapis.com/%");
 
       for (const row of rows) {
         if (getVehicleAttachmentIdentity(row.value)?.key === identity.key) references += 1;

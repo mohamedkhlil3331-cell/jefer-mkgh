@@ -1,19 +1,19 @@
 import { Router, type Request, type Response } from "express";
 import { GetBranchDashboardQueryParams, GetBranchDashboardResponse } from "@workspace/api-zod";
-import db from "../lib/db.js";
+import { queryAll, queryOne } from "../lib/erp-sql.js";
 import { isSysAdminToken } from "./auth.js";
 
 const router = Router();
 
-function requireDashboardAccess(req: Request, res: Response, branchDetails: boolean): boolean {
+async function requireDashboardAccess(req: Request, res: Response, branchDetails: boolean): Promise<boolean> {
   const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (!token || token === "guest") {
     res.status(401).json({ error: "تسجيل الدخول مطلوب" });
     return false;
   }
-  if (isSysAdminToken(token)) return true;
+  if (await isSysAdminToken(token)) return true;
 
-  const session = db.prepare(
+  const session = await queryOne<{ role: string; permissions: string | null }>(
     `SELECT u.role, u.permissions
      FROM sessions s
      JOIN users u ON u.id=s.user_id
@@ -24,7 +24,7 @@ function requireDashboardAccess(req: Request, res: Response, branchDetails: bool
          FROM sessions current
          WHERE current.user_id=s.user_id
        )`
-  ).get(token) as { role: string; permissions: string | null } | undefined;
+   , token);
 
   if (!session) {
     res.status(401).json({ error: "الجلسة منتهية أو غير صالحة" });
@@ -55,7 +55,7 @@ function requireDashboardAccess(req: Request, res: Response, branchDetails: bool
   return true;
 }
 
-function branchLinkedMetrics(branchNames: string[]) {
+async function branchLinkedMetrics(branchNames: string[]) {
   const names = [...new Set(branchNames.map(name => name.trim().toLocaleLowerCase()).filter(Boolean))];
   const zero = {
     vehicles: { total: 0, available: 0, busy: 0, maintenance: 0, broken: 0 },
@@ -68,7 +68,7 @@ function branchLinkedMetrics(branchNames: string[]) {
   const placeholders = names.map(() => "?").join(", ");
   const branchFilter = `LOWER(TRIM(COALESCE(branch,''))) IN (${placeholders})`;
 
-  const vehicles = db.prepare(
+  const vehicles = await queryOne<Record<string, number | null>>(
     `SELECT COUNT(*) AS total,
        SUM(CASE WHEN LOWER(TRIM(COALESCE(status,'')))='available' THEN 1 ELSE 0 END) AS available,
        SUM(CASE WHEN LOWER(TRIM(COALESCE(status,'')))='busy' THEN 1 ELSE 0 END) AS busy,
@@ -76,15 +76,15 @@ function branchLinkedMetrics(branchNames: string[]) {
        SUM(CASE WHEN LOWER(TRIM(COALESCE(status,'')))='broken' THEN 1 ELSE 0 END) AS broken
      FROM fleet_vehicles
      WHERE ${branchFilter}`
-  ).get(...names) as Record<string, number | null>;
+   , ...names) as Record<string, number | null>;
 
-  const maintenance = db.prepare(
+  const maintenance = await queryOne<{ count: number; amount: number }>(
     `SELECT COUNT(*) AS count, COALESCE(SUM(amount), 0) AS amount
      FROM maintenance_logs
      WHERE ${branchFilter}`
-  ).get(...names) as { count: number; amount: number };
+   , ...names) as { count: number; amount: number };
 
-  const purchaseInvoices = db.prepare(
+  const purchaseInvoices = await queryOne<{ count: number; amount: number }>(
     `SELECT COUNT(DISTINCT CASE
          WHEN TRIM(COALESCE(invoice_number,'')) <> '' THEN TRIM(invoice_number)
          ELSE 'purchase-invoice:' || CAST(id AS TEXT)
@@ -92,13 +92,13 @@ function branchLinkedMetrics(branchNames: string[]) {
        COALESCE(SUM(price_after_vat), 0) AS amount
      FROM purchase_invoices
      WHERE ${branchFilter}`
-  ).get(...names) as { count: number; amount: number };
+   , ...names) as { count: number; amount: number };
 
-  const reimbursementClaims = db.prepare(
+  const reimbursementClaims = await queryOne<{ count: number; amount: number }>(
     `SELECT COUNT(*) AS count, COALESCE(SUM(total_after_vat), 0) AS amount
      FROM supplier_reimbursement_claims
      WHERE ${branchFilter} AND COALESCE(is_cancelled, 0)=0`
-  ).get(...names) as { count: number; amount: number };
+   , ...names) as { count: number; amount: number };
 
   const roundedAmount = (value: number | null | undefined) =>
     Number((Number(value) || 0).toFixed(2));
@@ -126,13 +126,13 @@ function branchLinkedMetrics(branchNames: string[]) {
   };
 }
 
-router.get("/stats/dashboard", (_req, res) => {
-  const orders = db.prepare("SELECT * FROM workflow_orders ORDER BY created_at DESC").all() as Record<string, unknown>[];
-  const vehicles = db.prepare("SELECT * FROM fleet_vehicles").all() as Record<string, unknown>[];
-  const employees = (db.prepare("SELECT COUNT(*) as c FROM employees").get() as {c:number}).c;
-  const customers = (db.prepare("SELECT COUNT(*) as c FROM users WHERE role='customer' AND active=1").get() as {c:number}).c;
-  const notifications = (db.prepare("SELECT COUNT(*) as c FROM notifications WHERE read=0").get() as {c:number}).c;
-  const pendingTransfers = (db.prepare("SELECT COUNT(*) as c FROM customer_transfers WHERE confirmed=0").get() as {c:number}).c;
+router.get("/stats/dashboard", async (_req, res) => {
+  const orders = await queryAll<Record<string, unknown>>("SELECT * FROM workflow_orders ORDER BY created_at DESC");
+  const vehicles = await queryAll<Record<string, unknown>>("SELECT * FROM fleet_vehicles");
+  const employees = (await queryOne<{c:number}>("SELECT COUNT(*) as c FROM employees"))?.c ?? 0;
+  const customers = (await queryOne<{c:number}>("SELECT COUNT(*) as c FROM users WHERE role='customer' AND active=1"))?.c ?? 0;
+  const notifications = (await queryOne<{c:number}>("SELECT COUNT(*) as c FROM notifications WHERE read=0"))?.c ?? 0;
+  const pendingTransfers = (await queryOne<{c:number}>("SELECT COUNT(*) as c FROM customer_transfers WHERE confirmed=0"))?.c ?? 0;
 
   const byStage = orders.reduce<Record<string, number>>((acc, o) => {
     const s = o.stage as string;
@@ -212,7 +212,7 @@ router.get("/stats/dashboard", (_req, res) => {
   });
 });
 
-router.get("/branch-dashboard", (req, res) => {
+router.get("/branch-dashboard", async (req, res) => {
   const parsedQuery = GetBranchDashboardQueryParams.safeParse(req.query);
   if (
     !parsedQuery.success ||
@@ -223,11 +223,11 @@ router.get("/branch-dashboard", (req, res) => {
   }
   const requestedBranchId = parsedQuery.data.branchId;
 
-  if (!requireDashboardAccess(req, res, requestedBranchId !== undefined)) return;
+  if (!await requireDashboardAccess(req, res, requestedBranchId !== undefined)) return;
 
-  const activeBranches = db.prepare(
+  const activeBranches = await queryAll<{ id: number; entity_name: string }>(
     "SELECT id, entity_name FROM company_settings WHERE active=1 AND TRIM(COALESCE(entity_name,''))<>'' ORDER BY id"
-  ).all() as { id: number; entity_name: string }[];
+  );
 
   let branch: { id: number; entity_name: string } | null = null;
   let branchNames = activeBranches.map(item => item.entity_name);
@@ -240,7 +240,7 @@ router.get("/branch-dashboard", (req, res) => {
     branchNames = [branch.entity_name];
   }
 
-  const metrics = branchLinkedMetrics(branchNames);
+  const metrics = await branchLinkedMetrics(branchNames);
   const response = GetBranchDashboardResponse.parse({
     scope: branch ? "branch" : "all",
     branch,

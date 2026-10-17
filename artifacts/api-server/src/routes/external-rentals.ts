@@ -1,17 +1,18 @@
 import { Router } from "express";
-import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 
 const router = Router();
 
 // ── GET customer's previously used locations (for smart presets) ──────────────
-router.get("/external-rentals/locations", (req, res) => {
+router.get("/external-rentals/locations", async (req, res) => {
   const { phone } = req.query as Record<string, string>;
   if (!phone) return void res.status(400).json({ error: "phone required" });
 
   const shorten = (addr: string) =>
     addr.split(",").slice(0, 2).join(",").trim().slice(0, 50);
 
-  const pickups = db.prepare(`
+  const [pickups, destinations] = await Promise.all([
+    queryAll<{ pickup_location: string; pickup_lat: number; pickup_lng: number }>(`
     SELECT pickup_location, pickup_lat, pickup_lng, MAX(created_at) AS last_used
     FROM external_rentals
     WHERE customer_phone = ?
@@ -20,9 +21,9 @@ router.get("/external-rentals/locations", (req, res) => {
     GROUP BY pickup_location
     ORDER BY last_used DESC
     LIMIT 8
-  `).all(phone) as { pickup_location: string; pickup_lat: number; pickup_lng: number }[];
+  `, phone),
 
-  const destinations = db.prepare(`
+    queryAll<{ destination_location: string; destination_lat: number; destination_lng: number }>(`
     SELECT destination_location, destination_lat, destination_lng, MAX(created_at) AS last_used
     FROM external_rentals
     WHERE customer_phone = ?
@@ -31,7 +32,8 @@ router.get("/external-rentals/locations", (req, res) => {
     GROUP BY destination_location
     ORDER BY last_used DESC
     LIMIT 8
-  `).all(phone) as { destination_location: string; destination_lat: number; destination_lng: number }[];
+  `, phone),
+  ]);
 
   res.json({
     pickup: pickups.map(r => ({
@@ -48,7 +50,7 @@ router.get("/external-rentals/locations", (req, res) => {
 });
 
 // ── GET rentals ───────────────────────────────────────────────────────────────
-router.get("/external-rentals", (req, res) => {
+router.get("/external-rentals", async (req, res) => {
   const { phone, role } = req.query as Record<string, string>;
   let sql = "SELECT * FROM external_rentals WHERE 1=1";
   const params: string[] = [];
@@ -56,11 +58,11 @@ router.get("/external-rentals", (req, res) => {
     sql += " AND customer_phone = ?"; params.push(phone);
   }
   sql += " ORDER BY created_at DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
 // ── POST create rental ────────────────────────────────────────────────────────
-router.post("/external-rentals", (req, res) => {
+router.post("/external-rentals", async (req, res) => {
   const {
     customer_phone, customer_name, vehicle_type, start_date,
     duration_type, duration_days, payment_method, notes,
@@ -71,7 +73,7 @@ router.post("/external-rentals", (req, res) => {
   if (!customer_phone || !vehicle_type)
     return void res.status(400).json({ error: "البيانات غير مكتملة" });
 
-  const result = db.prepare(`
+  const result = await execute(`
     INSERT INTO external_rentals
       (customer_phone, customer_name, vehicle_type, start_date,
        duration_type, duration_days, payment_method, notes,
@@ -79,7 +81,7 @@ router.post("/external-rentals", (req, res) => {
        destination_location, destination_lat, destination_lng,
        lease_proposal, status, payment_status)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'pending',?)
-  `).run(
+  `,
     customer_phone, customer_name || null, vehicle_type, start_date,
     duration_type || "محددة", parseInt(duration_days) || 1,
     payment_method || "transfer", notes || null,
@@ -94,10 +96,11 @@ router.post("/external-rentals", (req, res) => {
   );
 
   try {
-    const supervisors = db.prepare("SELECT phone FROM users WHERE role='supervisor' AND active=1").all() as {phone:string}[];
+    const supervisors = await queryAll<{ phone: string }>("SELECT phone FROM users WHERE role='supervisor' AND active=1");
     supervisors.forEach(s =>
-      db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)")
-        .run(s.phone, "طلب تأجير جديد", `طلب تأجير ${vehicle_type} من ${customer_name || customer_phone}`)
+      void execute("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+        s.phone, "طلب تأجير جديد", `طلب تأجير ${vehicle_type} من ${customer_name || customer_phone}`)
+        .catch(() => {})
     );
   } catch { /* ignore */ }
 
@@ -105,7 +108,7 @@ router.post("/external-rentals", (req, res) => {
 });
 
 // ── Supervisor/Admin: assign vehicle ─────────────────────────────────────────
-router.put("/external-rentals/:id/assign", (req, res) => {
+router.put("/external-rentals/:id/assign", async (req, res) => {
   const { assigned_vehicle, assigned_driver, assigned_by, total_price,
           assigned_vehicle_plate, assigned_driver_name,
           driver_bonus, driver_phone } = req.body;
@@ -113,22 +116,23 @@ router.put("/external-rentals/:id/assign", (req, res) => {
   const driver     = assigned_driver || assigned_driver_name || null;
   const bonus      = parseFloat(driver_bonus) || 0;
   const driverPhone = driver_phone || null;
-  db.prepare(`
+  await execute(`
     UPDATE external_rentals
     SET assigned_vehicle=?, assigned_driver=?, assigned_by=?,
         assigned_at=datetime('now'), status='confirmed', total_price=?,
         driver_bonus=?, driver_phone=?
     WHERE id=?
-  `).run(plate, driver, assigned_by || null,
-         parseFloat(total_price) || 0, bonus, driverPhone, req.params.id);
+  `, plate, driver, assigned_by || null,
+  parseFloat(total_price) || 0, bonus, driverPhone, req.params.id);
 
   try {
-    const rental = db.prepare("SELECT customer_phone,vehicle_type FROM external_rentals WHERE id=?")
-      .get(req.params.id) as { customer_phone: string; vehicle_type: string } | undefined;
+    const rental = await queryOne<{ customer_phone: string; vehicle_type: string }>(
+      "SELECT customer_phone,vehicle_type FROM external_rentals WHERE id=?",
+      req.params.id,
+    );
     if (rental) {
-      db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)")
-        .run(rental.customer_phone, "تم تأكيد التأجير",
-          `تم تعيين ${plate || "مركبة"} لطلب التأجير الخاص بك`);
+      await execute("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+        rental.customer_phone, "تم تأكيد التأجير", `تم تعيين ${plate || "مركبة"} لطلب التأجير الخاص بك`);
     }
   } catch { /* ignore */ }
 
@@ -136,50 +140,51 @@ router.put("/external-rentals/:id/assign", (req, res) => {
 });
 
 // ── Driver: get their assigned rentals ────────────────────────────────────────
-router.get("/external-rentals/driver", (req, res) => {
+router.get("/external-rentals/driver", async (req, res) => {
   const { phone } = req.query as Record<string, string>;
   if (!phone) return void res.status(400).json({ error: "phone required" });
-  const rows = db.prepare(`
+  const rows = await queryAll(`
     SELECT * FROM external_rentals
     WHERE driver_phone = ? AND status IN ('confirmed','active')
     ORDER BY assigned_at DESC
-  `).all(phone);
+  `, phone);
   res.json(rows);
 });
 
 // ── Driver: update stage (حمل / وصل / نزل) ───────────────────────────────────
-router.put("/external-rentals/:id/driver-stage", (req, res) => {
+router.put("/external-rentals/:id/driver-stage", async (req, res) => {
   const { stage } = req.body;
   const allowed = ["loaded", "arrived", "delivered"];
   if (!allowed.includes(stage))
     return void res.status(400).json({ error: "مرحلة غير صالحة" });
-  db.prepare("UPDATE external_rentals SET driver_stage=?, driver_stage_at=datetime('now') WHERE id=?")
-    .run(stage, req.params.id);
+  await execute("UPDATE external_rentals SET driver_stage=?, driver_stage_at=datetime('now') WHERE id=?", stage, req.params.id);
   // Notify supervisor
   try {
-    const rental = db.prepare("SELECT customer_name, vehicle_type, assigned_by FROM external_rentals WHERE id=?")
-      .get(req.params.id) as { customer_name: string; vehicle_type: string; assigned_by: string } | undefined;
+    const rental = await queryOne<{ customer_name: string; vehicle_type: string; assigned_by: string }>(
+      "SELECT customer_name, vehicle_type, assigned_by FROM external_rentals WHERE id=?",
+      req.params.id,
+    );
     if (rental?.assigned_by) {
       const stageLabel: Record<string, string> = { loaded: "تحميل", arrived: "وصول للموقع", delivered: "تسليم" };
-      db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)")
-        .run(rental.assigned_by, `تحديث التأجير: ${stageLabel[stage]}`,
-          `${rental.customer_name || "عميل"} - ${rental.vehicle_type}`);
+      await execute("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+        rental.assigned_by, `تحديث التأجير: ${stageLabel[stage]}`,
+        `${rental.customer_name || "عميل"} - ${rental.vehicle_type}`);
     }
   } catch { /* ignore */ }
   res.json({ message: "تم تحديث المرحلة" });
 });
 
 // ── Update status ─────────────────────────────────────────────────────────────
-router.put("/external-rentals/:id/status", (req, res) => {
+router.put("/external-rentals/:id/status", async (req, res) => {
   const { status } = req.body;
-  db.prepare("UPDATE external_rentals SET status=? WHERE id=?").run(status, req.params.id);
+  await execute("UPDATE external_rentals SET status=? WHERE id=?", status, req.params.id);
   res.json({ message: "تم تحديث الحالة" });
 });
 
 // ── Edit rental fields ────────────────────────────────────────────────────────
-router.put("/external-rentals/:id", (req, res) => {
+router.put("/external-rentals/:id", async (req, res) => {
   const { vehicle_type, start_date, duration_days, notes, total_price, pickup_location, destination } = req.body;
-  db.prepare(`
+  await execute(`
     UPDATE external_rentals
     SET vehicle_type    = COALESCE(?, vehicle_type),
         start_date      = COALESCE(?, start_date),
@@ -190,7 +195,7 @@ router.put("/external-rentals/:id", (req, res) => {
         pickup_location = COALESCE(?, pickup_location),
         destination     = COALESCE(?, destination)
     WHERE id = ?
-  `).run(
+  `,
     vehicle_type  || null,
     start_date    || null,
     start_date    || null,
@@ -205,12 +210,12 @@ router.put("/external-rentals/:id", (req, res) => {
 });
 
 // ── Cancel rental (customer) / Hard-delete (supervisor) ───────────────────────
-router.delete("/external-rentals/:id", (req, res) => {
+router.delete("/external-rentals/:id", async (req, res) => {
   if (req.query.hard === "true") {
-    db.prepare("DELETE FROM external_rentals WHERE id=?").run(req.params.id);
+    await execute("DELETE FROM external_rentals WHERE id=?", req.params.id);
     return void res.json({ message: "تم الحذف نهائياً" });
   }
-  db.prepare("UPDATE external_rentals SET status='cancelled' WHERE id=?").run(req.params.id);
+  await execute("UPDATE external_rentals SET status='cancelled' WHERE id=?", req.params.id);
   res.json({ message: "تم إلغاء الطلب" });
 });
 

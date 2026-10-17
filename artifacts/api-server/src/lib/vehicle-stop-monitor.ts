@@ -1,4 +1,4 @@
-import db from "./db.js";
+import { execute, queryAll, queryOne } from "./erp-sql.js";
 import { logger } from "./logger.js";
 
 const CHECK_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
@@ -79,8 +79,9 @@ async function fetchWialonSpeeds(): Promise<Map<string, GpsLocation>> {
 }
 
 async function checkVehicleStops(): Promise<void> {
-  const settings = db.prepare("SELECT stopped_alert_minutes FROM supervisor_settings WHERE id=1").get() as
-    { stopped_alert_minutes: number | null } | undefined;
+  const settings = await queryOne<{ stopped_alert_minutes: number | null }>(
+    "SELECT stopped_alert_minutes FROM supervisor_settings WHERE id=1",
+  );
   const thresholdMinutes = settings?.stopped_alert_minutes ?? 30;
 
   type ActiveOrder = {
@@ -92,14 +93,14 @@ async function checkVehicleStops(): Promise<void> {
     vehicle_stop_notified_at: string | null;
   };
 
-  const activeOrders = db.prepare(`
+  const activeOrders = await queryAll<ActiveOrder>(`
     SELECT wo.id, wo.order_number, wo.vehicle_plate,
            fv.gps_device_id,
            wo.vehicle_stopped_since, wo.vehicle_stop_notified_at
     FROM workflow_orders wo
     LEFT JOIN fleet_vehicles fv ON fv.plate_number = wo.vehicle_plate
     WHERE wo.stage = 'loaded'
-  `).all() as ActiveOrder[];
+  `);
 
   if (activeOrders.length === 0) return;
 
@@ -111,13 +112,13 @@ async function checkVehicleStops(): Promise<void> {
   }
 
   const now = new Date();
-  const supervisors = db.prepare("SELECT phone FROM users WHERE role='supervisor' AND active=1").all() as { phone: string }[];
+  const supervisors = await queryAll<{ phone: string }>(
+    "SELECT phone FROM users WHERE role='supervisor' AND active=1",
+  );
 
-  const notify = (phone: string, title: string, body: string, data?: string) => {
-    try {
-      db.prepare("INSERT INTO notifications (user_phone,title,body,data) VALUES (?,?,?,?)").run(phone, title, body, data || null);
-    } catch { /* ignore */ }
-  };
+  const notify = (phone: string, title: string, body: string, data?: string) =>
+    execute("INSERT INTO notifications (user_phone,title,body,data) VALUES (?,?,?,?)",
+      phone, title, body, data || null).catch(() => {});
 
   for (const order of activeOrders) {
     if (!order.gps_device_id) continue;
@@ -129,17 +130,17 @@ async function checkVehicleStops(): Promise<void> {
 
     if (!isStopped) {
       if (order.vehicle_stopped_since || order.vehicle_stop_notified_at) {
-        db.prepare(`
+        await execute(`
           UPDATE workflow_orders
           SET vehicle_stopped_since=NULL, vehicle_stop_notified_at=NULL
           WHERE id=?
-        `).run(order.id);
+        `, order.id);
       }
       continue;
     }
 
     if (!order.vehicle_stopped_since) {
-      db.prepare("UPDATE workflow_orders SET vehicle_stopped_since=? WHERE id=?").run(now.toISOString(), order.id);
+      await execute("UPDATE workflow_orders SET vehicle_stopped_since=? WHERE id=?", now.toISOString(), order.id);
       continue;
     }
 
@@ -161,10 +162,10 @@ async function checkVehicleStops(): Promise<void> {
     const data = JSON.stringify({ order_id: order.id, order_number: order.order_number, vehicle_plate: plate });
 
     for (const sup of supervisors) {
-      notify(sup.phone, title, body, data);
+      await notify(sup.phone, title, body, data);
     }
 
-    db.prepare("UPDATE workflow_orders SET vehicle_stop_notified_at=? WHERE id=?").run(now.toISOString(), order.id);
+    await execute("UPDATE workflow_orders SET vehicle_stop_notified_at=? WHERE id=?", now.toISOString(), order.id);
 
     logger.info(
       { order_id: order.id, order_number: order.order_number, vehicle_plate: plate, stopped_minutes: stoppedForText },

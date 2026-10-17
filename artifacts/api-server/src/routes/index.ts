@@ -45,8 +45,8 @@ import loadingOrdersRouter from "./loading-orders.js";
 import bulkerVehiclesRouter from "./bulker-vehicles.js";
 import unloadLocationsRouter from "./unload-locations.js";
 import storageRouter from "./storage.js";
-import systemBackupRouter from "./system-backup.js";
 import { isSystemRestoreActive, trackApiRequest } from "../lib/system-restore-state.js";
+import { isD1DatabaseMode } from "../lib/database-mode.js";
 import routingDispatchRouter from "./routing-dispatch.js";
 import excelImportRouter from "./excel-import.js";
 import adminRouter from "./admin.js";
@@ -59,6 +59,10 @@ import rentalAccountsRouter from "./rental-accounts.js";
 import rentalTripPortalRouter from "./rental-trip-portal.js";
 import chatRouter from "./chat.js";
 import siteAnalyticsRouter from "./site-analytics.js";
+
+const systemBackupRouter = isD1DatabaseMode()
+  ? (await import("./system-backup-d1.js")).default
+  : (await import("./system-backup.js")).default;
 
 const router: IRouter = Router();
 

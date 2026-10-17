@@ -1,5 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
-import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 import { ObjectStorageService } from "../lib/objectStorage.js";
 
 const router = Router();
@@ -11,11 +11,11 @@ const receiptPathVariants = (path: string) => [path, `/api/storage${path}`, `/ap
 type PortalUser = { id: number; name: string };
 type PortalCustomer = { id: number; name: string; phone: string | null; notes: string | null };
 
-function requirePortalCustomer(req: Request, res: Response, next: NextFunction) {
+async function requirePortalCustomer(req: Request, res: Response, next: NextFunction) {
   const match = /^Bearer\s+(.+)$/i.exec(text(req.headers.authorization));
   const token = match?.[1]?.trim();
   const user = token
-    ? db.prepare(`
+    ? await queryOne<{ id: number; name: string; role: string }>(`
         SELECT u.id,u.name,u.role
         FROM sessions s JOIN users u ON u.id=s.user_id
         WHERE s.token=? AND datetime(s.expires_at)>datetime('now') AND u.active=1
@@ -23,16 +23,16 @@ function requirePortalCustomer(req: Request, res: Response, next: NextFunction) 
             SELECT MAX(s2.rowid) FROM sessions s2
             WHERE s2.user_id=s.user_id AND datetime(s2.expires_at)>datetime('now')
           )
-      `).get(token) as { id: number; name: string; role: string } | undefined
+      `, token)
     : undefined;
   if (!user) return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
   if (user.role !== "rental_trip_customer") {
     return void res.status(403).json({ error: "هذه الخدمة متاحة لعملاء تأجير الرحلات فقط" });
   }
-  const customer = db.prepare(`
+  const customer = await queryOne<PortalCustomer>(`
     SELECT id,name,phone,notes FROM rental_customers
     WHERE portal_user_id=? AND active=1 AND customer_type='rental'
-  `).get(user.id) as PortalCustomer | undefined;
+  `, user.id);
   if (!customer) return void res.status(403).json({ error: "لا يوجد حساب إيجار مرتبط بهذا المستخدم" });
   res.locals.portalUser = { id: user.id, name: user.name } satisfies PortalUser;
   res.locals.portalCustomer = customer;
@@ -41,16 +41,19 @@ function requirePortalCustomer(req: Request, res: Response, next: NextFunction) 
 
 router.use("/rental-trip-portal", requirePortalCustomer);
 
-function adjustedTripPrices(customerName: string) {
-  const rows = db.prepare(`
+async function adjustedTripPrices(customerName: string) {
+  const rows = await queryAll<{ trip_id: number; amount: number }>(`
     SELECT trip_id,amount FROM rental_statement_adjustments
     WHERE LOWER(TRIM(customer_name))=LOWER(TRIM(?)) AND adjustment_type='reply'
-  `).all(customerName) as Array<{ trip_id: number; amount: number }>;
+  `, customerName);
   return new Map(rows.map(row => [row.trip_id, Number(row.amount)]));
 }
 
-function tripRows(customerName: string) {
-  return db.prepare(`
+async function tripRows(customerName: string) {
+  return queryAll<Record<string, unknown> & {
+    id: number; date: string; base_total: number; material_type: string | null;
+    loading_region: string | null; unloading_region: string | null;
+  }>(`
     SELECT id,date,car_id,vehicle_type,driver_name,material_type,loading_region,unloading_region,
       COALESCE(trips_count,1) trips_count,
       COALESCE(return_value_no_vat,total_amount,0) base_total,
@@ -59,17 +62,15 @@ function tripRows(customerName: string) {
     WHERE LOWER(TRIM(client_name))=LOWER(TRIM(?))
       AND COALESCE(customer_type_snapshot,'rental')='rental'
     ORDER BY date DESC,created_at DESC,id DESC
-  `).all(customerName) as Array<Record<string, unknown> & {
-    id: number; date: string; base_total: number; material_type: string | null;
-    loading_region: string | null; unloading_region: string | null;
-  }>;
+  `, customerName);
 }
 
-router.get("/rental-trip-portal/me", (_req, res) => {
+router.get("/rental-trip-portal/me", async (_req, res) => {
   const customer = res.locals.portalCustomer as PortalCustomer;
-  const trips = tripRows(customer.name);
-  const adjustments = adjustedTripPrices(customer.name);
-  const entries = db.prepare(`
+  const [trips, adjustments, entries, requests, transfers] = await Promise.all([
+    tripRows(customer.name),
+    adjustedTripPrices(customer.name),
+    queryAll<Record<string, unknown> & { id: number; source: string; entry_date: string; created_at: string }>(`
     SELECT 'manual' source,id,entry_date,COALESCE(description,'رصيد سابق') description,
       CASE WHEN entry_type='opening_debit' THEN amount ELSE 0 END debit,
       CASE WHEN entry_type='opening_credit' THEN amount ELSE 0 END credit,
@@ -86,9 +87,18 @@ router.get("/rental-trip-portal/me", (_req, res) => {
       amount debit,0 credit,NULL,NULL,NULL,NULL,created_at,NULL,NULL
     FROM rental_statement_adjustments
     WHERE LOWER(TRIM(customer_name))=LOWER(TRIM(?)) AND adjustment_type='statement'
-  `).all(customer.name, customer.name, customer.name) as Array<Record<string, unknown> & {
-    id: number; source: string; entry_date: string; created_at: string;
-  }>;
+    `, customer.name, customer.name, customer.name),
+    queryAll(`
+      SELECT id,source_trip_id,loading_region,unloading_region,cargo_type,price,status,notes,created_at
+      FROM rental_trip_requests WHERE customer_id=? ORDER BY created_at DESC,id DESC
+    `, customer.id),
+    queryAll(`
+      SELECT id,payment_date,amount,reference_no,notes,transfer_image_url,transfer_status,created_at
+      FROM rental_payments WHERE LOWER(TRIM(customer_name))=LOWER(TRIM(?))
+        AND submitted_by_user_id=? AND transfer_status IS NOT NULL
+      ORDER BY payment_date DESC,id DESC
+    `, customer.name, (res.locals.portalUser as PortalUser).id),
+  ]);
 
   const statementTrips = trips.map(trip => ({
     source: "trip",
@@ -121,16 +131,6 @@ router.get("/rental-trip-portal/me", (_req, res) => {
     source_trip_id: trip.id,
   }));
 
-  const requests = db.prepare(`
-    SELECT id,source_trip_id,loading_region,unloading_region,cargo_type,price,status,notes,created_at
-    FROM rental_trip_requests WHERE customer_id=? ORDER BY created_at DESC,id DESC
-  `).all(customer.id);
-  const transfers = db.prepare(`
-    SELECT id,payment_date,amount,reference_no,notes,transfer_image_url,transfer_status,created_at
-    FROM rental_payments WHERE LOWER(TRIM(customer_name))=LOWER(TRIM(?))
-      AND submitted_by_user_id=? AND transfer_status IS NOT NULL
-    ORDER BY payment_date DESC,id DESC
-  `).all(customer.name, (res.locals.portalUser as PortalUser).id);
   res.json({
     customer,
     entries: statementEntries,
@@ -156,39 +156,39 @@ router.get("/rental-trip-portal/me", (_req, res) => {
   });
 });
 
-router.post("/rental-trip-portal/requests", (req, res) => {
+router.post("/rental-trip-portal/requests", async (req, res) => {
   const customer = res.locals.portalCustomer as PortalCustomer;
   const sourceTripId = Number(req.body?.source_trip_id);
   if (!Number.isSafeInteger(sourceTripId) || sourceTripId <= 0) {
     return void res.status(400).json({ error: "الرحلة المصدر غير صحيحة" });
   }
-  const trip = db.prepare(`
+  const trip = await queryOne<{
+    id: number; loading_region: string | null; unloading_region: string | null; trips_count: number;
+    material_type: string | null; base_total: number;
+  }>(`
     SELECT id,loading_region,unloading_region,material_type,COALESCE(trips_count,1) trips_count,
       COALESCE(return_value_no_vat,total_amount,0) base_total
     FROM trips WHERE id=? AND LOWER(TRIM(client_name))=LOWER(TRIM(?))
       AND COALESCE(customer_type_snapshot,'rental')='rental'
-  `).get(sourceTripId, customer.name) as {
-    id: number; loading_region: string | null; unloading_region: string | null; trips_count: number;
-    material_type: string | null; base_total: number;
-  } | undefined;
+  `, sourceTripId, customer.name);
   if (!trip) return void res.status(404).json({ error: "الرحلة غير موجودة ضمن حسابك" });
-  const adjusted = db.prepare(`
+  const adjusted = await queryOne<{ amount: number }>(`
     SELECT amount FROM rental_statement_adjustments
     WHERE LOWER(TRIM(customer_name))=LOWER(TRIM(?)) AND adjustment_type='reply' AND trip_id=?
-  `).get(customer.name, trip.id) as { amount: number } | undefined;
-  const result = db.prepare(`
+  `, customer.name, trip.id);
+  const result = await execute(`
     INSERT INTO rental_trip_requests
       (customer_id,source_trip_id,loading_region,unloading_region,cargo_type,price,status,notes)
     VALUES(?,?,?,?,?,?,'pending',?)
-  `).run(
+  `,
     customer.id, trip.id, trip.loading_region, trip.unloading_region, trip.material_type,
     (adjusted?.amount ?? trip.base_total) / Math.max(1, Number(trip.trips_count) || 1),
     text(req.body?.notes) || null,
   );
-  res.status(201).json(db.prepare(`
+  res.status(201).json(await queryOne(`
     SELECT id,source_trip_id,loading_region,unloading_region,cargo_type,price,status,notes,created_at
     FROM rental_trip_requests WHERE id=?
-  `).get(result.lastInsertRowid));
+  `, result.lastInsertRowid));
 });
 
 async function validateTransferImage(
@@ -211,7 +211,11 @@ async function validateTransferImage(
         !Number.isFinite(size) || size <= 0 || size > 10 * 1024 * 1024) return null;
     const variants = receiptPathVariants(normalized);
     const placeholders = variants.map(() => "?").join(",");
-    const usedByAnotherCustomer = db.prepare(`
+    const customer = await queryOne<{ name: string }>(
+      "SELECT name FROM rental_customers WHERE portal_user_id=? AND active=1 AND customer_type='rental'",
+      userId,
+    );
+    const usedByAnotherCustomer = await queryOne(`
       SELECT id FROM rental_payments
       WHERE transfer_image_url IN (${placeholders}) AND (
         submitted_by_user_id IS NULL OR submitted_by_user_id<>? OR
@@ -219,10 +223,10 @@ async function validateTransferImage(
       )
         AND (? IS NULL OR id<>?)
       LIMIT 1
-    `).get(...variants, userId, (db.prepare("SELECT name FROM rental_customers WHERE portal_user_id=? AND active=1 AND customer_type='rental'").get(userId) as { name: string } | undefined)?.name ?? "", allowTransferId ?? null, allowTransferId ?? null);
-    const registeredToAnotherUser = db.prepare(
+    `, ...variants, userId, customer?.name ?? "", allowTransferId ?? null, allowTransferId ?? null);
+    const registeredToAnotherUser = await queryOne(
       `SELECT path FROM rental_receipt_objects WHERE path IN (${placeholders}) AND owner_user_id<>?`
-    ).get(...variants, userId);
+    , ...variants, userId);
     if (usedByAnotherCustomer || registeredToAnotherUser) return null;
     return normalized;
   } catch {
@@ -230,24 +234,26 @@ async function validateTransferImage(
   }
 }
 
-function registerReceiptPath(path: string, userId: number, customerName: string) {
+async function registerReceiptPath(path: string, userId: number, customerName: string) {
   const objectPath = existingReceiptObjectPath(path) ?? (path.startsWith("/objects/") ? path : null);
   if (!objectPath) return;
   const variants = receiptPathVariants(objectPath);
   const placeholders = variants.map(() => "?").join(",");
-  const registered = db.prepare(`SELECT owner_user_id FROM rental_receipt_objects WHERE path IN (${placeholders}) LIMIT 1`).get(...variants) as
-    { owner_user_id: number } | undefined;
+  const registered = await queryOne<{ owner_user_id: number }>(
+    `SELECT owner_user_id FROM rental_receipt_objects WHERE path IN (${placeholders}) LIMIT 1`,
+    ...variants,
+  );
   if (registered && registered.owner_user_id !== userId) throw new Error("صورة التحويل مرتبطة بحساب آخر");
-  const usedByAnotherCustomer = db.prepare(`
+  const usedByAnotherCustomer = await queryOne(`
     SELECT id FROM rental_payments
     WHERE transfer_image_url IN (${placeholders}) AND (
       submitted_by_user_id IS NULL OR submitted_by_user_id<>? OR
       LOWER(TRIM(customer_name))<>LOWER(TRIM(?))
     )
     LIMIT 1
-  `).get(...variants, userId, customerName);
+  `, ...variants, userId, customerName);
   if (usedByAnotherCustomer) throw new Error("صورة التحويل مرتبطة بحساب آخر");
-  db.prepare("INSERT OR IGNORE INTO rental_receipt_objects(path,owner_user_id) VALUES(?,?)").run(objectPath, userId);
+  await execute("INSERT OR IGNORE INTO rental_receipt_objects(path,owner_user_id) VALUES(?,?)", objectPath, userId);
 }
 
 function existingReceiptObjectPath(value: string | null) {
@@ -268,22 +274,20 @@ router.post("/rental-trip-portal/transfers", async (req, res) => {
   const user = res.locals.portalUser as PortalUser;
   let transferId: number;
   try {
-    transferId = db.transaction(() => {
-      registerReceiptPath(imagePath, user.id, customer.name);
-      const result = db.prepare(`
+    await registerReceiptPath(imagePath, user.id, customer.name);
+    const result = await execute(`
         INSERT INTO rental_payments
           (customer_name,payment_date,amount,payment_method,transfer_image_url,transfer_status,submitted_by_user_id,created_by)
         VALUES(?,? ,?,'company_direct',?,'pending',?,?)
-      `).run(customer.name, today(), amount, imagePath, user.id, user.name);
-      return Number(result.lastInsertRowid);
-    })();
+      `, customer.name, today(), amount, imagePath, user.id, user.name);
+    transferId = Number(result.lastInsertRowid);
   } catch (error) {
     return void res.status(409).json({ error: (error as Error).message || "تعذر ربط صورة التحويل بحسابك" });
   }
-  res.status(201).json(db.prepare(`
+  res.status(201).json(await queryOne(`
     SELECT id,payment_date,amount,reference_no,notes,transfer_image_url,transfer_status,created_at
     FROM rental_payments WHERE id=?
-  `).get(transferId));
+  `, transferId));
 });
 
 router.put("/rental-trip-portal/transfers/:id", async (req, res) => {
@@ -291,13 +295,13 @@ router.put("/rental-trip-portal/transfers/:id", async (req, res) => {
   const user = res.locals.portalUser as PortalUser;
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id) || id <= 0) return void res.status(400).json({ error: "رقم التحويل غير صحيح" });
-  const transfer = db.prepare(`
+  const transfer = await queryOne<{
+    id: number; amount: number; transfer_image_url: string | null; transfer_status: string;
+  }>(`
     SELECT id,amount,transfer_image_url,transfer_status FROM rental_payments
     WHERE id=? AND LOWER(TRIM(customer_name))=LOWER(TRIM(?))
       AND submitted_by_user_id=? AND transfer_status IS NOT NULL
-  `).get(id, customer.name, user.id) as {
-    id: number; amount: number; transfer_image_url: string | null; transfer_status: string;
-  } | undefined;
+  `, id, customer.name, user.id);
   if (!transfer) return void res.status(404).json({ error: "التحويل غير موجود" });
   if (transfer.transfer_status !== "pending") return void res.status(409).json({ error: "لا يمكن تعديل تحويل تم تأكيده" });
 
@@ -314,53 +318,50 @@ router.put("/rental-trip-portal/transfers/:id", async (req, res) => {
   if (!imagePath) return void res.status(400).json({ error: "صورة التحويل غير صالحة أو غير موجودة" });
   let update: { changes: number };
   try {
-    update = db.transaction(() => {
-      const previousImagePath = hasImage ? existingReceiptObjectPath(transfer.transfer_image_url) : null;
-      if (previousImagePath && previousImagePath !== imagePath) {
-        registerReceiptPath(previousImagePath, user.id, customer.name);
-      }
-      registerReceiptPath(imagePath, user.id, customer.name);
-      const result = db.prepare(`
+    const previousImagePath = hasImage ? existingReceiptObjectPath(transfer.transfer_image_url) : null;
+    if (previousImagePath && previousImagePath !== imagePath) {
+      await registerReceiptPath(previousImagePath, user.id, customer.name);
+    }
+    await registerReceiptPath(imagePath, user.id, customer.name);
+    update = await execute(`
         UPDATE rental_payments SET amount=?,transfer_image_url=?
         WHERE id=? AND submitted_by_user_id=? AND transfer_status='pending'
-      `).run(amount, imagePath, id, user.id);
-      if (!result.changes) throw new Error("لا يمكن تعديل تحويل تم تأكيده");
-      return result;
-    })();
+      `, amount, imagePath, id, user.id);
+      if (!update.changes) throw new Error("لا يمكن تعديل تحويل تم تأكيده");
   } catch (error) {
     return void res.status(409).json({ error: (error as Error).message || "تعذر ربط صورة التحويل بحسابك" });
   }
   if (!update.changes) return void res.status(409).json({ error: "لا يمكن تعديل تحويل تم تأكيده" });
-  res.json(db.prepare(`
+  res.json(await queryOne(`
     SELECT id,payment_date,amount,reference_no,notes,transfer_image_url,transfer_status,created_at
     FROM rental_payments WHERE id=?
-  `).get(id));
+  `, id));
 });
 
-router.delete("/rental-trip-portal/transfers/:id", (req, res) => {
+router.delete("/rental-trip-portal/transfers/:id", async (req, res) => {
   const customer = res.locals.portalCustomer as PortalCustomer;
   const user = res.locals.portalUser as PortalUser;
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id) || id <= 0) return void res.status(400).json({ error: "رقم التحويل غير صحيح" });
-  const transfer = db.prepare(`
+  const transfer = await queryOne<{ id: number; transfer_status: string }>(`
     SELECT id,transfer_status FROM rental_payments
     WHERE id=? AND LOWER(TRIM(customer_name))=LOWER(TRIM(?))
       AND submitted_by_user_id=? AND transfer_status IS NOT NULL
-  `).get(id, customer.name, user.id) as { id: number; transfer_status: string } | undefined;
+  `, id, customer.name, user.id);
   if (!transfer) return void res.status(404).json({ error: "التحويل غير موجود" });
   if (transfer.transfer_status !== "pending") return void res.status(409).json({ error: "لا يمكن حذف تحويل تم تأكيده" });
   let deletion: { changes: number };
   try {
-    deletion = db.transaction(() => {
-      const imagePath = db.prepare("SELECT transfer_image_url FROM rental_payments WHERE id=?")
-        .get(id) as { transfer_image_url: string | null } | undefined;
-      const receiptObjectPath = existingReceiptObjectPath(imagePath?.transfer_image_url ?? null);
-      if (receiptObjectPath) registerReceiptPath(receiptObjectPath, user.id, customer.name);
-      return db.prepare(`
+    const imagePath = await queryOne<{ transfer_image_url: string | null }>(
+      "SELECT transfer_image_url FROM rental_payments WHERE id=?",
+      id,
+    );
+    const receiptObjectPath = existingReceiptObjectPath(imagePath?.transfer_image_url ?? null);
+    if (receiptObjectPath) await registerReceiptPath(receiptObjectPath, user.id, customer.name);
+    deletion = await execute(`
         DELETE FROM rental_payments
         WHERE id=? AND submitted_by_user_id=? AND transfer_status='pending'
-      `).run(id, user.id);
-    })();
+      `, id, user.id);
   } catch (error) {
     return void res.status(409).json({ error: (error as Error).message || "تعذر حذف التحويل" });
   }

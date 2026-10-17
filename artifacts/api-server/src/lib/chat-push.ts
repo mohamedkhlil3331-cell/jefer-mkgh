@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import webpush from "web-push";
-import db from "./db.js";
+import { execute, executeBatch, queryAll, queryOne } from "./erp-sql.js";
 import { logger } from "./logger.js";
 
 export type BrowserPushKind = "message" | "order";
@@ -69,10 +69,10 @@ function decryptPrivateKey(value: string): string {
   ]).toString("utf8");
 }
 
-function getVapidKeys(): VapidKeys {
-  const stored = db.prepare(
+async function getVapidKeys(): Promise<VapidKeys> {
+  const stored = await queryOne<{ public_key: string; encrypted_private_key: string }>(
     "SELECT public_key, encrypted_private_key FROM chat_vapid_keys WHERE id=1",
-  ).get() as { public_key: string; encrypted_private_key: string } | undefined;
+  );
 
   if (stored) {
     try {
@@ -84,38 +84,38 @@ function getVapidKeys(): VapidKeys {
       return keys;
     } catch (error) {
       logger.warn({ err: error }, "Stored browser push key could not be decrypted; resetting browser subscriptions");
-      db.transaction(() => {
-        db.prepare("DELETE FROM chat_push_subscriptions").run();
-        db.prepare("DELETE FROM chat_vapid_keys WHERE id=1").run();
-      })();
+      await executeBatch([
+        { sql: "DELETE FROM chat_push_subscriptions" },
+        { sql: "DELETE FROM chat_vapid_keys WHERE id=1" },
+      ]);
     }
   }
 
   const keys = webpush.generateVAPIDKeys();
-  db.prepare(`
+  await execute(`
     INSERT INTO chat_vapid_keys (id, public_key, encrypted_private_key)
     VALUES (1, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       public_key=excluded.public_key,
       encrypted_private_key=excluded.encrypted_private_key,
       created_at=datetime('now')
-  `).run(keys.publicKey, encryptPrivateKey(keys.privateKey));
+  `, keys.publicKey, encryptPrivateKey(keys.privateKey));
   webpush.setVapidDetails("mailto:notifications@example.com", keys.publicKey, keys.privateKey);
   return { publicKey: keys.publicKey, privateKey: keys.privateKey };
 }
 
-export function getBrowserPushPublicKey(): string {
-  return getVapidKeys().publicKey;
+export async function getBrowserPushPublicKey(): Promise<string> {
+  return (await getVapidKeys()).publicKey;
 }
 
-export function notificationPreferences(userId: number): {
+export async function notificationPreferences(userId: number): Promise<{
   messages_enabled: boolean;
   orders_enabled: boolean;
-} {
-  const row = db.prepare(`
+}> {
+  const row = await queryOne<{ messages_enabled: number; orders_enabled: number }>(`
     SELECT messages_enabled, orders_enabled
     FROM chat_notification_preferences WHERE user_id=?
-  `).get(userId) as { messages_enabled: number; orders_enabled: number } | undefined;
+  `, userId);
   return {
     messages_enabled: row ? row.messages_enabled === 1 : true,
     orders_enabled: row ? row.orders_enabled === 1 : true,
@@ -127,17 +127,17 @@ export async function sendBrowserPush(
   kind: BrowserPushKind,
   payload: BrowserPushPayload,
 ): Promise<void> {
-  const preferences = notificationPreferences(userId);
+  const preferences = await notificationPreferences(userId);
   if (kind === "message" && !preferences.messages_enabled) return;
   if (kind === "order" && !preferences.orders_enabled) return;
 
-  const subscriptions = db.prepare(`
+  const subscriptions = await queryAll<StoredSubscription>(`
     SELECT endpoint, p256dh, auth
     FROM chat_push_subscriptions WHERE user_id=?
-  `).all(userId) as StoredSubscription[];
+  `, userId);
   if (subscriptions.length === 0) return;
 
-  const keys = getVapidKeys();
+  const keys = await getVapidKeys();
   webpush.setVapidDetails("mailto:notifications@example.com", keys.publicKey, keys.privateKey);
   const body = JSON.stringify(payload);
   let retryableFailure = false;
@@ -151,7 +151,7 @@ export async function sendBrowserPush(
     } catch (error) {
       const statusCode = (error as { statusCode?: number }).statusCode;
       if (statusCode === 404 || statusCode === 410) {
-        db.prepare("DELETE FROM chat_push_subscriptions WHERE endpoint=?").run(subscription.endpoint);
+        await execute("DELETE FROM chat_push_subscriptions WHERE endpoint=?", subscription.endpoint);
         return;
       }
       retryableFailure = true;
@@ -163,13 +163,13 @@ export async function sendBrowserPush(
   }
 }
 
-export function savePushSubscription(
+export async function savePushSubscription(
   userId: number,
   endpoint: string,
   p256dh: string,
   auth: string,
-): void {
-  db.prepare(`
+): Promise<void> {
+  await execute(`
     INSERT INTO chat_push_subscriptions (user_id, endpoint, p256dh, auth)
     VALUES (?, ?, ?, ?)
     ON CONFLICT(endpoint) DO UPDATE SET
@@ -177,7 +177,7 @@ export function savePushSubscription(
       p256dh=excluded.p256dh,
       auth=excluded.auth,
       updated_at=datetime('now')
-  `).run(userId, endpoint, p256dh, auth);
+  `, userId, endpoint, p256dh, auth);
 }
 
 function processPendingNotifications(): void {
@@ -186,7 +186,7 @@ function processPendingNotifications(): void {
 
   void (async () => {
     try {
-      const pending = db.prepare(`
+      const pending = await queryAll<PendingNotification>(`
         SELECT q.id AS queue_id, q.notification_id,
                n.user_phone, n.title, n.body
         FROM chat_push_queue q
@@ -194,21 +194,19 @@ function processPendingNotifications(): void {
         WHERE q.processed_at IS NULL AND q.attempts < 5
         ORDER BY q.id
         LIMIT 50
-      `).all() as PendingNotification[];
+      `);
 
       for (const notification of pending) {
-        db.prepare("UPDATE chat_push_queue SET attempts=attempts+1 WHERE id=?")
-          .run(notification.queue_id);
+        await execute("UPDATE chat_push_queue SET attempts=attempts+1 WHERE id=?", notification.queue_id);
         if (!notification.user_phone) {
-          db.prepare("UPDATE chat_push_queue SET processed_at=datetime('now') WHERE id=?")
-            .run(notification.queue_id);
+          await execute("UPDATE chat_push_queue SET processed_at=datetime('now') WHERE id=?", notification.queue_id);
           continue;
         }
 
-        const user = db.prepare(`
+        const user = await queryOne<{ id: number }>(`
           SELECT id FROM users
           WHERE phone=? AND active=1 AND COALESCE(approval_status,'approved')='approved'
-        `).get(notification.user_phone) as { id: number } | undefined;
+        `, notification.user_phone);
         if (user) {
           await sendBrowserPush(user.id, "order", {
             title: notification.title || "تحديث على طلبك",
@@ -217,14 +215,13 @@ function processPendingNotifications(): void {
             tag: `order-${notification.notification_id}`,
           });
         }
-        db.prepare("UPDATE chat_push_queue SET processed_at=datetime('now') WHERE id=?")
-          .run(notification.queue_id);
+        await execute("UPDATE chat_push_queue SET processed_at=datetime('now') WHERE id=?", notification.queue_id);
       }
 
-      db.prepare(`
+      await execute(`
         UPDATE chat_push_queue SET processed_at=datetime('now')
         WHERE processed_at IS NULL AND attempts >= 5
-      `).run();
+      `);
     } catch (error) {
       logger.error({ err: error }, "Browser push queue processing failed");
     } finally {

@@ -1,5 +1,5 @@
 import type { Request } from "express";
-import db from "./db.js";
+import { queryOne } from "./erp-sql.js";
 import { isSysAdminToken } from "../routes/auth.js";
 
 export interface ChatActor {
@@ -23,9 +23,9 @@ function parsePermissions(raw: string | null): string[] | null {
   }
 }
 
-export function resolveChatActor(token: string | null | undefined): ChatActor | null {
+export async function resolveChatActor(token: string | null | undefined): Promise<ChatActor | null> {
   if (!token || token === "guest") return null;
-  if (isSysAdminToken(token)) {
+  if (await isSysAdminToken(token)) {
     return {
       id: 0,
       name: "مدير النظام",
@@ -36,7 +36,13 @@ export function resolveChatActor(token: string | null | undefined): ChatActor | 
     };
   }
 
-  const user = db.prepare(`
+  const user = await queryOne<{
+    id: number;
+    name: string;
+    phone: string;
+    role: string;
+    permissions: string | null;
+  }>(`
     SELECT u.id, u.name, u.phone, u.role, u.permissions
     FROM sessions s
     JOIN users u ON u.id=s.user_id
@@ -49,13 +55,7 @@ export function resolveChatActor(token: string | null | undefined): ChatActor | 
         FROM sessions current
         WHERE current.user_id=s.user_id
       )
-  `).get(token) as {
-    id: number;
-    name: string;
-    phone: string;
-    role: string;
-    permissions: string | null;
-  } | undefined;
+  `, token);
 
   if (!user) return null;
   return {
@@ -65,7 +65,7 @@ export function resolveChatActor(token: string | null | undefined): ChatActor | 
   };
 }
 
-export function actorFromRequest(req: Request): ChatActor | null {
+export function actorFromRequest(req: Request): Promise<ChatActor | null> {
   const bearer = /^Bearer\s+(.+)$/i.exec(req.headers.authorization ?? "");
   return resolveChatActor(bearer?.[1]?.trim());
 }

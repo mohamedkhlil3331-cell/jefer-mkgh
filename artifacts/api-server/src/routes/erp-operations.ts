@@ -1,38 +1,40 @@
 import { Router } from "express";
-import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 
 const router = Router();
 
 // ── Vehicles ──────────────────────────────────────────────────────────────────
-router.get("/vehicles", (_req, res) => {
-  res.json(db.prepare("SELECT * FROM vehicles ORDER BY plate_number").all());
+router.get("/vehicles", async (_req, res) => {
+  res.json(await queryAll("SELECT * FROM vehicles ORDER BY plate_number"));
 });
 
-router.post("/vehicles", (req, res) => {
+router.post("/vehicles", async (req, res) => {
   const { plate_number, vehicle_type, status, driver_name, notes } = req.body;
-  const result = db.prepare(
+  const result = await execute(
     "INSERT INTO vehicles (plate_number, vehicle_type, status, driver_name, notes) VALUES (?,?,?,?,?)"
-  ).run(plate_number, vehicle_type, status || "available", driver_name || null, notes || null);
+  , plate_number, vehicle_type, status || "available", driver_name || null, notes || null);
   res.status(201).json({ id: result.lastInsertRowid, message: "تمت إضافة السيارة" });
 });
 
-router.put("/vehicles/:id", (req, res) => {
+router.put("/vehicles/:id", async (req, res) => {
   const { plate_number, vehicle_type, status, driver_name, notes } = req.body;
-  db.prepare(
+  await execute(
     "UPDATE vehicles SET plate_number=?, vehicle_type=?, status=?, driver_name=?, notes=? WHERE id=?"
-  ).run(plate_number, vehicle_type, status, driver_name, notes, req.params.id);
+  , plate_number, vehicle_type, status, driver_name, notes, req.params.id);
   res.json({ message: "تم التحديث" });
 });
 
-router.delete("/vehicles/:id", (req, res) => {
-  db.prepare("DELETE FROM vehicles WHERE id=?").run(req.params.id);
+router.delete("/vehicles/:id", async (req, res) => {
+  await execute("DELETE FROM vehicles WHERE id=?", req.params.id);
   res.json({ message: "تم الحذف" });
 });
 
 // ── Load Request — route to supervisor based on vehicle type ──────────────────
-router.post("/vehicles/:id/load-request", (req, res) => {
-  const vehicle = db.prepare("SELECT * FROM vehicles WHERE id=?").get(req.params.id) as
-    { id: number; plate_number: string; vehicle_type: string } | undefined;
+router.post("/vehicles/:id/load-request", async (req, res) => {
+  const vehicle = await queryOne<{ id: number; plate_number: string; vehicle_type: string }>(
+    "SELECT * FROM vehicles WHERE id=?",
+    req.params.id,
+  );
   if (!vehicle) return void res.status(404).json({ error: "السيارة غير موجودة" });
 
   const type  = (vehicle.vehicle_type || "");
@@ -43,20 +45,17 @@ router.post("/vehicles/:id/load-request", (req, res) => {
 
   if (/بلكر/i.test(type)) {
     targetLabel = "مسؤول الفسحات";
-    const all = db.prepare("SELECT phone, permissions FROM users WHERE active=1").all() as
-      { phone: string; permissions: string | null }[];
+    const all = await queryAll<{ phone: string; permissions: string | null }>("SELECT phone, permissions FROM users WHERE active=1");
     recipients = all.filter(u => {
       try { return (JSON.parse(u.permissions || "[]") as string[]).includes("ops_fsohat"); }
       catch { return false; }
     });
   } else if (/سطحة|قلاب|لوبد|lowbed/i.test(type)) {
     targetLabel = "مشرف النقليات";
-    recipients = db.prepare("SELECT phone FROM users WHERE role='supervisor' AND active=1").all() as
-      { phone: string }[];
+    recipients = await queryAll<{ phone: string }>("SELECT phone FROM users WHERE role='supervisor' AND active=1");
   } else {
     targetLabel = "مسئول حركة البرح";
-    const all = db.prepare("SELECT phone, permissions FROM users WHERE active=1").all() as
-      { phone: string; permissions: string | null }[];
+    const all = await queryAll<{ phone: string; permissions: string | null }>("SELECT phone, permissions FROM users WHERE active=1");
     recipients = all.filter(u => {
       try { return (JSON.parse(u.permissions || "[]") as string[]).includes("ops_bulker"); }
       catch { return false; }
@@ -68,8 +67,9 @@ router.post("/vehicles/:id/load-request", (req, res) => {
 
   const title = `طلب حمولة — ${vehicle.plate_number}`;
   const body  = `نوع المركبة: ${type}${notes ? ` — ملاحظة: ${notes}` : ""}`;
-  const ins   = db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)");
-  recipients.forEach(r => ins.run(r.phone, title, body));
+  for (const recipient of recipients) {
+    await execute("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)", recipient.phone, title, body);
+  }
 
   res.json({ ok: true, sent: recipients.length, targetLabel });
 });
@@ -79,11 +79,11 @@ router.post("/vehicles/:id/load-request", (req, res) => {
 // preventing duplicated vehicle cards when more than one profile shares a plate.
 // UNION appends vehicles found only in vehicle_compliance_docs (added via the
 // Compliance / Documents page) so they appear in the Trips vehicle picker too.
-router.get("/fleet-vehicles", (req, res) => {
+router.get("/fleet-vehicles", async (req, res) => {
   const driverNameColumn = req.query.driver_source === "fleet"
     ? "fv.driver_name"
     : "COALESCE(dp.driver_name, fv.driver_name)";
-  const rows = db.prepare(`
+  const rows = await queryAll(`
     SELECT fv.plate_number,
            fv.vehicle_type,
            fv.status,
@@ -129,21 +129,21 @@ router.get("/fleet-vehicles", (req, res) => {
       AND vcd.car_number NOT IN (SELECT plate_number FROM fleet_vehicles)
 
     ORDER BY plate_number
-  `).all();
+  `);
   res.json(rows);
 });
-router.put("/fleet-vehicles/:plate", (req, res) => {
+router.put("/fleet-vehicles/:plate", async (req, res) => {
   const { plate } = req.params;
   const cols = ["insurance_start","insurance_end","inspection_start","inspection_end","operation_card_start","operation_card_end","driver_phone","notes"] as const;
   const updates = cols.filter(c => req.body[c] !== undefined).map(c => `${c}=?`).join(", ");
   if (!updates) return void res.status(400).json({ error: "لا توجد بيانات للتحديث" });
   const vals = cols.filter(c => req.body[c] !== undefined).map(c => req.body[c] || null);
-  db.prepare(`UPDATE fleet_vehicles SET ${updates} WHERE plate_number=?`).run(...vals, plate);
+  await execute(`UPDATE fleet_vehicles SET ${updates} WHERE plate_number=?`, ...vals, plate);
   res.json({ message: "تم التحديث" });
 });
 
 // ── Vehicles bulk import ───────────────────────────────────────────────────────
-router.post("/vehicles/import", (req, res) => {
+router.post("/vehicles/import", async (req, res) => {
   const rows: Record<string, string>[] = req.body?.rows ?? [];
   if (!Array.isArray(rows) || rows.length === 0)
     return void res.status(400).json({ error: "لا توجد بيانات" });
@@ -160,9 +160,6 @@ router.post("/vehicles/import", (req, res) => {
     "متاح": "available", "مشغول": "busy", "صيانة": "maintenance", "معطل": "broken",
     available: "available", busy: "busy", maintenance: "maintenance", broken: "broken",
   };
-  const ins = db.prepare(
-    "INSERT OR IGNORE INTO vehicles (plate_number, vehicle_type, status, driver_name, notes) VALUES (?,?,?,?,?)"
-  );
   let imported = 0;
   for (const raw of rows) {
     const mapped: Record<string, string> = {};
@@ -172,84 +169,89 @@ router.post("/vehicles/import", (req, res) => {
     }
     if (!mapped.plate_number) continue;
     const st = statusMap[mapped.status ?? ""] ?? "available";
-    ins.run(mapped.plate_number, mapped.vehicle_type || "شاحنة", st, mapped.driver_name || null, mapped.notes || null);
+    await execute(
+      "INSERT OR IGNORE INTO vehicles (plate_number, vehicle_type, status, driver_name, notes) VALUES (?,?,?,?,?)",
+      mapped.plate_number, mapped.vehicle_type || "شاحنة", st, mapped.driver_name || null, mapped.notes || null,
+    );
     imported++;
   }
   res.json({ imported, message: `تم استيراد ${imported} مركبة` });
 });
 
 // ── Orders ────────────────────────────────────────────────────────────────────
-router.get("/orders", (req, res) => {
+router.get("/orders", async (req, res) => {
   const { status } = req.query as Record<string, string>;
   let sql = "SELECT * FROM orders WHERE 1=1";
   const params: string[] = [];
   if (status) { sql += " AND status = ?"; params.push(status); }
   sql += " ORDER BY created_at DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
-router.post("/orders", (req, res) => {
+router.post("/orders", async (req, res) => {
   const { order_type, quantity, unit, client_name, client_phone, location, gps_lat, gps_lng, car_id, driver_name, notes } = req.body;
-  const result = db.prepare(`
+  const result = await execute(`
     INSERT INTO orders (order_type, quantity, unit, client_name, client_phone, location, gps_lat, gps_lng, car_id, driver_name, notes)
     VALUES (?,?,?,?,?,?,?,?,?,?,?)
-  `).run(order_type, quantity, unit, client_name, client_phone, location,
-         gps_lat || null, gps_lng || null, car_id || null, driver_name || null, notes || null);
+  `, order_type, quantity, unit, client_name, client_phone, location,
+    gps_lat || null, gps_lng || null, car_id || null, driver_name || null, notes || null);
   res.status(201).json({ id: result.lastInsertRowid, message: "تم إنشاء الطلب" });
 });
 
-router.put("/orders/:id/status", (req, res) => {
+router.put("/orders/:id/status", async (req, res) => {
   const { status, car_id, driver_name } = req.body;
-  db.prepare("UPDATE orders SET status=?, car_id=?, driver_name=? WHERE id=?")
-    .run(status, car_id, driver_name, req.params.id);
+  await execute("UPDATE orders SET status=?, car_id=?, driver_name=? WHERE id=?",
+    status, car_id, driver_name, req.params.id);
   res.json({ message: "تم التحديث" });
 });
 
-router.delete("/orders/:id", (req, res) => {
-  db.prepare("DELETE FROM orders WHERE id=?").run(req.params.id);
+router.delete("/orders/:id", async (req, res) => {
+  await execute("DELETE FROM orders WHERE id=?", req.params.id);
   res.json({ message: "تم الحذف" });
 });
 
 // ── Workshop ──────────────────────────────────────────────────────────────────
-router.get("/workshop", (_req, res) => {
-  res.json(db.prepare("SELECT * FROM workshop ORDER BY created_at DESC").all());
+router.get("/workshop", async (_req, res) => {
+  res.json(await queryAll("SELECT * FROM workshop ORDER BY created_at DESC"));
 });
 
-router.post("/workshop", (req, res) => {
+router.post("/workshop", async (req, res) => {
   const { vehicle_id, issue_desc, technician, start_date, cost } = req.body;
-  const result = db.prepare(
+  const result = await execute(
     "INSERT INTO workshop (vehicle_id, issue_desc, technician, start_date, cost) VALUES (?,?,?,?,?)"
-  ).run(vehicle_id, issue_desc, technician || null, start_date || null, parseFloat(cost) || 0);
+  , vehicle_id, issue_desc, technician || null, start_date || null, parseFloat(cost) || 0);
   res.status(201).json({ id: result.lastInsertRowid, message: "تم تسجيل بلاغ الصيانة" });
 });
 
-router.put("/workshop/:id/status", (req, res) => {
+router.put("/workshop/:id/status", async (req, res) => {
   const { status, end_date, cost } = req.body;
-  db.prepare("UPDATE workshop SET status=?, end_date=?, cost=? WHERE id=?")
-    .run(status, end_date || null, parseFloat(cost) || 0, req.params.id);
+  await execute("UPDATE workshop SET status=?, end_date=?, cost=? WHERE id=?",
+    status, end_date || null, parseFloat(cost) || 0, req.params.id);
   res.json({ message: "تم التحديث" });
 });
 
-router.delete("/workshop/:id", (req, res) => {
-  db.prepare("DELETE FROM workshop WHERE id=?").run(req.params.id);
+router.delete("/workshop/:id", async (req, res) => {
+  await execute("DELETE FROM workshop WHERE id=?", req.params.id);
   res.json({ message: "تم الحذف" });
 });
 
 // ── Dashboard summary ─────────────────────────────────────────────────────────
-router.get("/dashboard", (_req, res) => {
-  const vehicles   = db.prepare("SELECT status, COUNT(*) as c FROM vehicles GROUP BY status").all() as { status: string; c: number }[];
-  const orders     = db.prepare("SELECT status, COUNT(*) as c FROM orders GROUP BY status").all() as { status: string; c: number }[];
-  const workshop   = db.prepare("SELECT COUNT(*) as c FROM workshop WHERE status != 'done'").get() as { c: number };
-  const tripRev    = db.prepare("SELECT SUM(net_amount) as total FROM trips").get() as { total: number | null };
-  const expenses   = db.prepare("SELECT SUM(amount) as total FROM fleet_expenses").get() as { total: number | null };
-  const employees  = db.prepare("SELECT COUNT(*) as c FROM employees WHERE status = 'active'").get() as { c: number };
-  const expiring   = db.prepare(`
+router.get("/dashboard", async (_req, res) => {
+  const [vehicles, orders, workshop, tripRev, expenses, employees, expiring] = await Promise.all([
+    queryAll<{ status: string; c: number }>("SELECT status, COUNT(*) as c FROM vehicles GROUP BY status"),
+    queryAll<{ status: string; c: number }>("SELECT status, COUNT(*) as c FROM orders GROUP BY status"),
+    queryOne<{ c: number }>("SELECT COUNT(*) as c FROM workshop WHERE status != 'done'"),
+    queryOne<{ total: number | null }>("SELECT SUM(net_amount) as total FROM trips"),
+    queryOne<{ total: number | null }>("SELECT SUM(amount) as total FROM fleet_expenses"),
+    queryOne<{ c: number }>("SELECT COUNT(*) as c FROM employees WHERE status = 'active'"),
+    queryAll(`
     SELECT name, iqama_end, work_permit_end, driver_license_end
     FROM employees
     WHERE (iqama_end BETWEEN date('now') AND date('now', '+60 days'))
        OR (work_permit_end BETWEEN date('now') AND date('now', '+60 days'))
        OR (driver_license_end BETWEEN date('now') AND date('now', '+60 days'))
-  `).all();
+    `),
+  ]);
   res.json({ vehicles, orders, workshop, tripRev, expenses, employees, expiring });
 });
 

@@ -1,7 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import multer from "multer";
 import path from "path";
-import db from "../lib/db.js";
+import { execute, executeBatch, queryAll, queryOne } from "../lib/erp-sql.js";
 import { isSysAdminToken } from "./auth.js";
 import { finalizeDisabledWarehouseRoutingRequest } from "./supply-requests.js";
 import { deletePendingRoutingTripLog, syncRoutingTripLog } from "./routing-trip-log.js";
@@ -9,14 +9,14 @@ import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
 const router = Router();
 
-function requireRoutingSupervisor(req: Request, res: Response, next: NextFunction) {
+async function requireRoutingSupervisor(req: Request, res: Response, next: NextFunction) {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, "").trim();
   if (!token) return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
-  if (isSysAdminToken(token)) return next();
-  const user = db.prepare(`
+  if (await isSysAdminToken(token)) return next();
+  const user = await queryOne<{ role: string }>(`
     SELECT u.role FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token=? AND datetime(s.expires_at)>datetime('now') AND u.active=1
-  `).get(token) as { role: string } | undefined;
+  `, token);
   if (!user) return void res.status(401).json({ error: "جلسة الدخول غير صالحة" });
   if (!["admin", "supervisor"].includes(user.role)) {
     return void res.status(403).json({ error: "صلاحيات مشرف النقليات مطلوبة" });
@@ -63,7 +63,7 @@ type RoutingAttachment = {
   sort_order: number;
 };
 
-function parseCargoItems(raw: unknown): RoutingCargoItem[] | false {
+async function parseCargoItems(raw: unknown): Promise<RoutingCargoItem[] | false> {
   if (raw == null || raw === "") return [];
   let value = raw;
   if (typeof raw === "string") {
@@ -79,9 +79,9 @@ function parseCargoItems(raw: unknown): RoutingCargoItem[] | false {
     const hasProductId = entry.product_id != null && entry.product_id !== "";
     const productId = hasProductId ? Number(entry.product_id) : null;
     if (hasProductId && (!Number.isSafeInteger(productId) || Number(productId) <= 0)) return false;
-    const product = productId == null ? undefined : db.prepare(
-      "SELECT id, name, unit FROM products WHERE id=? AND active=1"
-    ).get(productId) as { id: number; name: string; unit: string | null } | undefined;
+    const product = productId == null ? undefined : await queryOne<{ id: number; name: string; unit: string | null }>(
+      "SELECT id, name, unit FROM products WHERE id=? AND active=1", productId,
+    );
     if (productId != null && !product) return false;
     if (productId != null && !Number.isSafeInteger(quantity)) return false;
     const cargoType = product?.name || requestedName;
@@ -134,18 +134,17 @@ function parseDispatchLocation(nameRaw: unknown, urlRaw: unknown):
   } catch { return false; }
 }
 
-function notify(userPhone: string, title: string, body: string) {
+async function notify(userPhone: string, title: string, body: string) {
   try {
-    db.prepare("INSERT INTO notifications (user_phone, title, body) VALUES (?,?,?)").run(userPhone, title, body);
+    await execute("INSERT INTO notifications (user_phone, title, body) VALUES (?,?,?)", userPhone, title, body);
   } catch {}
 }
 
-router.get("/routing-dispatches", (_req, res) => {
-  const rows = db.prepare("SELECT * FROM routing_dispatches ORDER BY created_at DESC LIMIT 200").all();
-  res.json(rows);
+router.get("/routing-dispatches", async (_req, res) => {
+  res.json(await queryAll("SELECT * FROM routing_dispatches ORDER BY created_at DESC LIMIT 200"));
 });
 
-router.post("/routing-dispatches", requireRoutingSupervisor, permitUpload.single("permit_image"), (req, res) => {
+router.post("/routing-dispatches", requireRoutingSupervisor, permitUpload.single("permit_image"), async (req, res) => {
   const {
     tariff_id, loading_place, unloading_place, driver_expense, rental,
     vehicle_plates, route_type, created_by, notes,
@@ -182,7 +181,7 @@ router.post("/routing-dispatches", requireRoutingSupervisor, permitUpload.single
     ? `/api/uploads/${req.file.filename}`
     : validatePermitImageUrl(req.body.permit_image_url);
   if (permitImageUrl === false) return void res.status(400).json({ error: "مسار صورة التصريح غير صالح" });
-  const cargoItems = parseCargoItems(req.body.cargo_items);
+  const cargoItems = await parseCargoItems(req.body.cargo_items);
   if (cargoItems === false) return void res.status(400).json({ error: "قائمة أنواع الحمولة والكميات غير صالحة" });
   const permitAttachments = parsePermitAttachments(
     req.body.permit_images,
@@ -200,210 +199,152 @@ router.post("/routing-dispatches", requireRoutingSupervisor, permitUpload.single
   if (loadingLocation === false || unloadingLocation === false)
     return void res.status(400).json({ error: "اسم ورابط لوكيشن التحميل والتنزيل مطلوبان معًا، ويجب أن يبدأ الرابط بـ https أو http" });
 
-  const existingDispatch = db.prepare("SELECT id FROM routing_dispatches WHERE client_request_id=?")
-    .get(clientRequestId) as { id: number } | undefined;
+  const existingDispatch = await queryOne<{ id: number }>(
+    "SELECT id FROM routing_dispatches WHERE client_request_id=?", clientRequestId,
+  );
   if (existingDispatch) {
     return void res.json({ id: existingDispatch.id, message: "تم إرسال التوجيه بنجاح", existing: true });
   }
 
+  const destWarehouse = await queryOne<{ id: number }>(
+    "SELECT id FROM warehouses WHERE LOWER(TRIM(name))=LOWER(TRIM(?)) LIMIT 1", String(effectiveUnloading),
+  );
+  const warehouseId = destWarehouse?.id ?? null;
+  const vehicleRows = await queryAll<{
+    plate_number: string; driver_name: string | null; driver_phone: string | null; linked_user_phone: string | null;
+  }>(
+    `SELECT plate_number, driver_name, driver_phone, linked_user_phone
+     FROM fleet_vehicles WHERE plate_number IN (${plates.map(() => "?").join(",")})`,
+    ...plates,
+  );
+  const vehicleByPlate = new Map(vehicleRows.map(vehicle => [vehicle.plate_number, vehicle]));
+  const fsohatUsers = route_type === "via_fusahat"
+    ? await queryAll<{ phone: string }>("SELECT phone FROM users WHERE role IN ('fsohat','admin') AND active=1")
+    : [];
+  const routeLabel = `${effectiveLoading} ← ${effectiveUnloading}`;
+  const reqNotes = [
+    route_type === "via_fusahat" ? "توجيه من مشرف النقليات" : "توجيه مباشر من مشرف النقليات",
+    tariff_id ? `رقم التعريفة: ${tariff_id}` : null,
+    notes ? String(notes) : null,
+  ].filter(Boolean).join(" | ");
+  const statements = [{
+    sql: `
+      INSERT INTO routing_dispatches
+        (tariff_id, loading_place, unloading_place, driver_expense, rental, vehicle_plates,
+         route_type, created_by, notes, customer_name, rep_name,
+         override_loading_place, override_unloading_place, tariff_loading_place,
+         tariff_unloading_place, customer_type, rep_phone, cargo_type, permit_image_url, client_request_id,
+         loading_location_name, loading_location_url, unloading_location_name, unloading_location_url)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    `,
+    params: [
+      tariff_id ?? null, effectiveLoading, effectiveUnloading, Number(driver_expense) || 0,
+      Number(rental) || 0, JSON.stringify(plates), route_type === "via_fusahat" ? "via_fusahat" : "direct",
+      created_by ?? null, notes ?? null, customer_name ? String(customer_name).trim() : null,
+      rep_name ? String(rep_name).trim() : null,
+      override_loading_place ? String(override_loading_place).trim() : null,
+      override_unloading_place ? String(override_unloading_place).trim() : null,
+      loading_place ? String(loading_place).trim() : null, unloading_place ? String(unloading_place).trim() : null,
+      customer_type || null, rep_phone ? String(rep_phone).trim() : null, firstCargoType || null,
+      firstPermitImageUrl, clientRequestId, loadingLocation?.name ?? null, loadingLocation?.url ?? null,
+      unloadingLocation?.name ?? null, unloadingLocation?.url ?? null,
+    ],
+  }, {
+    sql: `
+      INSERT INTO supply_requests
+        (product_name, warehouse_name, destination_division, warehouse_id,
+         requested_qty, unit, trailer_loads, status, priority, requested_by, notes,
+         routing_dispatch_id, driver_expense, rental, cargo_type, customer_name,
+         customer_type, rep_name, rep_phone, permit_image_url)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,
+         (SELECT id FROM routing_dispatches WHERE client_request_id=?),
+         ?,?,?,?,?,?,?,?)
+    `,
+    params: [
+      routeLabel, String(effectiveLoading), String(effectiveUnloading), warehouseId,
+      plates.length, "مركبة", plates.length,
+      route_type === "via_fusahat" ? "assigned" : "in_transit", "high",
+      created_by ? String(created_by) : null, reqNotes, clientRequestId,
+      Number(driver_expense) || 0, Number(rental) || 0, firstCargoType || null,
+      customer_name ? String(customer_name).trim() : null, customer_type || null,
+      rep_name ? String(rep_name).trim() : null, rep_phone ? String(rep_phone).trim() : null,
+      firstPermitImageUrl,
+    ],
+  }];
+  const childStatus = route_type === "via_fusahat" ? "assigned" : "in_transit";
+  for (const plate of plates) {
+    const vehicle = vehicleByPlate.get(plate);
+    const phone = vehicle?.driver_phone ?? vehicle?.linked_user_phone ?? null;
+    statements.push({
+      sql: `
+        INSERT INTO supply_request_trips
+          (supply_request_id, vehicle_plate, driver_name, driver_phone, status, permit_image_url,
+           cargo_items_json, attachments_json)
+        SELECT id, ?, ?, ?, ?, ?, ?, ?
+        FROM supply_requests
+        WHERE routing_dispatch_id=(SELECT id FROM routing_dispatches WHERE client_request_id=?)
+      `,
+      params: [
+        plate, vehicle?.driver_name ?? null, phone, childStatus, firstPermitImageUrl,
+        cargoItemsJson, attachmentsJson, clientRequestId,
+      ],
+    });
+  }
   let dispatchId: number;
   try {
-    dispatchId = db.transaction(() => {
-  const result = db.prepare(`
-    INSERT INTO routing_dispatches
-      (tariff_id, loading_place, unloading_place, driver_expense, rental, vehicle_plates,
-       route_type, created_by, notes, customer_name, rep_name,
-       override_loading_place, override_unloading_place, tariff_loading_place,
-       tariff_unloading_place, customer_type, rep_phone, cargo_type, permit_image_url, client_request_id,
-       loading_location_name, loading_location_url, unloading_location_name, unloading_location_url)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(
-    tariff_id ?? null,
-    effectiveLoading,
-    effectiveUnloading,
-    Number(driver_expense) || 0,
-    Number(rental) || 0,
-    JSON.stringify(plates),
-    route_type === "via_fusahat" ? "via_fusahat" : "direct",
-    created_by ?? null,
-    notes ?? null,
-    customer_name ? String(customer_name).trim() : null,
-    rep_name ? String(rep_name).trim() : null,
-    override_loading_place ? String(override_loading_place).trim() : null,
-    override_unloading_place ? String(override_unloading_place).trim() : null,
-    loading_place ? String(loading_place).trim() : null,
-    unloading_place ? String(unloading_place).trim() : null,
-    customer_type || null,
-    rep_phone ? String(rep_phone).trim() : null,
-     firstCargoType || null,
-     firstPermitImageUrl,
-    clientRequestId,
-    loadingLocation?.name ?? null,
-    loadingLocation?.url ?? null,
-    unloadingLocation?.name ?? null,
-    unloadingLocation?.url ?? null,
-  );
-  const newDispatchId = Number(result.lastInsertRowid);
-
-  /* ── بحث عن مستودع يطابق وجهة التنزيل ── */
-  const destWarehouse = db.prepare(
-    "SELECT id FROM warehouses WHERE LOWER(TRIM(name))=LOWER(TRIM(?)) LIMIT 1"
-  ).get(String(effectiveUnloading)) as { id: number } | undefined;
-  const warehouseId = destWarehouse?.id ?? null;
-
-  if (route_type === "via_fusahat") {
-    /* ── إنشاء طلب توريد + رحلة لكل مركبة ── */
-    const routeLabel = `${effectiveLoading} ← ${effectiveUnloading}`;
-    const reqNotes = [
-      `توجيه من مشرف النقليات`,
-      tariff_id ? `رقم التعريفة: ${tariff_id}` : null,
-      notes ? String(notes) : null,
-    ].filter(Boolean).join(" | ");
-
-    const srResult = db.prepare(`
-      INSERT INTO supply_requests
-        (product_name, warehouse_name, destination_division, warehouse_id,
-          requested_qty, unit, trailer_loads, status, priority,
-          requested_by, notes, routing_dispatch_id, driver_expense, rental,
-          cargo_type, customer_name, customer_type, rep_name, rep_phone, permit_image_url)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).run(
-      routeLabel,
-      String(effectiveLoading),
-      String(effectiveUnloading),
-      warehouseId,
-      plates.length,
-      "مركبة",
-      plates.length,
-      "assigned",
-      "high",
-      created_by ? String(created_by) : null,
-      reqNotes,
-      newDispatchId,
-      Number(driver_expense) || 0,
-      Number(rental) || 0,
-       firstCargoType || null,
-      customer_name ? String(customer_name).trim() : null,
-      customer_type || null,
-      rep_name ? String(rep_name).trim() : null,
-      rep_phone ? String(rep_phone).trim() : null,
-       firstPermitImageUrl,
+    await executeBatch(statements);
+    const createdDispatch = await queryOne<{ id: number }>(
+      "SELECT id FROM routing_dispatches WHERE client_request_id=?", clientRequestId,
     );
-
-    const srId = srResult.lastInsertRowid as number;
-
-    const tripStmt = db.prepare(`
-      INSERT INTO supply_request_trips
-        (supply_request_id, vehicle_plate, driver_name, driver_phone, status, permit_image_url,
-         cargo_items_json, attachments_json)
-      VALUES (?,?,?,?,?,?,?,?)
-    `);
-
-    for (const plate of plates) {
-      const v = db.prepare(
-        "SELECT driver_name, driver_phone, linked_user_phone FROM fleet_vehicles WHERE plate_number=?"
-      ).get(plate) as { driver_name: string | null; driver_phone: string | null; linked_user_phone: string | null } | undefined;
-
-      const childTrip = tripStmt.run(
-        srId, plate,
-        v?.driver_name ?? null,
-        v?.driver_phone ?? v?.linked_user_phone ?? null,
-        "assigned",
-        firstPermitImageUrl,
-        cargoItemsJson,
-        attachmentsJson,
-      );
-      syncRoutingTripLog(Number(childTrip.lastInsertRowid), { createIfMissing: true });
-    }
-
-    /* ── إشعار مسؤولي الفسوحات ── */
-    const fsohatUsers = db.prepare("SELECT phone FROM users WHERE role IN ('fsohat','admin') AND active=1").all() as { phone: string }[];
-    const platesStr = plates.join("، ");
-    fsohatUsers.forEach(u =>
-      notify(u.phone, "توجيه جديد — يحتاج فسوحات", `مسار: ${routeLabel} | السيارات: ${platesStr}`)
-    );
-
-  } else {
-    /* ── توجيه مباشر: ينشئ طلب توريد + رحلة مباشرةً بدون خطوة الفسوحات ── */
-    const routeLabel = `${effectiveLoading} ← ${effectiveUnloading}`;
-    const reqNotes = [
-      `توجيه مباشر من مشرف النقليات`,
-      tariff_id ? `رقم التعريفة: ${tariff_id}` : null,
-      notes ? String(notes) : null,
-    ].filter(Boolean).join(" | ");
-
-    const srResult = db.prepare(`
-      INSERT INTO supply_requests
-        (product_name, warehouse_name, destination_division, warehouse_id,
-          requested_qty, unit, trailer_loads, status, priority,
-          requested_by, notes, routing_dispatch_id, driver_expense, rental,
-          cargo_type, customer_name, customer_type, rep_name, rep_phone, permit_image_url)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).run(
-      routeLabel,
-      String(effectiveLoading),
-      String(effectiveUnloading),
-      warehouseId,
-      plates.length,
-      "مركبة",
-      plates.length,
-      "in_transit",
-      "high",
-      created_by ? String(created_by) : null,
-      reqNotes,
-      newDispatchId,
-      Number(driver_expense) || 0,
-      Number(rental) || 0,
-      firstCargoType || null,
-      customer_name ? String(customer_name).trim() : null,
-      customer_type || null,
-      rep_name ? String(rep_name).trim() : null,
-      rep_phone ? String(rep_phone).trim() : null,
-      firstPermitImageUrl,
-    );
-
-    const srId = srResult.lastInsertRowid as number;
-
-    const tripStmt = db.prepare(`
-      INSERT INTO supply_request_trips
-        (supply_request_id, vehicle_plate, driver_name, driver_phone, status, permit_image_url,
-         cargo_items_json, attachments_json)
-      VALUES (?,?,?,?,?,?,?,?)
-    `);
-
-    for (const plate of plates) {
-      const v = db.prepare(
-        "SELECT driver_name, driver_phone, linked_user_phone FROM fleet_vehicles WHERE plate_number=?"
-      ).get(plate) as { driver_name: string | null; driver_phone: string | null; linked_user_phone: string | null } | undefined;
-
-      const dPhone = v?.driver_phone ?? v?.linked_user_phone ?? null;
-      const childTrip = tripStmt.run(
-        srId, plate, v?.driver_name ?? null, dPhone, "in_transit",
-        firstPermitImageUrl, cargoItemsJson, attachmentsJson,
-      );
-      syncRoutingTripLog(Number(childTrip.lastInsertRowid), { createIfMissing: true });
-
-      /* إشعار السائق مباشرةً */
-      if (dPhone) {
-        notify(dPhone, "توجيه جديد مباشر 🚛",
-          `مسار: ${routeLabel} | البونص: ${Number(driver_expense)||0} | الإيجار: ${Number(rental)||0}`);
-      }
-    }
-  }
-  return newDispatchId;
-    })();
+    if (!createdDispatch) throw new Error("تعذر حفظ التوجيه");
+    dispatchId = createdDispatch.id;
   } catch (error) {
-    const duplicate = db.prepare("SELECT id FROM routing_dispatches WHERE client_request_id=?")
-      .get(clientRequestId) as { id: number } | undefined;
+    const duplicate = await queryOne<{ id: number }>(
+      "SELECT id FROM routing_dispatches WHERE client_request_id=?", clientRequestId,
+    );
     if (duplicate) return void res.json({ id: duplicate.id, message: "تم إرسال التوجيه بنجاح", existing: true });
     throw error;
+  }
+  const createdTrips = await queryAll<{ id: number }>(`
+    SELECT t.id
+    FROM supply_request_trips t
+    JOIN supply_requests sr ON sr.id=t.supply_request_id
+    WHERE sr.routing_dispatch_id=?
+    ORDER BY t.id
+  `, dispatchId);
+  if (createdTrips.length !== plates.length) throw new Error("لم يتم إنشاء رحلات جميع المركبات");
+  const createdTripIds = createdTrips.map(trip => trip.id);
+  const pendingNotifications: Array<{ phone: string; title: string; body: string }> = [];
+  if (route_type === "via_fusahat") {
+    const platesStr = plates.join("، ");
+    for (const user of fsohatUsers) pendingNotifications.push({
+      phone: user.phone,
+      title: "توجيه جديد — يحتاج فسوحات",
+      body: `مسار: ${routeLabel} | السيارات: ${platesStr}`,
+    });
+  } else {
+    for (const plate of plates) {
+      const phone = vehicleByPlate.get(plate)?.driver_phone ?? vehicleByPlate.get(plate)?.linked_user_phone ?? null;
+      if (phone) pendingNotifications.push({
+        phone,
+        title: "توجيه جديد مباشر 🚛",
+        body: `مسار: ${routeLabel} | البونص: ${Number(driver_expense)||0} | الإيجار: ${Number(rental)||0}`,
+      });
+    }
+  }
+  for (const childId of createdTripIds) {
+    await syncRoutingTripLog(childId, { createIfMissing: true });
+  }
+  for (const notification of pendingNotifications) {
+    await notify(notification.phone, notification.title, notification.body);
   }
   res.json({ id: dispatchId, message: "تم إرسال التوجيه بنجاح" });
 });
 
 /* ── GET all routing-dispatch trips ──────────────────────────────────────── */
-router.get("/routing-dispatch-trips", (_req, res) => {
-  const rows = db.prepare(`
+router.get("/routing-dispatch-trips", async (_req, res) => {
+  const rows = await queryAll<Record<string, unknown>>(
+    `
     SELECT t.id, t.supply_request_id, t.vehicle_plate, t.driver_name, t.driver_phone,
            t.status, t.created_at, t.delivered_at, t.cargo_items_json,
            sr.product_name, sr.warehouse_name, sr.destination_division,
@@ -421,7 +362,7 @@ router.get("/routing-dispatch-trips", (_req, res) => {
     WHERE sr.routing_dispatch_id IS NOT NULL
     ORDER BY t.created_at DESC
     LIMIT 500
-  `).all() as Array<Record<string, unknown>>;
+  `);
   res.json(rows.map(row => {
     let cargoItems: unknown[] = [];
     try {
@@ -434,81 +375,77 @@ router.get("/routing-dispatch-trips", (_req, res) => {
 });
 
 /* ── Cancel a routing-dispatch trip ─────────────────────────────────────── */
-router.put("/routing-dispatch-trips/:id/cancel", requireRoutingSupervisor, (req, res) => {
-  const trip = db.prepare(`
+router.put("/routing-dispatch-trips/:id/cancel", requireRoutingSupervisor, async (req, res) => {
+  const trip = await queryOne<{
+    vehicle_plate: string | null; supply_request_id: number; warehouse_id: number | null; routing_dispatch_id: number | null;
+  }>(`
     SELECT t.vehicle_plate, t.supply_request_id, sr.warehouse_id, sr.routing_dispatch_id
     FROM supply_request_trips t JOIN supply_requests sr ON sr.id=t.supply_request_id
     WHERE t.id=?
-  `).get(req.params.id) as {
-    vehicle_plate: string | null; supply_request_id: number; warehouse_id: number | null; routing_dispatch_id: number | null;
-  } | undefined;
+  `, req.params.id);
   if (!trip) return void res.status(404).json({ error: "الرحلة غير موجودة" });
-  db.transaction(() => {
-    db.prepare(`
-      UPDATE supply_request_trips SET status='cancelled', updated_at=datetime('now')
-      WHERE id=? AND status NOT IN ('completed','cancelled','rejected')
-    `).run(req.params.id);
-    syncRoutingTripLog(Number(req.params.id));
-    const remaining = db.prepare(`
-      SELECT COUNT(*) AS total,
-             SUM(CASE WHEN status IN ('completed','cancelled','rejected','delivered_to_warehouse','pending_warehouse_approval') THEN 1 ELSE 0 END) AS done,
-             SUM(CASE WHEN status IN ('completed','delivered_to_warehouse','pending_warehouse_approval') THEN 1 ELSE 0 END) AS delivered
-      FROM supply_request_trips WHERE supply_request_id=?
-    `).get(trip.supply_request_id) as { total: number; done: number; delivered: number };
-    if (remaining.total > 0 && remaining.total === remaining.done) {
-      const status = remaining.delivered === 0
-        ? "cancelled"
-        : trip.warehouse_id ? "delivered_to_warehouse" : "completed";
-      db.prepare("UPDATE supply_requests SET status=?, updated_at=datetime('now') WHERE id=? AND status NOT IN ('completed','cancelled')")
-        .run(status, trip.supply_request_id);
-      if (status === "delivered_to_warehouse") {
-        finalizeDisabledWarehouseRoutingRequest(trip.supply_request_id);
-      }
+  let shouldFinalizeRequest = false;
+  await execute(`
+    UPDATE supply_request_trips SET status='cancelled', updated_at=datetime('now')
+    WHERE id=? AND status NOT IN ('completed','cancelled','rejected')
+  `, req.params.id);
+  const remaining = await queryOne<{ total: number; done: number; delivered: number }>(`
+    SELECT COUNT(*) AS total,
+           SUM(CASE WHEN status IN ('completed','cancelled','rejected','delivered_to_warehouse','pending_warehouse_approval') THEN 1 ELSE 0 END) AS done,
+           SUM(CASE WHEN status IN ('completed','delivered_to_warehouse','pending_warehouse_approval') THEN 1 ELSE 0 END) AS delivered
+    FROM supply_request_trips WHERE supply_request_id=?
+  `, trip.supply_request_id);
+  if (remaining && remaining.total > 0 && remaining.total === remaining.done) {
+    const status = remaining.delivered === 0
+      ? "cancelled"
+      : trip.warehouse_id ? "delivered_to_warehouse" : "completed";
+    await execute("UPDATE supply_requests SET status=?, updated_at=datetime('now') WHERE id=? AND status NOT IN ('completed','cancelled')",
+      status, trip.supply_request_id);
+    if (status === "delivered_to_warehouse") {
+      shouldFinalizeRequest = true;
     }
-  })();
+  }
+  await syncRoutingTripLog(Number(req.params.id));
+  if (shouldFinalizeRequest) await finalizeDisabledWarehouseRoutingRequest(trip.supply_request_id);
 
   if (trip?.vehicle_plate) {
     try {
-      db.prepare("UPDATE fleet_vehicles SET status='available' WHERE plate_number=?")
-        .run(trip.vehicle_plate);
+      await execute("UPDATE fleet_vehicles SET status='available' WHERE plate_number=?", trip.vehicle_plate);
     } catch {}
   }
   res.json({ message: "تم إلغاء الرحلة" });
 });
 
 /* ── Hard-delete a routing-dispatch trip ────────────────────────────────── */
-router.delete("/routing-dispatch-trips/:id", (req, res) => {
-  const trip = db.prepare(
+router.delete("/routing-dispatch-trips/:id", async (req, res) => {
+  const trip = await queryOne<{ vehicle_plate: string | null; status: string }>(
     "SELECT vehicle_plate, status FROM supply_request_trips WHERE id=?"
-  ).get(req.params.id) as { vehicle_plate: string | null; status: string } | undefined;
+  , req.params.id);
 
-  db.transaction(() => {
-    deletePendingRoutingTripLog(Number(req.params.id));
-    db.prepare("DELETE FROM supply_request_trips WHERE id=?").run(req.params.id);
-  })();
+  await deletePendingRoutingTripLog(Number(req.params.id));
+  await execute("DELETE FROM supply_request_trips WHERE id=?", req.params.id);
 
   if (trip?.vehicle_plate && !["completed","cancelled","delivered_to_warehouse"].includes(trip.status ?? "")) {
     try {
-      db.prepare("UPDATE fleet_vehicles SET status='available' WHERE plate_number=?")
-        .run(trip.vehicle_plate);
+      await execute("UPDATE fleet_vehicles SET status='available' WHERE plate_number=?", trip.vehicle_plate);
     } catch {}
   }
   res.json({ message: "تم حذف الرحلة" });
 });
 
 /* Shared routing fields belong to the dispatch; vehicle/driver belong to one trip. */
-router.put("/routing-dispatch-trips/:id", requireRoutingSupervisor, (req, res) => {
-  const trip = db.prepare(`
+router.put("/routing-dispatch-trips/:id", requireRoutingSupervisor, async (req, res) => {
+  const trip = await queryOne<{
+    id: number; status: string; supply_request_id: number; vehicle_plate: string | null;
+    routing_dispatch_id: number; route_type: string;
+  }>(`
     SELECT t.id, t.status, t.supply_request_id, t.vehicle_plate,
            sr.routing_dispatch_id, d.route_type
     FROM supply_request_trips t
     JOIN supply_requests sr ON sr.id=t.supply_request_id
     JOIN routing_dispatches d ON d.id=sr.routing_dispatch_id
     WHERE t.id=?
-  `).get(req.params.id) as {
-    id: number; status: string; supply_request_id: number; vehicle_plate: string | null;
-    routing_dispatch_id: number; route_type: string;
-  } | undefined;
+  `, req.params.id);
   if (!trip) return void res.status(404).json({ error: "رحلة التوجيه غير موجودة" });
   if (["completed", "cancelled", "rejected"].includes(trip.status)) {
     return void res.status(409).json({ error: "لا يمكن تعديل رحلة مكتملة أو ملغاة" });
@@ -516,7 +453,7 @@ router.put("/routing-dispatch-trips/:id", requireRoutingSupervisor, (req, res) =
 
   const body = req.body as Record<string, unknown>;
   const text = (key: string) => typeof body[key] === "string" ? String(body[key]).trim() : "";
-  const parsedCargoItems = body.cargo_items === undefined ? null : parseCargoItems(body.cargo_items);
+  const parsedCargoItems = body.cargo_items === undefined ? null : await parseCargoItems(body.cargo_items);
   if (parsedCargoItems === false) return void res.status(400).json({ error: "قائمة المنتجات والكميات غير صالحة" });
   const cargoType = parsedCargoItems
     ? parsedCargoItems[0]?.cargo_type || ""
@@ -543,18 +480,18 @@ router.put("/routing-dispatch-trips/:id", requireRoutingSupervisor, (req, res) =
   }
   const tariffId = Number(body.tariff_id);
   if (!Number.isSafeInteger(tariffId) || tariffId <= 0 ||
-      !db.prepare("SELECT id FROM tariffs WHERE id=?").get(tariffId)) {
+      !await queryOne("SELECT id FROM tariffs WHERE id=?", tariffId)) {
     return void res.status(400).json({ error: "رقم التعريفة غير صالح" });
   }
   const suppliedWarehouseId = body.warehouse_id == null || body.warehouse_id === "" ? null : Number(body.warehouse_id);
   const matchingWarehouse = suppliedWarehouseId === null
-    ? db.prepare("SELECT id FROM warehouses WHERE LOWER(TRIM(name))=LOWER(TRIM(?)) AND active=1 LIMIT 1")
-      .get(effectiveUnloading) as { id: number } | undefined
+    ? await queryOne<{ id: number }>("SELECT id FROM warehouses WHERE LOWER(TRIM(name))=LOWER(TRIM(?)) AND active=1 LIMIT 1",
+      effectiveUnloading)
     : undefined;
   const warehouseId = suppliedWarehouseId ?? matchingWarehouse?.id ?? null;
   if (warehouseId !== null) {
     const selectedWarehouse = Number.isSafeInteger(warehouseId) && warehouseId > 0
-      ? db.prepare("SELECT name FROM warehouses WHERE id=? AND active=1").get(warehouseId) as { name: string } | undefined
+      ? await queryOne<{ name: string }>("SELECT name FROM warehouses WHERE id=? AND active=1", warehouseId)
       : undefined;
     if (!selectedWarehouse) {
       return void res.status(400).json({ error: "المستودع المحدد غير موجود" });
@@ -565,10 +502,14 @@ router.put("/routing-dispatch-trips/:id", requireRoutingSupervisor, (req, res) =
   }
   const permitUrl = body.permit_image_url === undefined ? undefined : validatePermitImageUrl(body.permit_image_url);
   if (permitUrl === false) return void res.status(400).json({ error: "رابط صورة الفسح غير صالح" });
-  const existingLocations = db.prepare(`
+  const existingLocations = await queryOne<{
+    loading_location_name: string | null; loading_location_url: string | null;
+    unloading_location_name: string | null; unloading_location_url: string | null;
+  }>(`
     SELECT loading_location_name, loading_location_url, unloading_location_name, unloading_location_url
     FROM routing_dispatches WHERE id=?
-  `).get(trip.routing_dispatch_id) as Record<string, string | null>;
+  `, trip.routing_dispatch_id);
+  if (!existingLocations) return void res.status(404).json({ error: "التوجيه غير موجود" });
   const loadingLocation = parseDispatchLocation(
     body.loading_location_name ?? existingLocations.loading_location_name,
     body.loading_location_url ?? existingLocations.loading_location_url,
@@ -579,123 +520,144 @@ router.put("/routing-dispatch-trips/:id", requireRoutingSupervisor, (req, res) =
   );
   if (loadingLocation === false || unloadingLocation === false)
     return void res.status(400).json({ error: "اسم ورابط اللوكيشن مطلوبان معًا، ويجب أن يبدأ الرابط بـ https أو http" });
-  const siblingTrips = db.prepare(`
+  const siblingTrips = await queryAll<{ id: number; status: string; vehicle_plate: string | null }>(`
     SELECT id, status, vehicle_plate FROM supply_request_trips WHERE supply_request_id=?
-  `).all(trip.supply_request_id) as { id: number; status: string; vehicle_plate: string | null }[];
+  `, trip.supply_request_id);
   if (routeType !== trip.route_type &&
       siblingTrips.some(t => !["assigned", "in_transit"].includes(t.status))) {
     return void res.status(409).json({ error: "لا يمكن تغيير نوع التوجيه بعد بدء تحميل أو تسليم إحدى سياراته" });
   }
   if (plate !== trip.vehicle_plate) {
-    const replacement = db.prepare("SELECT status FROM fleet_vehicles WHERE plate_number=?")
-      .get(plate) as { status: string } | undefined;
-    const occupied = db.prepare(`
+    const replacement = await queryOne<{ status: string }>("SELECT status FROM fleet_vehicles WHERE plate_number=?", plate);
+    const occupied = await queryOne(`
       SELECT 1 FROM supply_request_trips
       WHERE vehicle_plate=? AND id<>? AND status IN
         ('assigned','in_transit','loaded','delivered_to_warehouse','pending_warehouse_approval')
       LIMIT 1
-    `).get(plate, trip.id);
+    `, plate, trip.id);
     if (!replacement || replacement.status !== "available" || occupied) {
       return void res.status(409).json({ error: "السيارة البديلة غير متاحة للتوجيه" });
     }
   }
 
-  db.transaction(() => {
-    db.prepare(`
+  const statements: Array<{ sql: string; params?: unknown[] }> = [{
+    sql: `
       UPDATE routing_dispatches SET
         tariff_id=?, loading_place=?, unloading_place=?,
         tariff_loading_place=?, tariff_unloading_place=?,
         override_loading_place=?, override_unloading_place=?,
-         customer_name=?, customer_type=?, rep_name=?, rep_phone=?, cargo_type=?,
+        customer_name=?, customer_type=?, rep_name=?, rep_phone=?, cargo_type=?,
         driver_expense=?, rental=?, notes=?, route_type=?,
-         permit_image_url=COALESCE(?,permit_image_url),
-         loading_location_name=?, loading_location_url=?,
-         unloading_location_name=?, unloading_location_url=?
+        permit_image_url=COALESCE(?,permit_image_url),
+        loading_location_name=?, loading_location_url=?,
+        unloading_location_name=?, unloading_location_url=?
       WHERE id=?
-    `).run(
+    `,
+    params: [
       tariffId, effectiveLoading, effectiveUnloading, loading, unloading,
       text("override_loading_place") || null, text("override_unloading_place") || null,
       text("customer_name") || null, text("customer_type") || null,
-       text("rep_name") || null, text("rep_phone") || null, cargoType || null,
-       amounts[0], amounts[1], text("notes") || null, routeType, permitUrl ?? null,
-       loadingLocation?.name ?? null, loadingLocation?.url ?? null,
-       unloadingLocation?.name ?? null, unloadingLocation?.url ?? null,
+      text("rep_name") || null, text("rep_phone") || null, cargoType || null,
+      amounts[0], amounts[1], text("notes") || null, routeType, permitUrl ?? null,
+      loadingLocation?.name ?? null, loadingLocation?.url ?? null,
+      unloadingLocation?.name ?? null, unloadingLocation?.url ?? null,
       trip.routing_dispatch_id,
-    );
-    db.prepare(`
+    ],
+  }, {
+    sql: `
       UPDATE supply_requests SET
         product_name=?, warehouse_name=?, destination_division=?, warehouse_id=?,
         driver_expense=?, rental=?, cargo_type=?, customer_name=?, customer_type=?,
         rep_name=?, rep_phone=?, notes=?, permit_image_url=COALESCE(?,permit_image_url),
         updated_at=datetime('now')
       WHERE routing_dispatch_id=?
-    `).run(
+    `,
+    params: [
       text("product_name") || `${effectiveLoading} ← ${effectiveUnloading}`,
       effectiveLoading, destination, warehouseId, amounts[0], amounts[1],
-       cargoType || null, text("customer_name") || null, text("customer_type") || null,
+      cargoType || null, text("customer_name") || null, text("customer_type") || null,
       text("rep_name") || null, text("rep_phone") || null, text("notes") || null,
       permitUrl ?? null, trip.routing_dispatch_id,
-    );
-    if (parsedCargoItems) {
-      db.prepare(`
-        UPDATE supply_request_trips SET cargo_items_json=?, updated_at=datetime('now')
-        WHERE supply_request_id=? AND status NOT IN ('completed','cancelled','rejected')
-      `).run(cargoItemsJson, trip.supply_request_id);
-    }
-    db.prepare(`
+    ],
+  }, {
+    sql: `
       UPDATE supply_request_trips SET
-        vehicle_plate=?, driver_name=?, driver_phone=?,
-        updated_at=datetime('now')
+        vehicle_plate=?, driver_name=?, driver_phone=?, updated_at=datetime('now')
       WHERE id=?
-    `).run(plate, text("driver_name") || null, text("driver_phone") || null, trip.id);
-    if (plate !== trip.vehicle_plate) {
-      db.prepare("UPDATE fleet_vehicles SET status='busy' WHERE plate_number=?").run(plate);
-      db.prepare("UPDATE driver_profiles SET status='في رحلة' WHERE vehicle_plate=?").run(plate);
-      if (trip.vehicle_plate) {
-        const stillAssigned = db.prepare(`
-          SELECT 1 FROM supply_request_trips WHERE vehicle_plate=?
-            AND status IN ('assigned','in_transit','loaded','delivered_to_warehouse','pending_warehouse_approval')
-          LIMIT 1
-        `).get(trip.vehicle_plate);
-        const activeOrder = db.prepare(`
-          SELECT 1 FROM workflow_orders WHERE vehicle_plate=?
-            AND stage IN ('vehicle_assigned','invoiced','loaded','bulker_assignment') LIMIT 1
-        `).get(trip.vehicle_plate);
-        if (!stillAssigned && !activeOrder) {
-          db.prepare("UPDATE fleet_vehicles SET status='available' WHERE plate_number=?").run(trip.vehicle_plate);
-          db.prepare("UPDATE driver_profiles SET status='نشط' WHERE vehicle_plate=?").run(trip.vehicle_plate);
-        }
+    `,
+    params: [plate, text("driver_name") || null, text("driver_phone") || null, trip.id],
+  }];
+  if (parsedCargoItems) statements.push({
+    sql: `
+      UPDATE supply_request_trips SET cargo_items_json=?, updated_at=datetime('now')
+      WHERE supply_request_id=? AND status NOT IN ('completed','cancelled','rejected')
+    `,
+    params: [cargoItemsJson, trip.supply_request_id],
+  });
+  if (plate !== trip.vehicle_plate) {
+    statements.push(
+      { sql: "UPDATE fleet_vehicles SET status='busy' WHERE plate_number=?", params: [plate] },
+      { sql: "UPDATE driver_profiles SET status='في رحلة' WHERE vehicle_plate=?", params: [plate] },
+    );
+    if (trip.vehicle_plate) {
+      const stillAssigned = await queryOne(`
+        SELECT 1 FROM supply_request_trips WHERE vehicle_plate=? AND id<>?
+          AND status IN ('assigned','in_transit','loaded','delivered_to_warehouse','pending_warehouse_approval')
+        LIMIT 1
+      `, trip.vehicle_plate, trip.id);
+      const activeOrder = await queryOne(`
+        SELECT 1 FROM workflow_orders WHERE vehicle_plate=?
+          AND stage IN ('vehicle_assigned','invoiced','loaded','bulker_assignment') LIMIT 1
+      `, trip.vehicle_plate);
+      if (!stillAssigned && !activeOrder) {
+        statements.push(
+          { sql: "UPDATE fleet_vehicles SET status='available' WHERE plate_number=?", params: [trip.vehicle_plate] },
+          { sql: "UPDATE driver_profiles SET status='نشط' WHERE vehicle_plate=?", params: [trip.vehicle_plate] },
+        );
       }
     }
-    if (permitUrl) {
-      db.prepare(`
-        UPDATE supply_request_trips SET permit_image_url=?
-        WHERE supply_request_id=? AND status NOT IN ('completed','cancelled','rejected')
-      `)
-        .run(permitUrl, trip.supply_request_id);
-    }
-    if (routeType !== trip.route_type) {
-      const nextTripStatus = routeType === "via_fusahat" ? "assigned" : "in_transit";
-      db.prepare("UPDATE supply_request_trips SET status=?, updated_at=datetime('now') WHERE supply_request_id=?")
-        .run(nextTripStatus, trip.supply_request_id);
-      db.prepare("UPDATE supply_requests SET status=?, updated_at=datetime('now') WHERE routing_dispatch_id=?")
-        .run(nextTripStatus, trip.routing_dispatch_id);
-    }
-    const currentChildren = db.prepare(`
-      SELECT id FROM supply_request_trips
+  }
+  if (permitUrl) statements.push({
+    sql: `
+      UPDATE supply_request_trips SET permit_image_url=?
       WHERE supply_request_id=? AND status NOT IN ('completed','cancelled','rejected')
-    `)
-      .all(trip.supply_request_id) as { id: number }[];
-    currentChildren.forEach(child => syncRoutingTripLog(child.id, {
+    `,
+    params: [permitUrl, trip.supply_request_id],
+  });
+  if (routeType !== trip.route_type) {
+    const nextTripStatus = routeType === "via_fusahat" ? "assigned" : "in_transit";
+    statements.push(
+      {
+        sql: "UPDATE supply_request_trips SET status=?, updated_at=datetime('now') WHERE supply_request_id=?",
+        params: [nextTripStatus, trip.supply_request_id],
+      },
+      {
+        sql: "UPDATE supply_requests SET status=?, updated_at=datetime('now') WHERE routing_dispatch_id=?",
+        params: [nextTripStatus, trip.routing_dispatch_id],
+      },
+    );
+  }
+  await executeBatch(statements);
+  const routingChildrenToSync = await queryAll<{ id: number }>(`
+    SELECT id FROM supply_request_trips
+    WHERE supply_request_id=? AND status NOT IN ('completed','cancelled','rejected')
+  `, trip.supply_request_id);
+  const plates = await queryAll<{ vehicle_plate: string | null }>(
+    "SELECT vehicle_plate FROM supply_request_trips WHERE supply_request_id=? ORDER BY id",
+    trip.supply_request_id,
+  );
+  await execute(
+    "UPDATE routing_dispatches SET vehicle_plates=? WHERE id=?",
+    JSON.stringify(plates.map(child => child.vehicle_plate).filter(Boolean)),
+    trip.routing_dispatch_id,
+  );
+  for (const child of routingChildrenToSync) {
+    await syncRoutingTripLog(child.id, {
       onlyActive: true,
       refreshDispatchSnapshot: true,
       refreshTrailerSnapshot: child.id === trip.id && plate !== trip.vehicle_plate,
-    }));
-    const plates = db.prepare("SELECT vehicle_plate FROM supply_request_trips WHERE supply_request_id=? ORDER BY id")
-      .all(trip.supply_request_id) as { vehicle_plate: string | null }[];
-    db.prepare("UPDATE routing_dispatches SET vehicle_plates=? WHERE id=?")
-      .run(JSON.stringify(plates.map(t => t.vehicle_plate).filter(Boolean)), trip.routing_dispatch_id);
-  })();
+    });
+  }
   res.json({ message: "تم تحديث التوجيه والرحلة" });
 });
 

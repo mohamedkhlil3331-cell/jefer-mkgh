@@ -1,6 +1,6 @@
 import { Router } from "express";
 import type { Request, Response, NextFunction } from "express";
-import db from "../lib/db.js";
+import { execute, executeBatch, queryAll, queryOne } from "../lib/erp-sql.js";
 
 const router = Router();
 const CUSTODY_ROLES = new Set(["admin", "supervisor", "finance", "accountant"]);
@@ -63,14 +63,18 @@ function printedItemsFromSnapshot(serializedItems: string | null): { type: strin
   return refs;
 }
 
-function markCustodyItems(driverPhone: string, items: { type: string; ref: string }[], batchKey: string) {
-  const insert = db.prepare(
-    `INSERT INTO printed_marks (driver_phone, item_type, item_ref, batch_key) VALUES (?,?,?,?)
+function markCustodyItemStatements(
+  driverPhone: string,
+  items: { type: string; ref: string }[],
+  batchKey: string,
+) {
+  return items.map(item => ({
+    sql: `INSERT INTO printed_marks (driver_phone, item_type, item_ref, batch_key) VALUES (?,?,?,?)
      ON CONFLICT(driver_phone, item_type, item_ref) DO UPDATE SET
        batch_key=excluded.batch_key, marked_at=datetime('now')
-     WHERE printed_marks.batch_key IS NULL`
-  );
-  for (const item of items) insert.run(driverPhone, item.type, item.ref, batchKey);
+      WHERE printed_marks.batch_key IS NULL`,
+    params: [driverPhone, item.type, item.ref, batchKey],
+  }));
 }
 
 function savedStatementRefs(snapshotData: string | null): Set<string> {
@@ -99,15 +103,15 @@ function savedStatementRefs(snapshotData: string | null): Set<string> {
   return refs;
 }
 
-function requireCustodyAccess(req: Request, res: Response, next: NextFunction) {
+async function requireCustodyAccess(req: Request, res: Response, next: NextFunction) {
   const auth = req.headers.authorization;
   const token = auth?.startsWith("Bearer ") ? auth.slice(7) : "";
   const user = token
-    ? db.prepare(
+    ? await queryOne<CustodyUser>(
       `SELECT u.id, u.role
        FROM sessions s JOIN users u ON u.id=s.user_id
        WHERE s.token=? AND datetime(s.expires_at) > datetime('now') AND u.active=1`
-    ).get(token) as CustodyUser | undefined
+      , token)
     : undefined;
   if (!user) return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
   if (!CUSTODY_ROLES.has(user.role)) return void res.status(403).json({ error: "لا تملك صلاحية إدارة عهدة الحركة" });
@@ -115,13 +119,14 @@ function requireCustodyAccess(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
-function unprintDriverCustody(id: number) {
-  const update = db.prepare(
+async function unprintDriverCustody(id: number) {
+  const update = await execute(
     `UPDATE driver_custody_records
      SET is_custody_printed=0, custody_printed_at=NULL,
          is_cancelled=0, cancelled_at=NULL, cancelled_by_user_id=NULL
-     WHERE id=?`
-  ).run(id);
+     WHERE id=?`,
+    id,
+  );
   if (update.changes !== 1) {
     return { ok: false as const, error: "سجل العهدة غير موجود", status: 404 as const };
   }
@@ -131,7 +136,7 @@ function unprintDriverCustody(id: number) {
 router.use("/driver-custody", requireCustodyAccess);
 
 // GET /driver-custody — list all records, optional filters
-router.get("/driver-custody", (req, res) => {
+router.get("/driver-custody", async (req, res) => {
   const { driver_phone, from, to } = req.query as Record<string, string>;
   // Do not send potentially large stored print documents with the listing.
   let sql = `SELECT id, driver_phone, driver_name, vehicle_plate, print_date, date_from, date_to,
@@ -147,27 +152,27 @@ router.get("/driver-custody", (req, res) => {
   if (from)         { sql += " AND print_date >= ?"; params.push(from); }
   if (to)           { sql += " AND print_date <= ?"; params.push(to); }
   sql += " ORDER BY created_at DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
 // GET /driver-custody/summary — total + per-driver breakdown
-router.get("/driver-custody/summary", (_req, res) => {
-  const row = db.prepare(
+router.get("/driver-custody/summary", async (_req, res) => {
+  const row = await queryOne<{ total: number }>(
     "SELECT COALESCE(SUM(net_amount),0) AS total FROM driver_custody_records"
-  ).get() as { total: number };
-  const perDriver = db.prepare(`
+  );
+  const perDriver = await queryAll(`
     SELECT driver_phone, driver_name, vehicle_plate,
            COALESCE(SUM(net_amount),0) AS total_amount,
            COUNT(*) AS record_count
      FROM driver_custody_records
     GROUP BY driver_phone
     ORDER BY total_amount DESC
-  `).all();
-  res.json({ total_custody: row.total, per_driver: perDriver });
+  `);
+  res.json({ total_custody: row?.total || 0, per_driver: perDriver });
 });
 
 // POST /driver-custody — create new custody record (called after printing a statement)
-router.post("/driver-custody", (req, res) => {
+router.post("/driver-custody", async (req, res) => {
   const custodyUser = res.locals.custodyUser as CustodyUser;
   const { driver_phone, driver_name, vehicle_plate, date_from, date_to,
           load_types, net_amount, item_count, items_snapshot, batch_key, print_snapshot } = req.body;
@@ -184,40 +189,50 @@ router.post("/driver-custody", (req, res) => {
     return void res.status(400).json({ error: "بنود الكشف المطلوبة للوسم غير مكتملة؛ حدّث الصفحة وحاول مجددًا" });
   }
 
-  const created = db.transaction(() => {
-    const print_date = new Date().toISOString().slice(0, 10);
-    const seqRow = db.prepare(
-      `SELECT COALESCE(MAX(CAST(REPLACE(filter_ref,'KH-','') AS INTEGER)),0)+1 AS n
-       FROM driver_custody_records WHERE filter_ref LIKE 'KH-%'`
-    ).get() as { n: number };
-    const filter_ref = `KH-${String(seqRow.n).padStart(4, "0")}`;
-    const snapshotData = JSON.stringify({ ...print_snapshot, filter_ref });
-    const r = db.prepare(`
+  const serializedSnapshot = JSON.stringify(print_snapshot);
+  const insertSql = `
       INSERT INTO driver_custody_records
         (driver_phone, driver_name, vehicle_plate, print_date, date_from, date_to,
          filter_ref, load_types, net_amount, item_count, items_snapshot, batch_key,
          print_snapshot_data, snapshot_required, created_by_user_id)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    `).run(
-      driver_phone, driver_name || null, vehicle_plate || null, print_date,
-      date_from || null, date_to || null, filter_ref,
-      load_types || null,
-      parseFloat(String(net_amount || 0)) || 0,
-      parseInt(String(item_count || 0)) || 0,
-      serializedItems,
-      batch_key || null,
-      snapshotData,
-      1,
-      custodyUser.id,
-    );
-    markCustodyItems(driver_phone, printedItems, batch_key);
-    return { id: r.lastInsertRowid, filter_ref };
-  })();
+      VALUES (
+        ?, ?, ?, date('now'), ?, ?,
+        'KH-' || printf('%04d', COALESCE((
+          SELECT MAX(CAST(REPLACE(filter_ref,'KH-','') AS INTEGER))
+          FROM driver_custody_records WHERE filter_ref LIKE 'KH-%'
+        ), 0) + 1),
+        ?, ?, ?, ?, ?,
+        json_set(?, '$.filter_ref', 'KH-' || printf('%04d', COALESCE((
+          SELECT MAX(CAST(REPLACE(filter_ref,'KH-','') AS INTEGER))
+          FROM driver_custody_records WHERE filter_ref LIKE 'KH-%'
+        ), 0) + 1)),
+        1, ?
+      )
+    `;
+  await executeBatch([
+    {
+      sql: insertSql,
+      params: [
+        driver_phone, driver_name || null, vehicle_plate || null,
+        date_from || null, date_to || null, load_types || null,
+        parseFloat(String(net_amount || 0)) || 0,
+        parseInt(String(item_count || 0)) || 0,
+        serializedItems, batch_key, serializedSnapshot, custodyUser.id,
+      ],
+    },
+    ...markCustodyItemStatements(driver_phone, printedItems, batch_key),
+  ]);
+  const created = await queryOne<{ id: number; filter_ref: string }>(
+    `SELECT id, filter_ref FROM driver_custody_records
+     WHERE driver_phone=? AND batch_key=? ORDER BY id DESC LIMIT 1`,
+    driver_phone, batch_key,
+  );
+  if (!created) throw new Error("Custody record insert did not return the created record");
   res.status(201).json(created);
 });
 
 // PUT /driver-custody/:id — replace a saved statement while preserving its reference number
-router.put("/driver-custody/:id", (req, res) => {
+router.put("/driver-custody/:id", async (req, res) => {
   const custodyUser = res.locals.custodyUser as CustodyUser;
   const { driver_phone, driver_name, vehicle_plate, date_from, date_to,
           load_types, net_amount, item_count, items_snapshot, batch_key, print_snapshot } = req.body;
@@ -234,25 +249,25 @@ router.put("/driver-custody/:id", (req, res) => {
     return void res.status(400).json({ error: "بنود الكشف المطلوبة للوسم غير مكتملة؛ حدّث الصفحة وحاول مجددًا" });
   }
 
-  const existing = db.prepare(
+  const existing = await queryOne<{ id: number; driver_phone: string; filter_ref: string; batch_key: string | null }>(
     "SELECT id, driver_phone, filter_ref, batch_key FROM driver_custody_records WHERE id=?"
-  ).get(req.params.id) as { id: number; driver_phone: string; filter_ref: string; batch_key: string | null } | undefined;
+  , req.params.id);
   if (!existing) return void res.status(404).json({ error: "الكشف القديم غير موجود" });
   if (existing.driver_phone !== driver_phone) {
     return void res.status(409).json({ error: "لا يمكن تعديل كشف تابع لسائق آخر" });
   }
 
   const snapshotData = JSON.stringify({ ...print_snapshot, filter_ref: existing.filter_ref });
-  db.transaction(() => {
-    if (existing.batch_key) {
+  const statements: Array<{ sql: string; params: unknown[] }> = [];
+  if (existing.batch_key) {
       const selectedRefs = new Set(printedItems.map(item => `${item.type}:${item.ref}`));
-      const oldMarks = db.prepare(
+      const oldMarks = await queryAll<{ item_type: string; item_ref: string }>(
         "SELECT item_type, item_ref FROM printed_marks WHERE driver_phone=? AND batch_key=?"
-      ).all(driver_phone, existing.batch_key) as { item_type: string; item_ref: string }[];
-      const otherStatements = db.prepare(
+      , driver_phone, existing.batch_key);
+      const otherStatements = await queryAll<{ batch_key: string; created_at: string; items_snapshot: string | null; print_snapshot_data: string | null }>(
         `SELECT batch_key, created_at, items_snapshot, print_snapshot_data FROM driver_custody_records
          WHERE driver_phone=? AND id!=? AND batch_key IS NOT NULL ORDER BY id DESC`
-      ).all(driver_phone, existing.id) as { batch_key: string; created_at: string; items_snapshot: string | null; print_snapshot_data: string | null }[];
+      , driver_phone, existing.id);
       const otherItems = otherStatements.map(record => {
         try {
           const entries = JSON.parse(record.items_snapshot || "[]") as { refKey?: string }[];
@@ -263,33 +278,38 @@ router.put("/driver-custody/:id", (req, res) => {
           return { record, refs: savedStatementRefs(record.print_snapshot_data) };
         }
       });
-      const update = db.prepare(
-        "UPDATE printed_marks SET batch_key=?, marked_at=? WHERE driver_phone=? AND item_type=? AND item_ref=? AND batch_key=?"
-      );
-      const remove = db.prepare(
-        "DELETE FROM printed_marks WHERE driver_phone=? AND item_type=? AND item_ref=? AND batch_key=?"
-      );
       for (const mark of oldMarks) {
         const key = `${mark.item_type}:${mark.item_ref}`;
         if (selectedRefs.has(key)) {
-          update.run(batch_key, new Date().toISOString(), driver_phone, mark.item_type, mark.item_ref, existing.batch_key);
+          statements.push({
+            sql: "UPDATE printed_marks SET batch_key=?, marked_at=? WHERE driver_phone=? AND item_type=? AND item_ref=? AND batch_key=?",
+            params: [batch_key, new Date().toISOString(), driver_phone, mark.item_type, mark.item_ref, existing.batch_key],
+          });
         } else {
           const replacement = otherItems.find(other => other.refs.has(key))?.record;
           if (replacement) {
-            update.run(replacement.batch_key, replacement.created_at, driver_phone, mark.item_type, mark.item_ref, existing.batch_key);
+            statements.push({
+              sql: "UPDATE printed_marks SET batch_key=?, marked_at=? WHERE driver_phone=? AND item_type=? AND item_ref=? AND batch_key=?",
+              params: [replacement.batch_key, replacement.created_at, driver_phone, mark.item_type, mark.item_ref, existing.batch_key],
+            });
           } else {
-            remove.run(driver_phone, mark.item_type, mark.item_ref, existing.batch_key);
+            statements.push({
+              sql: "DELETE FROM printed_marks WHERE driver_phone=? AND item_type=? AND item_ref=? AND batch_key=?",
+              params: [driver_phone, mark.item_type, mark.item_ref, existing.batch_key],
+            });
           }
         }
       }
-    }
-    db.prepare(`
+  }
+  statements.push({
+    sql: `
       UPDATE driver_custody_records
       SET driver_name=?, vehicle_plate=?, print_date=?, date_from=?, date_to=?,
           load_types=?, net_amount=?, item_count=?, items_snapshot=?, batch_key=?,
           print_snapshot_data=?, snapshot_required=1, created_by_user_id=?
       WHERE id=?
-    `).run(
+    `,
+    params: [
       driver_name || null,
       vehicle_plate || null,
       new Date().toISOString().slice(0, 10),
@@ -303,17 +323,18 @@ router.put("/driver-custody/:id", (req, res) => {
       snapshotData,
       custodyUser.id,
       existing.id,
-    );
-    markCustodyItems(driver_phone, printedItems, batch_key);
-  })();
+    ],
+  });
+  statements.push(...markCustodyItemStatements(driver_phone, printedItems, batch_key));
+  await executeBatch(statements);
   res.json({ id: existing.id, filter_ref: existing.filter_ref });
 });
 
 // GET /driver-custody/:id/print-snapshot — structured print document saved for the statement
-router.get("/driver-custody/:id/print-snapshot", (req, res) => {
-  const row = db.prepare(
+router.get("/driver-custody/:id/print-snapshot", async (req, res) => {
+  const row = await queryOne<{ print_snapshot_data: string | null }>(
     "SELECT print_snapshot_data FROM driver_custody_records WHERE id=?"
-  ).get(req.params.id) as { print_snapshot_data: string | null } | undefined;
+  , req.params.id);
   if (!row?.print_snapshot_data) {
     return void res.status(404).json({ error: "لا توجد نسخة محفوظة لهذا الكشف" });
   }
@@ -325,7 +346,7 @@ router.get("/driver-custody/:id/print-snapshot", (req, res) => {
 });
 
 // PATCH /driver-custody/mark-printed — mark selected records as printed from custody tab
-router.patch("/driver-custody/mark-printed", (req, res) => {
+router.patch("/driver-custody/mark-printed", async (req, res) => {
   const rawIds = (req.body as { ids?: unknown } | undefined)?.ids;
   if (!Array.isArray(rawIds) || rawIds.length === 0) {
     return void res.status(400).json({ error: "ids مطلوبة" });
@@ -335,44 +356,40 @@ router.patch("/driver-custody/mark-printed", (req, res) => {
     return void res.status(400).json({ error: "قائمة السجلات غير صالحة" });
   }
   const now = new Date().toISOString();
-  let result: { ok: false; error: string; status: number } | { ok: true; updated: number };
   try {
-    result = db.transaction(() => {
       const placeholders = ids.map(() => "?").join(",");
-      const rows = db.prepare(
+      const rows = await queryAll<{ id: number; is_custody_printed: number }>(
         `SELECT id, is_custody_printed
          FROM driver_custody_records WHERE id IN (${placeholders})`
-      ).all(...ids) as { id: number; is_custody_printed: number }[];
+      , ...ids);
       if (rows.length !== ids.length) {
-        return { ok: false as const, error: "بعض سجلات العهدة غير موجودة", status: 404 as const };
+        return void res.status(404).json({ error: "بعض سجلات العهدة غير موجودة" });
       }
       if (rows.some(row => row.is_custody_printed)) {
-        return { ok: false as const, error: "يمكن طباعة السجلات غير المطبوعة فقط", status: 409 as const };
+        return void res.status(409).json({ error: "يمكن طباعة السجلات غير المطبوعة فقط" });
       }
-      const update = db.prepare(
+      const update = await execute(
         `UPDATE driver_custody_records
          SET is_custody_printed=1, custody_printed_at=?,
              is_cancelled=0, cancelled_at=NULL, cancelled_by_user_id=NULL
          WHERE id IN (${placeholders})
-           AND COALESCE(is_custody_printed,0)=0`
-      ).run(now, ...ids);
+           AND COALESCE(is_custody_printed,0)=0`,
+        now, ...ids,
+      );
       if (update.changes !== ids.length) {
         throw new Error("CUSTODY_RESERVATION_CONFLICT");
       }
-      return { ok: true as const, updated: ids.length };
-    })();
   } catch (error) {
     if (error instanceof Error && error.message === "CUSTODY_RESERVATION_CONFLICT") {
       return void res.status(409).json({ error: "تغيّرت حالة أحد السجلات؛ حدّث القائمة ثم حاول مجددًا" });
     }
     throw error;
   }
-  if (!result.ok) return void res.status(result.status).json({ error: result.error });
-  res.json(result);
+  res.json({ ok: true, updated: ids.length });
 });
 
 // PATCH /driver-custody/:id/signature — save the driver-signature visibility preference
-router.patch("/driver-custody/:id/signature", (req, res) => {
+router.patch("/driver-custody/:id/signature", async (req, res) => {
   const { include_driver_signatures } = (req.body || {}) as { include_driver_signatures?: unknown };
   if (typeof include_driver_signatures !== "boolean") {
     return void res.status(400).json({ error: "قيمة إعداد التوقيع غير صالحة" });
@@ -381,14 +398,14 @@ router.patch("/driver-custody/:id/signature", (req, res) => {
   if (!Number.isSafeInteger(id) || id <= 0) {
     return void res.status(400).json({ error: "رقم سجل العهدة غير صالح" });
   }
-  const result = db.prepare(
+  const result = await execute(
     `UPDATE driver_custody_records SET include_driver_signatures=?
      WHERE id=? AND COALESCE(is_custody_printed,0)=0`
-  ).run(include_driver_signatures ? 1 : 0, id);
+  , include_driver_signatures ? 1 : 0, id);
   if (!result.changes) {
-    const row = db.prepare(
+    const row = await queryOne<{ is_custody_printed: number }>(
       "SELECT is_custody_printed FROM driver_custody_records WHERE id=?"
-    ).get(id) as { is_custody_printed: number } | undefined;
+    , id);
     return void res.status(row ? 409 : 404).json({
       error: row ? "لا يمكن تغيير التوقيعات بعد الطباعة" : "سجل العهدة غير موجود",
     });
@@ -397,25 +414,25 @@ router.patch("/driver-custody/:id/signature", (req, res) => {
 });
 
 // PATCH /driver-custody/:id/cancel — cancel printing only; preserve the statement and its source marks
-router.patch("/driver-custody/:id/cancel", (req, res) => {
+router.patch("/driver-custody/:id/cancel", async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id) || id <= 0) {
     return void res.status(400).json({ error: "رقم سجل العهدة غير صالح" });
   }
-  const result = unprintDriverCustody(id);
+  const result = await unprintDriverCustody(id);
   if (!result.ok) return void res.status(result.status).json({ error: result.error });
   res.json(result);
 });
 
 // PATCH /driver-custody/:id/ref — تعديل رقم الكشف يدوياً
-router.patch("/driver-custody/:id/ref", (req, res) => {
+router.patch("/driver-custody/:id/ref", async (req, res) => {
   const { filter_ref } = req.body as { filter_ref: string };
   if (!filter_ref?.trim()) return void res.status(400).json({ error: "filter_ref مطلوب" });
-  const result = db.prepare(
+  const result = await execute(
     "UPDATE driver_custody_records SET filter_ref=? WHERE id=? AND COALESCE(snapshot_required,0)=0 AND print_snapshot_data IS NULL"
-  ).run(filter_ref.trim(), req.params.id);
+  , filter_ref.trim(), req.params.id);
   if (!result.changes) {
-    const exists = db.prepare("SELECT id FROM driver_custody_records WHERE id=?").get(req.params.id);
+    const exists = await queryOne("SELECT id FROM driver_custody_records WHERE id=?", req.params.id);
     return void res.status(exists ? 409 : 404).json({
       error: exists ? "لا يمكن تعديل رقم كشف تم حفظ نسخته" : "سجل العهدة غير موجود",
     });
@@ -424,12 +441,12 @@ router.patch("/driver-custody/:id/ref", (req, res) => {
 });
 
 // DELETE /driver-custody/:id — legacy clients also only clear the print state
-router.delete("/driver-custody/:id", (req, res) => {
+router.delete("/driver-custody/:id", async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isSafeInteger(id) || id <= 0) {
     return void res.status(400).json({ error: "رقم سجل العهدة غير صالح" });
   }
-  const result = unprintDriverCustody(id);
+  const result = await unprintDriverCustody(id);
   if (!result.ok) return void res.status(result.status).json({ error: result.error });
   res.json(result);
 });

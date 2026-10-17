@@ -6,7 +6,9 @@ import path from "node:path";
 import multer from "multer";
 import Database from "better-sqlite3";
 import { ZipFile } from "yazl";
-import db, { UPLOADS_PATH } from "../lib/db.js";
+import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
+import { UPLOADS_PATH } from "../lib/upload-paths.js";
 import { isFilesystemStorageMode, makeStorage, pauseDbBackup, waitForDbBackupIdle } from "../lib/db-sync.js";
 import { listHostingerObjects } from "../lib/hostinger-filesystem-storage.js";
 import { getR2Object, isR2Configured, listR2Objects } from "../lib/r2-storage.js";
@@ -86,20 +88,20 @@ function signingKey(): string {
   return key;
 }
 
-function currentAdmin(req: Request): { actor: number | "system"; token: string } | null {
+async function currentAdmin(req: Request): Promise<{ actor: number | "system"; token: string } | null> {
   const authorization = req.headers.authorization;
   if (!authorization?.startsWith("Bearer ")) return null;
   const token = authorization.slice(7).trim();
   if (!token) return null;
-  if (isSysAdminToken(token)) return { actor: "system", token };
-  const row = db.prepare(`
+  if (await isSysAdminToken(token)) return { actor: "system", token };
+  const row = await queryOne<{ id: number }>(`
     SELECT u.id
     FROM sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token=? AND datetime(s.expires_at)>datetime('now')
       AND u.active=1 AND u.role='admin'
       AND s.rowid=(SELECT MAX(newest.rowid) FROM sessions newest
                    WHERE newest.user_id=u.id AND datetime(newest.expires_at)>datetime('now'))
-  `).get(token) as { id: number } | undefined;
+  `, token);
   return row ? { actor: row.id, token } : null;
 }
 
@@ -109,7 +111,7 @@ function signTicket(payload: BackupTicket): string {
   return `${body}.${signature}`;
 }
 
-function verifyTicket(ticket: unknown): BackupTicket | null {
+async function verifyTicket(ticket: unknown): Promise<BackupTicket | null> {
   if (typeof ticket !== "string" || ticket.length > 1000) return null;
   const [body, signature, extra] = ticket.split(".");
   if (!body || !signature || extra) return null;
@@ -127,14 +129,13 @@ function verifyTicket(ticket: unknown): BackupTicket | null {
       || (parsed.actor !== "system" && (!Number.isSafeInteger(parsed.actor) || parsed.actor <= 0))) return null;
 
   const session = parsed.actor === "system"
-    ? db.prepare("SELECT token FROM special_sessions WHERE kind='system-admin' AND datetime(expires_at)>datetime('now')")
-      .get() as { token: string } | undefined
-    : db.prepare(`
+    ? await queryOne<{ token: string }>("SELECT token FROM special_sessions WHERE kind='system-admin' AND datetime(expires_at)>datetime('now')")
+    : await queryOne<{ token: string }>(`
         SELECT s.token FROM sessions s JOIN users u ON u.id=s.user_id
         WHERE u.id=? AND u.active=1 AND u.role='admin'
           AND datetime(s.expires_at)>datetime('now')
         ORDER BY s.rowid DESC LIMIT 1
-      `).get(parsed.actor) as { token: string } | undefined;
+      `, parsed.actor);
   if (!session) return null;
   return crypto.timingSafeEqual(
     Buffer.from(parsed.sessionHash, "hex"),
@@ -142,8 +143,8 @@ function verifyTicket(ticket: unknown): BackupTicket | null {
   ) ? parsed : null;
 }
 
-router.get("/system-backup/ticket", (req, res) => {
-  const admin = currentAdmin(req);
+router.get("/system-backup/ticket", async (req, res) => {
+  const admin = await currentAdmin(req);
   if (!admin) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة لتنزيل النسخة الاحتياطية" });
   if ((!isFilesystemStorageMode() && !isR2Configured && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
     return void res.status(503).json({ error: "خدمة النسخ الاحتياطي غير مهيأة" });
@@ -162,7 +163,7 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
   if ((!isFilesystemStorageMode() && !isR2Configured && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
     return void res.status(503).json({ error: "خدمة النسخ الاحتياطي غير مهيأة" });
   }
-  if (!verifyTicket(req.query.ticket)) {
+  if (!await verifyTicket(req.query.ticket)) {
     return void res.status(403).json({ error: "انتهت صلاحية رابط التنزيل؛ اضغط زر النسخة الاحتياطية مجددًا" });
   }
   if (downloadInProgress) {
@@ -397,8 +398,8 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
   }
 });
 
-router.post("/system-backup/restore", (req: Request, res: Response, next) => {
-  const admin = currentAdmin(req);
+router.post("/system-backup/restore", async (req: Request, res: Response, next) => {
+  const admin = await currentAdmin(req);
   if (!admin) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة لاستعادة النسخة" });
   if (!isFilesystemStorageMode() && !isR2Configured && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) {
     return void res.status(503).json({ error: "تخزين الملفات غير مهيأ؛ لم تبدأ الاستعادة" });
@@ -413,7 +414,7 @@ router.post("/system-backup/restore", (req: Request, res: Response, next) => {
     next();
   });
 }, async (req: Request, res: Response) => {
-  const admin = currentAdmin(req);
+  const admin = await currentAdmin(req);
   const uploadedPath = req.file?.path;
   const mode = req.body?.mode;
   res.setHeader("Cache-Control", "no-store");
@@ -454,8 +455,8 @@ router.post("/system-backup/restore", (req: Request, res: Response, next) => {
   }
 });
 
-router.get("/system-backup/restore-log", (req: Request, res: Response) => {
-  if (!currentAdmin(req)) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة" });
+router.get("/system-backup/restore-log", async (req: Request, res: Response) => {
+  if (!await currentAdmin(req)) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة" });
   const limit = Math.max(1, Math.min(100, Number.parseInt(String(req.query.limit ?? "50"), 10) || 50));
   const offset = Math.max(0, Number.parseInt(String(req.query.offset ?? "0"), 10) || 0);
   const runId = Number.parseInt(String(req.query.runId ?? ""), 10);
@@ -470,7 +471,7 @@ router.get("/system-backup/restore-log", (req: Request, res: Response) => {
   if (reviewState === "yes") where.push("i.reviewed_at IS NOT NULL");
   if (reviewState === "no") where.push("i.reviewed_at IS NULL");
   const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
-  const items = db.prepare(`
+  const items = await queryAll(`
     SELECT i.id, i.run_id, i.item_type, i.table_name, i.record_key, i.display_label,
            i.outcome, i.target_path, i.details, i.reviewed_at, i.reviewed_by, i.created_at,
            r.mode, r.status AS run_status, r.source_filename
@@ -478,39 +479,39 @@ router.get("/system-backup/restore-log", (req: Request, res: Response) => {
     JOIN system_backup_restore_runs r ON r.id=i.run_id
     ${whereSql}
     ORDER BY i.id DESC LIMIT ? OFFSET ?
-  `).all(...params, limit, offset);
-  const total = db.prepare(`
+  `, ...params, limit, offset);
+  const total = await queryOne<{ count: number }>(`
     SELECT COUNT(*) AS count
     FROM system_backup_restore_items i
     JOIN system_backup_restore_runs r ON r.id=i.run_id
     ${whereSql}
-  `).get(...params) as { count: number };
-  const runs = db.prepare(`
+  `, ...params);
+  const runs = await queryAll(`
     SELECT id, mode, actor_id, source_filename, source_created_at, status,
            restored_rows, duplicate_rows, conflict_rows, restored_files, message,
            created_at, completed_at
     FROM system_backup_restore_runs
     ORDER BY id DESC LIMIT 100
-  `).all();
+  `);
   res.setHeader("Cache-Control", "no-store");
-  res.json({ items, total: total.count, limit, offset, runs });
+  res.json({ items, total: total?.count ?? 0, limit, offset, runs });
 });
 
-router.get("/system-backup/restore-log/item/:id", (req: Request, res: Response) => {
-  if (!currentAdmin(req)) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة" });
+router.get("/system-backup/restore-log/item/:id", async (req: Request, res: Response) => {
+  if (!await currentAdmin(req)) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة" });
   const itemId = Number.parseInt(String(req.params.id), 10);
   if (!Number.isSafeInteger(itemId) || itemId <= 0) return void res.status(400).json({ error: "معرّف السجل غير صالح" });
-  const item = db.prepare(`
+  const item = await queryOne<{
+    id: number; item_type: string; table_name: string | null; record_key: string | null;
+    [key: string]: unknown;
+  }>(`
     SELECT i.id, i.run_id, i.item_type, i.table_name, i.record_key, i.display_label,
            i.outcome, i.target_path, i.details, i.reviewed_at, i.reviewed_by, i.created_at,
            r.mode, r.status AS run_status, r.source_filename
     FROM system_backup_restore_items i
     JOIN system_backup_restore_runs r ON r.id=i.run_id
     WHERE i.id=?
-  `).get(itemId) as {
-    id: number; item_type: string; table_name: string | null; record_key: string | null;
-    [key: string]: unknown;
-  } | undefined;
+  `, itemId);
   if (!item) return void res.status(404).json({ error: "سجل الاستعادة غير موجود" });
 
   let record: Record<string, unknown> | null = null;
@@ -518,11 +519,10 @@ router.get("/system-backup/restore-log/item/:id", (req: Request, res: Response) 
     || !item.record_key || item.record_key.startsWith("sha256:");
   if (!sensitive && item.item_type === "record" && item.record_key) {
     try {
-      const exists = db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?")
-        .get(item.table_name);
+      const exists = await queryOne("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", item.table_name);
       if (exists) {
         const escapedTable = String(item.table_name).replaceAll('"', '""');
-        const columns = db.pragma(`table_info("${escapedTable}")`) as Array<{ name: string; pk: number }>;
+        const columns = await queryAll<{ name: string; pk: number }>(`PRAGMA table_info("${escapedTable}")`);
         const primary = columns.filter(column => column.pk).sort((a, b) => a.pk - b.pk);
         const key = JSON.parse(item.record_key) as Record<string, unknown>;
         if (primary.length && primary.every(column => Object.hasOwn(key, column.name))) {
@@ -533,8 +533,7 @@ router.get("/system-backup/restore-log/item/:id", (req: Request, res: Response) 
               : value;
           });
           const where = primary.map(column => `"${column.name.replaceAll('"', '""')}"=?`).join(" AND ");
-          const row = db.prepare(`SELECT * FROM "${escapedTable}" WHERE ${where}`)
-            .get(...values) as Record<string, unknown> | undefined;
+          const row = await queryOne<Record<string, unknown>>(`SELECT * FROM "${escapedTable}" WHERE ${where}`, ...values);
           if (row) {
             record = Object.fromEntries(Object.entries(row)
               .filter(([name]) => !/password|token|secret|credential/i.test(name))
@@ -550,22 +549,22 @@ router.get("/system-backup/restore-log/item/:id", (req: Request, res: Response) 
   res.json({ item, record, sensitive });
 });
 
-router.patch("/system-backup/restore-log/item/:id/review", (req: Request, res: Response) => {
-  const admin = currentAdmin(req);
+router.patch("/system-backup/restore-log/item/:id/review", async (req: Request, res: Response) => {
+  const admin = await currentAdmin(req);
   if (!admin) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة" });
   if (req.body?.reviewed !== true) return void res.status(400).json({ error: "أرسل reviewed=true لتأكيد المراجعة" });
   const itemId = Number.parseInt(String(req.params.id), 10);
   if (!Number.isSafeInteger(itemId) || itemId <= 0) return void res.status(400).json({ error: "معرّف السجل غير صالح" });
-  const result = db.prepare(`
+  const result = await execute(`
     UPDATE system_backup_restore_items
     SET reviewed_at=COALESCE(reviewed_at, datetime('now')),
         reviewed_by=COALESCE(reviewed_by, ?)
     WHERE id=?
-  `).run(String(admin.actor), itemId);
+  `, String(admin.actor), itemId);
   if (!result.changes) return void res.status(404).json({ error: "سجل الاستعادة غير موجود" });
-  const item = db.prepare(`
+  const item = await queryOne(`
     SELECT id, reviewed_at, reviewed_by FROM system_backup_restore_items WHERE id=?
-  `).get(itemId);
+  `, itemId);
   res.setHeader("Cache-Control", "no-store");
   res.json({ item });
 });

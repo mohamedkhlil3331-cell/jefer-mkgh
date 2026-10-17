@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream";
 import { randomUUID } from "node:crypto";
 import type { Server } from "node:http";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import db from "./db.js";
+import { execute, executeBatch, queryAll, queryOne } from "./erp-sql.js";
 import { resolveChatActor, type ChatActor } from "./chat-auth.js";
 import { areChatUsersAllowed, isChatConversationAllowed } from "./chat-access.js";
 import { logger } from "./logger.js";
@@ -16,34 +16,38 @@ const CHAT_PROTOCOL = "mkgh-chat-v1";
 const CALL_EVENT_TTL_SECONDS = 120;
 const socketActors = new WeakMap<WebSocket, ChatActor>();
 
-function setRealtimeEvent(userId: number, event: RealtimeEvent, ttlSeconds = CALL_EVENT_TTL_SECONDS): void {
-  db.prepare(`
+function setRealtimeEvent(userId: number, event: RealtimeEvent, ttlSeconds = CALL_EVENT_TTL_SECONDS) {
+  return execute(`
     INSERT INTO chat_realtime_events (recipient_user_id, event_json, expires_at)
     VALUES (?, ?, datetime('now', ?))
-  `).run(userId, JSON.stringify(event), `+${ttlSeconds} seconds`);
+  `, userId, JSON.stringify(event), `+${ttlSeconds} seconds`);
 }
 
-export function publishChatRealtimeToUsers(userIds: number[], event: RealtimeEvent): void {
+export async function publishChatRealtimeToUsers(userIds: number[], event: RealtimeEvent): Promise<void> {
   const uniqueIds = [...new Set(userIds.filter(id => id > 0))];
-  for (const userId of uniqueIds) setRealtimeEvent(userId, event);
+  await executeBatch(uniqueIds.map(userId => ({
+    sql: `INSERT INTO chat_realtime_events (recipient_user_id, event_json, expires_at)
+          VALUES (?, ?, datetime('now', ?))`,
+    params: [userId, JSON.stringify(event), `+${CALL_EVENT_TTL_SECONDS} seconds`],
+  })));
 }
 
-export function publishChatConversationEvent(
+export async function publishChatConversationEvent(
   conversationId: number,
   event: RealtimeEvent,
-): void {
-  const conversation = db.prepare(`
+): Promise<void> {
+  const conversation = await queryOne<{ user_low_id: number; user_high_id: number }>(`
     SELECT user_low_id, user_high_id
     FROM chat_conversations WHERE id=?
-  `).get(conversationId) as { user_low_id: number; user_high_id: number } | undefined;
-  if (!conversation || !areChatUsersAllowed(conversation.user_low_id, conversation.user_high_id)) return;
-  publishChatRealtimeToUsers(
+  `, conversationId);
+  if (!conversation || !await areChatUsersAllowed(conversation.user_low_id, conversation.user_high_id)) return;
+  await publishChatRealtimeToUsers(
     [conversation.user_low_id, conversation.user_high_id],
     event,
   );
 }
 
-function eventStillAllowed(userId: number, eventJson: string): boolean {
+async function eventStillAllowed(userId: number, eventJson: string): Promise<boolean> {
   try {
     const event = JSON.parse(eventJson) as {
       conversation_id?: unknown;
@@ -52,7 +56,7 @@ function eventStillAllowed(userId: number, eventJson: string): boolean {
     const conversationId = Number(event.conversation_id ?? event.message?.conversation_id);
     return !Number.isInteger(conversationId) ||
       conversationId <= 0 ||
-      isChatConversationAllowed(conversationId, userId);
+      await isChatConversationAllowed(conversationId, userId);
   } catch {
     return false;
   }
@@ -74,53 +78,55 @@ function protocolToken(req: IncomingMessage): string | null {
   return bearer?.slice("bearer.".length) || null;
 }
 
-function beginPolling(socket: WebSocket, actor: ChatActor): () => void {
-  const initial = db.prepare(`
+async function beginPolling(socket: WebSocket, actor: ChatActor): Promise<() => void> {
+  const initial = await queryOne<{ max_id: number }>(`
     SELECT COALESCE(MAX(id), 0) AS max_id
     FROM chat_realtime_events WHERE recipient_user_id=?
-  `).get(actor.id) as { max_id: number };
-  let cursor = initial.max_id;
+  `, actor.id);
+  let cursor = initial?.max_id ?? 0;
   let polling = false;
 
   const timer = setInterval(() => {
     if (polling || socket.readyState !== WebSocket.OPEN) return;
     polling = true;
-    try {
-      const events = db.prepare(`
+    void (async () => {
+      try {
+      const events = await queryAll<RealtimeEventRow>(`
         SELECT id, event_json
         FROM chat_realtime_events
         WHERE recipient_user_id=? AND id>? AND datetime(expires_at)>datetime('now')
         ORDER BY id LIMIT 50
-      `).all(actor.id, cursor) as RealtimeEventRow[];
+      `, actor.id, cursor);
       for (const row of events) {
         cursor = row.id;
-        if (!eventStillAllowed(actor.id, row.event_json)) continue;
+        if (!await eventStillAllowed(actor.id, row.event_json)) continue;
         try {
           socket.send(row.event_json);
         } catch {
           break;
         }
       }
-    } catch (error) {
+      } catch (error) {
       logger.warn({ err: error, userId: actor.id }, "Chat realtime event polling failed");
-    } finally {
-      polling = false;
-    }
+      } finally {
+        polling = false;
+      }
+    })();
   }, 700);
   timer.unref();
 
   return () => clearInterval(timer);
 }
 
-function sendPendingCalls(socket: WebSocket, userId: number): void {
-  const calls = db.prepare(`
+async function sendPendingCalls(socket: WebSocket, userId: number): Promise<void> {
+  const calls = await queryAll(`
     SELECT c.call_id, c.conversation_id, c.caller_id, c.media_type,
            u.name AS caller_name
     FROM chat_calls c JOIN users u ON u.id=c.caller_id
     WHERE c.callee_id=? AND c.status='ringing'
       AND datetime(c.expires_at)>datetime('now')
     ORDER BY c.created_at
-  `).all(userId) as Array<{
+  `, userId) as Array<{
     call_id: string;
     conversation_id: number;
     caller_id: number;
@@ -129,43 +135,43 @@ function sendPendingCalls(socket: WebSocket, userId: number): void {
   }>;
 
   for (const call of calls) {
-    if (!isChatConversationAllowed(call.conversation_id, userId)) continue;
+    if (!await isChatConversationAllowed(call.conversation_id, userId)) continue;
     socket.send(JSON.stringify({ type: "call:incoming", ...call }));
   }
 }
 
-function conversationPeer(conversationId: number, userId: number): number | null {
-  const conversation = db.prepare(`
+async function conversationPeer(conversationId: number, userId: number): Promise<number | null> {
+  const conversation = await queryOne<{ user_low_id: number; user_high_id: number }>(`
     SELECT user_low_id, user_high_id
     FROM chat_conversations WHERE id=?
-  `).get(conversationId) as { user_low_id: number; user_high_id: number } | undefined;
+  `, conversationId);
   if (!conversation) return null;
   const peerId = conversation.user_low_id === userId
     ? conversation.user_high_id
     : conversation.user_high_id === userId
       ? conversation.user_low_id
       : null;
-  return peerId && areChatUsersAllowed(userId, peerId) ? peerId : null;
+  return peerId && await areChatUsersAllowed(userId, peerId) ? peerId : null;
 }
 
-function publishCallEvent(call: {
+async function publishCallEvent(call: {
   call_id: string;
   caller_id: number;
   callee_id: number;
-}, event: RealtimeEvent): void {
-  publishChatRealtimeToUsers([call.caller_id, call.callee_id], event);
+}, event: RealtimeEvent): Promise<void> {
+  await publishChatRealtimeToUsers([call.caller_id, call.callee_id], event);
 }
 
-function hasUnexpiredCallForUser(userId: number): boolean {
-  return Boolean(db.prepare(`
+async function hasUnexpiredCallForUser(userId: number): Promise<boolean> {
+  return Boolean(await queryOne(`
     SELECT 1 FROM chat_calls
     WHERE (caller_id=? OR callee_id=?)
       AND datetime(expires_at)>datetime('now')
     LIMIT 1
-  `).get(userId, userId));
+  `, userId, userId));
 }
 
-function onClientMessage(socket: WebSocket, actor: ChatActor, raw: RawData): void {
+async function onClientMessage(socket: WebSocket, actor: ChatActor, raw: RawData): Promise<void> {
   let input: Record<string, unknown>;
   try {
     const rawText = Array.isArray(raw)
@@ -192,30 +198,33 @@ function onClientMessage(socket: WebSocket, actor: ChatActor, raw: RawData): voi
       sendSocketError(socket, "invalid_call", "بيانات المكالمة غير مكتملة");
       return;
     }
-    const calleeId = conversationPeer(conversationId, actor.id);
+    const calleeId = await conversationPeer(conversationId, actor.id);
     if (!calleeId) {
       sendSocketError(socket, "conversation_required", "لا تملك صلاحية الاتصال في هذه المحادثة");
       return;
     }
-    db.prepare("DELETE FROM chat_calls WHERE datetime(expires_at)<=datetime('now')").run();
-    if (hasUnexpiredCallForUser(actor.id) || hasUnexpiredCallForUser(calleeId)) {
+    await execute("DELETE FROM chat_calls WHERE datetime(expires_at)<=datetime('now')");
+    const [callerBusy, calleeBusy] = await Promise.all([
+      hasUnexpiredCallForUser(actor.id),
+      hasUnexpiredCallForUser(calleeId),
+    ]);
+    if (callerBusy || calleeBusy) {
       sendSocketError(socket, "user_busy", "أحد الطرفين في مكالمة أخرى");
       return;
     }
-    const callee = db.prepare("SELECT name FROM users WHERE id=? AND active=1")
-      .get(calleeId) as { name: string } | undefined;
+    const callee = await queryOne<{ name: string }>("SELECT name FROM users WHERE id=? AND active=1", calleeId);
     if (!callee) {
       sendSocketError(socket, "user_unavailable", "المستخدم غير متاح للمكالمة");
       return;
     }
 
     const callId = randomUUID();
-    db.prepare(`
+    await execute(`
       INSERT INTO chat_calls (call_id, conversation_id, caller_id, callee_id, media_type, expires_at)
       VALUES (?, ?, ?, ?, ?, datetime('now', '+45 seconds'))
-    `).run(callId, conversationId, actor.id, calleeId, mediaType);
+    `, callId, conversationId, actor.id, calleeId, mediaType);
 
-    setRealtimeEvent(actor.id, {
+    await setRealtimeEvent(actor.id, {
       type: "call:outgoing",
       call_id: callId,
       conversation_id: conversationId,
@@ -223,7 +232,7 @@ function onClientMessage(socket: WebSocket, actor: ChatActor, raw: RawData): voi
       callee_name: callee.name,
       media_type: mediaType,
     });
-    setRealtimeEvent(calleeId, {
+    await setRealtimeEvent(calleeId, {
       type: "call:incoming",
       call_id: callId,
       conversation_id: conversationId,
@@ -245,21 +254,21 @@ function onClientMessage(socket: WebSocket, actor: ChatActor, raw: RawData): voi
     sendSocketError(socket, "invalid_call", "معرّف المكالمة غير صالح");
     return;
   }
-  const call = db.prepare(`
-    SELECT call_id, conversation_id, caller_id, callee_id, media_type, status
-    FROM chat_calls
-    WHERE call_id=? AND datetime(expires_at)>datetime('now')
-  `).get(callId) as {
+  const call = await queryOne<{
     call_id: string;
     conversation_id: number;
     caller_id: number;
     callee_id: number;
     media_type: string;
     status: "ringing" | "active";
-  } | undefined;
+  }>(`
+    SELECT call_id, conversation_id, caller_id, callee_id, media_type, status
+    FROM chat_calls
+    WHERE call_id=? AND datetime(expires_at)>datetime('now')
+  `, callId);
   if (!call ||
       (call.caller_id !== actor.id && call.callee_id !== actor.id) ||
-      !isChatConversationAllowed(call.conversation_id, actor.id)) {
+      !await isChatConversationAllowed(call.conversation_id, actor.id)) {
     sendSocketError(socket, "call_not_found", "المكالمة غير موجودة أو انتهت");
     return;
   }
@@ -270,11 +279,11 @@ function onClientMessage(socket: WebSocket, actor: ChatActor, raw: RawData): voi
       sendSocketError(socket, "invalid_call_action", "لا يمكن قبول هذه المكالمة");
       return;
     }
-    db.prepare(`
+    await execute(`
       UPDATE chat_calls SET status='active', expires_at=datetime('now', '+1 hour')
       WHERE call_id=?
-    `).run(callId);
-    publishCallEvent(call, {
+    `, callId);
+    await publishCallEvent(call, {
       type: "call:accepted",
       call_id: callId,
       conversation_id: call.conversation_id,
@@ -288,8 +297,8 @@ function onClientMessage(socket: WebSocket, actor: ChatActor, raw: RawData): voi
       sendSocketError(socket, "invalid_call_action", "لا يمكن رفض هذه المكالمة");
       return;
     }
-    db.prepare("DELETE FROM chat_calls WHERE call_id=?").run(callId);
-    publishCallEvent(call, {
+    await execute("DELETE FROM chat_calls WHERE call_id=?", callId);
+    await publishCallEvent(call, {
       type: input.type === "call:decline" ? "call:declined" : "call:ended",
       call_id: callId,
       conversation_id: call.conversation_id,
@@ -302,7 +311,7 @@ function onClientMessage(socket: WebSocket, actor: ChatActor, raw: RawData): voi
       sendSocketError(socket, "invalid_signal", "إشارة المكالمة غير صالحة");
       return;
     }
-    setRealtimeEvent(peerId, {
+    await setRealtimeEvent(peerId, {
       type: "call:signal",
       call_id: callId,
       conversation_id: call.conversation_id,
@@ -327,16 +336,20 @@ export function attachChatRealtime(server: Server): () => void {
     const pathname = new URL(req.url || "/", "http://localhost").pathname;
     if (pathname !== "/api/chat/ws") return;
 
-    const actor = resolveChatActor(protocolToken(req));
-    if (!actor || actor.id <= 0) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
-    }
+    void resolveChatActor(protocolToken(req)).then(actor => {
+      if (!actor || actor.id <= 0) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
 
-    websocketServer.handleUpgrade(req, socket, head, client => {
-      socketActors.set(client, actor);
-      websocketServer.emit("connection", client, req);
+      websocketServer.handleUpgrade(req, socket, head, client => {
+        socketActors.set(client, actor);
+        websocketServer.emit("connection", client, req);
+      });
+    }).catch(() => {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
     });
   };
   server.on("upgrade", onUpgrade);
@@ -347,11 +360,21 @@ export function attachChatRealtime(server: Server): () => void {
       socket.close(1008, "Authentication required");
       return;
     }
-    const stopPolling = beginPolling(socket, actor);
-    sendPendingCalls(socket, actor.id);
-    socket.on("message", raw => onClientMessage(socket, actor, raw));
+    void (async () => {
+      const stopPolling = await beginPolling(socket, actor);
+      await sendPendingCalls(socket, actor.id);
+      socket.on("message", raw => {
+        void onClientMessage(socket, actor, raw).catch(error => {
+          logger.warn({ err: error, userId: actor.id }, "Chat websocket message failed");
+          sendSocketError(socket, "server_error", "تعذر معالجة إشارة المكالمة");
+        });
+      });
+      socket.on("close", () => stopPolling());
+    })().catch(error => {
+      logger.error({ err: error, userId: actor.id }, "Chat websocket initialization failed");
+      socket.close(1011, "Service unavailable");
+    });
     socket.on("error", error => logger.warn({ err: error, userId: actor.id }, "Chat websocket error"));
-    socket.on("close", () => stopPolling());
   });
 
   let closed = false;
@@ -364,24 +387,24 @@ export function attachChatRealtime(server: Server): () => void {
   };
 }
 
-export function expireChatRealtimeData(): void {
-  db.prepare("DELETE FROM chat_realtime_events WHERE datetime(expires_at)<=datetime('now')").run();
-  const expiredCalls = db.prepare(`
-    SELECT call_id, caller_id, callee_id, conversation_id
-    FROM chat_calls WHERE datetime(expires_at)<=datetime('now')
-  `).all() as Array<{
+export async function expireChatRealtimeData(): Promise<void> {
+  await execute("DELETE FROM chat_realtime_events WHERE datetime(expires_at)<=datetime('now')");
+  const expiredCalls = await queryAll<{
     call_id: string;
     caller_id: number;
     callee_id: number;
     conversation_id: number;
-  }>;
+  }>(`
+    SELECT call_id, caller_id, callee_id, conversation_id
+    FROM chat_calls WHERE datetime(expires_at)<=datetime('now')
+  `);
   for (const call of expiredCalls) {
-    publishCallEvent(call, {
+    await publishCallEvent(call, {
       type: "call:ended",
       call_id: call.call_id,
       conversation_id: call.conversation_id,
       reason: "timeout",
     });
   }
-  db.prepare("DELETE FROM chat_calls WHERE datetime(expires_at)<=datetime('now')").run();
+  await execute("DELETE FROM chat_calls WHERE datetime(expires_at)<=datetime('now')");
 }

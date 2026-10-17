@@ -1,7 +1,4 @@
-import db from "../lib/db.js";
-// Ensure the existing trips.client_request_id column and unique index are initialized
-// even when this helper is loaded independently from the central route registry.
-import "./erp-trips.js";
+import { execute, queryOne } from "../lib/erp-sql.js";
 
 type SyncOptions = {
   createIfMissing?: boolean;
@@ -18,8 +15,22 @@ const routingTripKey = (childId: number) => `routing-trip:${childId}`;
  * Date and tariff/bonus snapshots are immutable after first insertion unless an
  * explicit supervisor edit asks to refresh the dispatch snapshot.
  */
-export function syncRoutingTripLog(childId: number, options: SyncOptions = {}): void {
-  const source = db.prepare(`
+export async function syncRoutingTripLog(childId: number, options: SyncOptions = {}): Promise<void> {
+  const source = await queryOne<{
+    id: number; status: string; vehicle_plate: string | null; driver_name: string | null; driver_phone: string | null;
+    parent_reference_no: string | null;
+    driver_loading_image: string | null; child_permit_image_url: string | null;
+    invoice_image_url: string | null; reference_no: string | null;
+    product_name: string; destination_division: string | null; warehouse_name: string | null;
+    driver_expense: number | null; rental: number | null; parent_permit_image_url: string | null;
+    invoice_image: string | null; customer_name: string | null; customer_type: string | null;
+    cargo_type: string | null; rep_name: string | null; rep_phone: string | null;
+    dispatch_id: number; dispatch_created_at: string; tariff_loading_place: string | null;
+    tariff_unloading_place: string | null; dispatch_customer_name: string | null;
+    dispatch_customer_type: string | null; dispatch_driver_expense: number | null;
+    dispatch_rental: number | null; dispatch_cargo_type: string | null;
+    dispatch_rep_name: string | null; dispatch_rep_phone: string | null;
+  }>(`
     SELECT t.id, t.status, t.vehicle_plate, t.driver_name, t.driver_phone,
            t.driver_loading_image, t.permit_image_url AS child_permit_image_url,
            t.invoice_image_url, t.reference_no,
@@ -38,28 +49,14 @@ export function syncRoutingTripLog(childId: number, options: SyncOptions = {}): 
     JOIN supply_requests sr ON sr.id=t.supply_request_id
     JOIN routing_dispatches d ON d.id=sr.routing_dispatch_id
     WHERE t.id=?
-  `).get(childId) as {
-    id: number; status: string; vehicle_plate: string | null; driver_name: string | null; driver_phone: string | null;
-    parent_reference_no: string | null;
-    driver_loading_image: string | null; child_permit_image_url: string | null;
-    invoice_image_url: string | null; reference_no: string | null;
-    product_name: string; destination_division: string | null; warehouse_name: string | null;
-    driver_expense: number | null; rental: number | null; parent_permit_image_url: string | null;
-    invoice_image: string | null; customer_name: string | null; customer_type: string | null;
-    cargo_type: string | null; rep_name: string | null; rep_phone: string | null;
-    dispatch_id: number; dispatch_created_at: string; tariff_loading_place: string | null;
-    tariff_unloading_place: string | null; dispatch_customer_name: string | null;
-    dispatch_customer_type: string | null; dispatch_driver_expense: number | null;
-    dispatch_rental: number | null; dispatch_cargo_type: string | null;
-    dispatch_rep_name: string | null; dispatch_rep_phone: string | null;
-  } | undefined;
+  `, childId);
   if (!source?.vehicle_plate) return;
   if (options.onlyActive && ["completed", "cancelled", "rejected"].includes(source.status)) return;
 
   const reference = source.reference_no || source.parent_reference_no || null;
-  const driverName = source.driver_name || (db.prepare(
-    "SELECT driver_name FROM driver_profiles WHERE vehicle_plate=? LIMIT 1"
-  ).get(source.vehicle_plate) as { driver_name: string | null } | undefined)?.driver_name || null;
+  const driverName = source.driver_name || (await queryOne<{ driver_name: string | null }>(
+    "SELECT driver_name FROM driver_profiles WHERE vehicle_plate=? LIMIT 1", source.vehicle_plate,
+  ))?.driver_name || null;
   const permitImage = source.child_permit_image_url || source.parent_permit_image_url || null;
   const invoiceImage = source.invoice_image_url || source.invoice_image || null;
   const driverExpense = Number(source.dispatch_driver_expense ?? source.driver_expense) || 0;
@@ -83,16 +80,16 @@ export function syncRoutingTripLog(childId: number, options: SyncOptions = {}): 
     repPhone ? `هاتف المندوب: ${String(repPhone).trim()}` : null,
     reference ? `مرجع/فسح: ${reference.trim()}` : null,
   ].filter(Boolean).join(" | ");
-  const trailer = (db.prepare(
-    "SELECT linked_trailer_number FROM fleet_vehicles WHERE plate_number=? LIMIT 1"
-  ).get(source.vehicle_plate) as { linked_trailer_number: string | null } | undefined)?.linked_trailer_number || null;
+  const trailer = (await queryOne<{ linked_trailer_number: string | null }>(
+    "SELECT linked_trailer_number FROM fleet_vehicles WHERE plate_number=? LIMIT 1", source.vehicle_plate,
+  ))?.linked_trailer_number || null;
   const tripKey = routingTripKey(source.id);
-  const existing = db.prepare("SELECT id FROM trips WHERE client_request_id=?").get(tripKey);
+  const existing = await queryOne("SELECT id FROM trips WHERE client_request_id=?", tripKey);
 
   if (!existing && options.createIfMissing) {
     // Existing dispatches without an early log retain the old completion-date behavior.
     const originalDate = options.fallbackDate || source.dispatch_created_at?.slice(0, 10) || new Date().toISOString().slice(0, 10);
-    db.prepare(`
+    await execute(`
       INSERT INTO trips
         (date, car_id, driver_name, driver_phone, material_type, destination, trips_count,
          loading_region, unloading_region, unit_price, total_amount, net_amount, route_bonus,
@@ -100,7 +97,7 @@ export function syncRoutingTripLog(childId: number, options: SyncOptions = {}): 
          client_name, customer_type_snapshot, loading_card_no, client_request_id)
       VALUES (?,?,?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(client_request_id) WHERE client_request_id IS NOT NULL DO NOTHING
-    `).run(
+    `,
       originalDate, source.vehicle_plate, driverName, source.driver_phone,
       source.dispatch_cargo_type || source.cargo_type || source.product_name,
       source.destination_division || source.warehouse_name || null,
@@ -116,7 +113,7 @@ export function syncRoutingTripLog(childId: number, options: SyncOptions = {}): 
   // Refresh live child-owned data without changing the original date/tariff
   // snapshot. During a supervisor edit, refresh all dispatch-level snapshots too.
   const refreshDispatchSnapshot = options.refreshDispatchSnapshot === true;
-  db.prepare(`
+  await execute(`
     UPDATE trips SET
       car_id=?, driver_name=?, driver_phone=?,
       image_url=?, permit_image_url=?, fsohat_image_url=?, notes=?,
@@ -129,7 +126,7 @@ export function syncRoutingTripLog(childId: number, options: SyncOptions = {}): 
       ${options.refreshTrailerSnapshot ? "trailer_number=?," : ""}
       client_request_id=?
     WHERE client_request_id=?
-  `).run(
+  `,
     source.vehicle_plate, driverName, source.driver_phone,
     source.driver_loading_image, permitImage, invoiceImage, notes,
     reference,
@@ -151,12 +148,11 @@ export function syncRoutingTripLog(childId: number, options: SyncOptions = {}): 
  * Remove only an uncompleted, keyed routing-dispatch placeholder. Legacy
  * trip-log rows never have this key, and delivered/completed trips are retained.
  */
-export function deletePendingRoutingTripLog(childId: number): void {
-  const child = db.prepare("SELECT status FROM supply_request_trips WHERE id=?").get(childId) as
-    { status: string } | undefined;
+export async function deletePendingRoutingTripLog(childId: number): Promise<void> {
+  const child = await queryOne<{ status: string }>("SELECT status FROM supply_request_trips WHERE id=?", childId);
   if (!child || !["assigned", "pending_permit", "in_transit", "loaded"].includes(child.status)) return;
-  db.prepare(`
+  await execute(`
     DELETE FROM trips
     WHERE client_request_id=? AND client_request_id IS NOT NULL
-  `).run(routingTripKey(childId));
+  `, routingTripKey(childId));
 }

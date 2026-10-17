@@ -1,5 +1,5 @@
 import { Router } from "express";
-import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 
 const router = Router();
 
@@ -74,19 +74,19 @@ router.post("/ai/chat", async (req, res) => {
   // Build context from DB for the relevant role
   let context = "";
   if (role === "admin" || role === "supervisor") {
-    const ordersCount = (db.prepare("SELECT COUNT(*) as c FROM workflow_orders WHERE stage NOT IN ('delivered','cancelled')").get() as {c:number}).c;
-    const empCount    = (db.prepare("SELECT COUNT(*) as c FROM employees WHERE status='يعمل'").get() as {c:number}).c;
-    const pendingHR   = (db.prepare("SELECT COUNT(*) as c FROM hr_requests WHERE status='pending'").get() as {c:number}).c;
+    const ordersCount = (await queryOne<{ c: number }>("SELECT COUNT(*) as c FROM workflow_orders WHERE stage NOT IN ('delivered','cancelled')"))?.c ?? 0;
+    const empCount    = (await queryOne<{ c: number }>("SELECT COUNT(*) as c FROM employees WHERE status='يعمل'"))?.c ?? 0;
+    const pendingHR   = (await queryOne<{ c: number }>("SELECT COUNT(*) as c FROM hr_requests WHERE status='pending'"))?.c ?? 0;
     context = `\n\n[بيانات الشركة الحالية]\n- الطلبات النشطة: ${ordersCount}\n- الموظفون العاملون: ${empCount}\n- طلبات HR معلقة: ${pendingHR}`;
   } else if ((role === "customer" || role === "guest") && user_phone) {
-    const myOrders = (db.prepare("SELECT COUNT(*) as c FROM workflow_orders WHERE customer_phone=?").get(user_phone) as {c:number}).c;
+    const myOrders = (await queryOne<{ c: number }>("SELECT COUNT(*) as c FROM workflow_orders WHERE customer_phone=?", user_phone))?.c ?? 0;
     context = myOrders > 0 ? `\n\n[بيانات العميل]\n- لديك ${myOrders} طلب سابق في النظام` : "";
   }
 
   // Persist user message
   if (user_phone && lastUserMsg) {
-    db.prepare("INSERT INTO ai_messages (user_id,user_phone,role,content) VALUES (?,?,?,?)")
-      .run(user_id || null, user_phone, "user", lastUserMsg);
+    await execute("INSERT INTO ai_messages (user_id,user_phone,role,content) VALUES (?,?,?,?)",
+      user_id || null, user_phone, "user", lastUserMsg);
   }
 
   try {
@@ -113,8 +113,8 @@ router.post("/ai/chat", async (req, res) => {
 
     // Persist assistant reply
     if (user_phone) {
-      db.prepare("INSERT INTO ai_messages (user_id,user_phone,role,content) VALUES (?,?,?,?)")
-        .run(user_id || null, user_phone, "assistant", reply);
+      await execute("INSERT INTO ai_messages (user_id,user_phone,role,content) VALUES (?,?,?,?)",
+        user_id || null, user_phone, "assistant", reply);
     }
 
     res.json({ reply });
@@ -124,12 +124,13 @@ router.post("/ai/chat", async (req, res) => {
 });
 
 // ── GET /ai/history ───────────────────────────────────────────────────────────
-router.get("/ai/history", (req, res) => {
+router.get("/ai/history", async (req, res) => {
   const { phone } = req.query as { phone?: string };
   if (!phone) return void res.json([]);
-  const rows = db.prepare(
-    "SELECT role,content,created_at FROM ai_messages WHERE user_phone=? ORDER BY created_at DESC LIMIT 40"
-  ).all(phone);
+  const rows = await queryAll(
+    "SELECT role,content,created_at FROM ai_messages WHERE user_phone=? ORDER BY created_at DESC LIMIT 40",
+    phone,
+  );
   res.json(rows.reverse());
 });
 

@@ -1,4 +1,4 @@
-import db from "./db.js";
+import { execute, queryAll } from "./erp-sql.js";
 import { ObjectNotFoundError, ObjectStorageService } from "./objectStorage.js";
 import { logger } from "./logger.js";
 import { startBrowserPushQueueWorker } from "./chat-push.js";
@@ -12,7 +12,7 @@ async function deletePrivateObject(path: string): Promise<void> {
 }
 
 export async function runChatMaintenance(): Promise<void> {
-  const expiredMessages = db.prepare(`
+  const expiredMessages = await queryAll<{ id: number; media_path: string | null }>(`
     SELECT m.id, m.media_path
     FROM chat_messages m
     JOIN chat_conversations c ON c.id=m.conversation_id
@@ -20,7 +20,7 @@ export async function runChatMaintenance(): Promise<void> {
       AND datetime(m.created_at, printf('+%d days', c.retention_days))<=datetime('now')
     ORDER BY m.id
     LIMIT 200
-  `).all() as Array<{ id: number; media_path: string | null }>;
+  `);
 
   for (const message of expiredMessages) {
     if (message.media_path) {
@@ -33,16 +33,16 @@ export async function runChatMaintenance(): Promise<void> {
         }
       }
     }
-    db.prepare("DELETE FROM chat_messages WHERE id=?").run(message.id);
+    await execute("DELETE FROM chat_messages WHERE id=?", message.id);
   }
 
-  const expiredUploads = db.prepare(`
+  const expiredUploads = await queryAll<{ token_hash: string; object_path: string }>(`
     SELECT token_hash, object_path
     FROM chat_upload_tokens
     WHERE consumed_at IS NULL AND datetime(expires_at)<=datetime('now')
     ORDER BY created_at
     LIMIT 100
-  `).all() as Array<{ token_hash: string; object_path: string }>;
+  `);
 
   for (const upload of expiredUploads) {
     try {
@@ -53,14 +53,14 @@ export async function runChatMaintenance(): Promise<void> {
         continue;
       }
     }
-    db.prepare("DELETE FROM chat_upload_tokens WHERE token_hash=?").run(upload.token_hash);
+    await execute("DELETE FROM chat_upload_tokens WHERE token_hash=?", upload.token_hash);
   }
 
-  db.prepare(`
+  await execute(`
     DELETE FROM chat_push_queue
     WHERE processed_at IS NOT NULL AND datetime(created_at)<datetime('now','-7 days')
-  `).run();
-  expireChatRealtimeData();
+  `);
+  await expireChatRealtimeData();
 }
 
 export function startChatBackgroundServices(): void {

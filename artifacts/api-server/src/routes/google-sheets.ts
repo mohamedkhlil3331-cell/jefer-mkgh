@@ -1,5 +1,5 @@
 import { Router } from "express";
-import db from "../lib/db.js";
+import { execute, queryOne } from "../lib/erp-sql.js";
 
 const router = Router();
 
@@ -65,17 +65,17 @@ router.post("/sheets/:gid/import", async (req, res) => {
       if (!rawId) { skipped++; continue; }
       const normalizedId = rawId.replace(/[٠-٩]/g, d => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)));
       const orderNum = normalizedId.toUpperCase().replace(/^MK/, "MKGH");
-      const exists = db.prepare("SELECT id FROM workflow_orders WHERE order_number = ?").get(orderNum);
+      const exists = await queryOne("SELECT id FROM workflow_orders WHERE order_number = ?", orderNum);
       if (exists) { skipped++; continue; }
 
       const [lat, lng] = (row["لوكيشن التنزيل"] || "").split(",").map(s => parseFloat(s.trim()));
-      db.prepare(`
+      await execute(`
         INSERT INTO workflow_orders
           (order_number, customer_phone, product_name, quantity, unit,
            delivery_location, delivery_lat, delivery_lng,
            vehicle_plate, driver_name, driver_phone, stage, created_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-      `).run(
+      `,
         orderNum,
         row["رقم الجوال"] || "",
         row["نوع الطلب"] || "",

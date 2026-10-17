@@ -4,9 +4,9 @@
  * Each level fires exactly once per order per stage (tracked via sla_warning_stage /
  * sla_breach_stage columns to survive restarts without duplicate alerts).
  */
-import db from "./db.js";
 import { logger } from "./logger.js";
 import { getSlaSettings, getSlaStatus, STAGE_RESPONSIBLE_ROLE } from "./sla.js";
+import { execute, queryAll } from "./erp-sql.js";
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -22,31 +22,31 @@ type ActiveOrder = {
   sla_breach_stage: string | null;
 };
 
-function notify(phone: string, title: string, body: string, data?: string) {
+async function notify(phone: string, title: string, body: string, data?: string) {
   try {
-    db.prepare("INSERT INTO notifications (user_phone,title,body,data) VALUES (?,?,?,?)")
-      .run(phone, title, body, data || null);
+    await execute("INSERT INTO notifications (user_phone,title,body,data) VALUES (?,?,?,?)",
+      phone, title, body, data || null);
   } catch { /* ignore */ }
 }
 
-function checkSla(): void {
-  const settings = getSlaSettings();
+async function checkSla(): Promise<void> {
+  const settings = await getSlaSettings();
 
   const stages = ["pending", "pending_cash_approval", "payment_confirmed", "vehicle_assigned", "invoiced"];
   const placeholders = stages.map(() => "?").join(",");
 
-  const orders = db.prepare(`
+  const orders = await queryAll<ActiveOrder>(`
     SELECT id, order_number, stage,
            created_at, review_date, vehicle_assign_date, invoice_date,
            sla_warning_stage, sla_breach_stage
     FROM workflow_orders
     WHERE stage IN (${placeholders})
-  `).all(...stages) as ActiveOrder[];
+  `, ...stages);
 
   if (orders.length === 0) return;
 
   // Fetch admins once
-  const admins = db.prepare("SELECT phone FROM users WHERE role='admin' AND active=1").all() as { phone: string }[];
+  const admins = await queryAll<{ phone: string }>("SELECT phone FROM users WHERE role='admin' AND active=1");
 
   for (const order of orders) {
     const sla = getSlaStatus(order as Record<string, unknown>, settings);
@@ -59,20 +59,19 @@ function checkSla(): void {
         order.sla_warning_stage !== order.stage) {
       const role = STAGE_RESPONSIBLE_ROLE[order.stage];
       if (role) {
-        const responsibles = db.prepare(
+        const responsibles = await queryAll<{ phone: string }>(
           "SELECT phone FROM users WHERE role=? AND active=1"
-        ).all(role) as { phone: string }[];
+        , role);
 
         const title = `⚠️ تنبيه SLA — طلب ${order.order_number}`;
         const body = `الطلب ${order.order_number} استهلك ${sla.percent}% من وقت مرحلة "${order.stage}" (${sla.elapsed_minutes} دقيقة من أصل ${sla.limit_minutes}).`;
 
         for (const r of responsibles) {
-          notify(r.phone, title, body, orderData);
+          await notify(r.phone, title, body, orderData);
         }
       }
 
-      db.prepare("UPDATE workflow_orders SET sla_warning_stage=? WHERE id=?")
-        .run(order.stage, order.id);
+      await execute("UPDATE workflow_orders SET sla_warning_stage=? WHERE id=?", order.stage, order.id);
 
       logger.info(
         { order_id: order.id, order_number: order.order_number, stage: order.stage, percent: sla.percent },
@@ -86,11 +85,10 @@ function checkSla(): void {
       const body = `الطلب ${order.order_number} تجاوز وقت SLA المسموح (${sla.limit_minutes} دقيقة) في مرحلة "${order.stage}". الوقت المنقضي: ${sla.elapsed_minutes} دقيقة.`;
 
       for (const admin of admins) {
-        notify(admin.phone, title, body, orderData);
+        await notify(admin.phone, title, body, orderData);
       }
 
-      db.prepare("UPDATE workflow_orders SET sla_breach_stage=? WHERE id=?")
-        .run(order.stage, order.id);
+      await execute("UPDATE workflow_orders SET sla_breach_stage=? WHERE id=?", order.stage, order.id);
 
       logger.info(
         { order_id: order.id, order_number: order.order_number, stage: order.stage, elapsed: sla.elapsed_minutes },
@@ -102,9 +100,9 @@ function checkSla(): void {
 
 export function startSlaMonitor(): void {
   logger.info("sla-monitor: started (interval=5min)");
-  const runCheckSafely = () => {
+  const runCheckSafely = async () => {
     try {
-      checkSla();
+      await checkSla();
     } catch (err) {
       logger.warn(
         { err },
@@ -114,7 +112,7 @@ export function startSlaMonitor(): void {
   };
   // Initial check after 1 minute (let the server settle)
   setTimeout(() => {
-    runCheckSafely();
+    void runCheckSafely();
     setInterval(runCheckSafely, CHECK_INTERVAL_MS);
   }, 60_000);
 }

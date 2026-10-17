@@ -5,14 +5,14 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import db from "../lib/db.js";
+import { execute, executeBatch, queryAll, queryOne } from "../lib/erp-sql.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
 
 // ── Auth helper — admin-only guard ───────────────────────────────────────────
 // Used as a return-value helper for non-file routes
-function requireMkghAccess(req: Request, res: Response): { ok: true; actorName: string } | { ok: false } {
+async function requireMkghAccess(req: Request, res: Response): Promise<{ ok: true; actorName: string } | { ok: false }> {
   const raw = req.headers.authorization?.replace("Bearer ", "").trim() ?? "";
   // Guard against JS null/undefined serialised as the string "null" or "undefined"
   if (!raw || raw === "guest" || raw === "null" || raw === "undefined") {
@@ -20,16 +20,16 @@ function requireMkghAccess(req: Request, res: Response): { ok: true; actorName: 
     return { ok: false };
   }
   // No expiry check — consistent with /auth/me which also skips expiry in production
-  const session = db.prepare(
+  const session = await queryOne<{ user_id: number }>(
     "SELECT user_id FROM sessions WHERE token = ?"
-  ).get(raw) as { user_id: number } | undefined;
+  , raw);
   if (!session) {
     res.status(401).json({ error: "الجلسة غير موجودة، يرجى تسجيل الدخول مجدداً" });
     return { ok: false };
   }
-  const user = db.prepare(
+  const user = await queryOne<{ name: string; role: string }>(
     "SELECT name, role FROM users WHERE id = ? AND active = 1"
-  ).get(session.user_id) as { name: string; role: string } | undefined;
+  , session.user_id);
   if (!user || user.role !== "admin") {
     res.status(403).json({ error: "هذه الوظيفة مخصصة للمدير فقط" });
     return { ok: false };
@@ -38,22 +38,22 @@ function requireMkghAccess(req: Request, res: Response): { ok: true; actorName: 
 }
 
 // ── Auth middleware — runs BEFORE multer so file parsing is skipped on 401 ───
-function mkghAuthMiddleware(req: Request, res: Response, next: NextFunction): void {
+async function mkghAuthMiddleware(req: Request, res: Response, next: NextFunction): Promise<void> {
   const raw = req.headers.authorization?.replace("Bearer ", "").trim() ?? "";
   if (!raw || raw === "guest" || raw === "null" || raw === "undefined") {
     res.status(401).json({ error: "يجب تسجيل الدخول أولاً" });
     return;
   }
-  const session = db.prepare(
+  const session = await queryOne<{ user_id: number }>(
     "SELECT user_id FROM sessions WHERE token = ?"
-  ).get(raw) as { user_id: number } | undefined;
+  , raw);
   if (!session) {
     res.status(401).json({ error: "الجلسة غير موجودة، يرجى تسجيل الدخول مجدداً" });
     return;
   }
-  const user = db.prepare(
+  const user = await queryOne<{ name: string; role: string }>(
     "SELECT name, role FROM users WHERE id = ? AND active = 1"
-  ).get(session.user_id) as { name: string; role: string } | undefined;
+  , session.user_id);
   if (!user || user.role !== "admin") {
     res.status(403).json({ error: "هذه الوظيفة مخصصة للمدير فقط" });
     return;
@@ -90,7 +90,7 @@ function excelDateToISO(v: unknown): string | null {
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /mkgh/import   — auth runs BEFORE multer so 401 is returned before file parsing
 // ─────────────────────────────────────────────────────────────────────────────
-router.post("/mkgh/import", mkghAuthMiddleware, upload.single("file"), (req, res) => {
+router.post("/mkgh/import", mkghAuthMiddleware, upload.single("file"), async (req, res) => {
   // auth already verified by mkghAuthMiddleware
   const actorName = (req as Request & { mkghActor?: string }).mkghActor ?? "";
   if (!req.file) return void res.status(400).json({ error: "لم يُرفق ملف" });
@@ -131,47 +131,46 @@ router.post("/mkgh/import", mkghAuthMiddleware, upload.single("file"), (req, res
     const importedBy = String(req.body?.imported_by || actorName || "");
     const fileName   = req.file.originalname;
 
-    db.transaction(() => {
-      db.prepare("DELETE FROM mkgh_transactions").run();
-      db.prepare("DELETE FROM mkgh_imports").run();
-      const impResult = db.prepare(
-        "INSERT INTO mkgh_imports (imported_by, row_count, file_name) VALUES (?,?,?)"
-      ).run(importedBy, dataRows.length, fileName);
-      const importId = impResult.lastInsertRowid;
-
-      const ins = db.prepare(`
-        INSERT INTO mkgh_transactions
-          (import_id, month, year, driver_name, account_tab, model, activity,
-           cost_center, account_name, tx_date, doc_type, doc_number,
-           description, debit, credit, net)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-      `);
-      const g = (row: unknown[], idx: number) => idx >= 0 ? (row[idx] ?? null) : null;
-      for (const rawRow of dataRows) {
-        const row = rawRow as unknown[];
-        const debit  = Number(g(row, colDebit))  || 0;
-        const credit = Number(g(row, colCredit)) || 0;
-        const netVal = colNet >= 0
-          ? (Number(g(row, colNet)) || (credit - debit))
-          : (credit - debit);
-        ins.run(
-          importId,
-          Number(g(row, colMonth))   || null,
-          Number(g(row, colYear))    || null,
-          g(row, colDriver)   ? String(g(row, colDriver)!).trim()   : null,
-          g(row, colAccTab)   ? String(g(row, colAccTab)!).trim()   : null,
-          g(row, colModel)    ? String(g(row, colModel)!).trim()    : null,
+    const g = (row: unknown[], idx: number) => idx >= 0 ? (row[idx] ?? null) : null;
+    const statements: Array<{ sql: string; params?: unknown[] }> = [
+      { sql: "DELETE FROM mkgh_transactions" },
+      { sql: "DELETE FROM mkgh_imports" },
+      {
+        sql: "INSERT INTO mkgh_imports (imported_by, row_count, file_name) VALUES (?,?,?)",
+        params: [importedBy, dataRows.length, fileName],
+      },
+    ];
+    for (const rawRow of dataRows) {
+      const row = rawRow as unknown[];
+      const debit = Number(g(row, colDebit)) || 0;
+      const credit = Number(g(row, colCredit)) || 0;
+      const netVal = colNet >= 0 ? (Number(g(row, colNet)) || (credit - debit)) : (credit - debit);
+      statements.push({
+        sql: `
+          INSERT INTO mkgh_transactions
+            (import_id, month, year, driver_name, account_tab, model, activity,
+             cost_center, account_name, tx_date, doc_type, doc_number,
+             description, debit, credit, net)
+          VALUES ((SELECT MAX(id) FROM mkgh_imports),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        `,
+        params: [
+          Number(g(row, colMonth)) || null,
+          Number(g(row, colYear)) || null,
+          g(row, colDriver) ? String(g(row, colDriver)!).trim() : null,
+          g(row, colAccTab) ? String(g(row, colAccTab)!).trim() : null,
+          g(row, colModel) ? String(g(row, colModel)!).trim() : null,
           g(row, colActivity) ? String(g(row, colActivity)!).trim() : null,
-          g(row, colVehicle)  ? String(g(row, colVehicle)!).trim()  : null,
-          g(row, colAccName)  ? String(g(row, colAccName)!).trim()  : null,
+          g(row, colVehicle) ? String(g(row, colVehicle)!).trim() : null,
+          g(row, colAccName) ? String(g(row, colAccName)!).trim() : null,
           excelDateToISO(g(row, colDate)),
-          g(row, colDocType)  ? String(g(row, colDocType)!).trim()  : null,
-          g(row, colDocNum)   ? String(g(row, colDocNum)!).trim()   : null,
-          g(row, colDesc)     ? String(g(row, colDesc)!).trim()     : null,
+          g(row, colDocType) ? String(g(row, colDocType)!).trim() : null,
+          g(row, colDocNum) ? String(g(row, colDocNum)!).trim() : null,
+          g(row, colDesc) ? String(g(row, colDesc)!).trim() : null,
           debit, credit, netVal,
-        );
-      }
-    })();
+        ],
+      });
+    }
+    await executeBatch(statements);
 
     res.json({ ok: true, inserted: dataRows.length, sheet: sheetName });
   } catch (err) {
@@ -182,8 +181,8 @@ router.post("/mkgh/import", mkghAuthMiddleware, upload.single("file"), (req, res
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/transactions
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/transactions", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.get("/mkgh/transactions", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { driver, vehicle, month, year, account_tab, account_name, page = "1", limit = "100" } = req.query as Record<string, string>;
   const params: (string | number)[] = [];
   let where = "WHERE 1=1";
@@ -194,61 +193,57 @@ router.get("/mkgh/transactions", (req, res) => {
   if (account_tab)  { where += " AND account_tab  LIKE ?";  params.push(`%${account_tab}%`); }
   if (account_name) { where += " AND account_name LIKE ?";  params.push(`%${account_name}%`); }
 
-  const total  = (db.prepare(`SELECT COUNT(*) AS c FROM mkgh_transactions ${where}`).get(...params) as { c: number }).c;
+  const total  = (await queryOne<{ c: number }>(`SELECT COUNT(*) AS c FROM mkgh_transactions ${where}`, ...params))?.c || 0;
   const offset = (Number(page) - 1) * Number(limit);
-  const rows   = db.prepare(
+  const rows   = await queryAll(
     `SELECT * FROM mkgh_transactions ${where} ORDER BY id DESC LIMIT ? OFFSET ?`
-  ).all(...params, Number(limit), offset);
+  , ...params, Number(limit), offset);
   res.json({ total, page: Number(page), rows });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DELETE /mkgh/transactions  (deletes ALL — clear data)
 // ─────────────────────────────────────────────────────────────────────────────
-router.delete("/mkgh/transactions", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
-  db.transaction(() => {
-    db.prepare("DELETE FROM mkgh_transactions").run();
-    db.prepare("DELETE FROM mkgh_imports").run();
-  })();
+router.delete("/mkgh/transactions", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
+  await executeBatch([{ sql: "DELETE FROM mkgh_transactions" }, { sql: "DELETE FROM mkgh_imports" }]);
   res.json({ ok: true });
 });
 
 // DELETE /mkgh/transactions/bulk  (delete selected rows by IDs)
 // ─────────────────────────────────────────────────────────────────────────────
-router.delete("/mkgh/transactions/bulk", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.delete("/mkgh/transactions/bulk", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { ids } = req.body as { ids: number[] };
   if (!Array.isArray(ids) || ids.length === 0)
     return void res.status(400).json({ error: "ids مطلوبة" });
-  const stmt = db.prepare("DELETE FROM mkgh_transactions WHERE id=?");
-  db.transaction(() => { ids.forEach(id => stmt.run(id)); })();
+  await executeBatch(ids.map(id => ({ sql: "DELETE FROM mkgh_transactions WHERE id=?", params: [id] })));
   res.json({ deleted: ids.length });
 });
 
 // DELETE /mkgh/transactions/:id  (delete single row)
 // ─────────────────────────────────────────────────────────────────────────────
-router.delete("/mkgh/transactions/:id", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
-  db.prepare("DELETE FROM mkgh_transactions WHERE id=?").run(req.params.id);
+router.delete("/mkgh/transactions/:id", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
+  await execute("DELETE FROM mkgh_transactions WHERE id=?", req.params.id);
   res.json({ ok: true });
 });
 
 // PATCH /mkgh/transactions/:id  (edit single row)
 // ─────────────────────────────────────────────────────────────────────────────
-router.patch("/mkgh/transactions/:id", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.patch("/mkgh/transactions/:id", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { driver_name, cost_center, activity, account_tab, account_name,
           tx_date, doc_number, description, debit, credit, month, year } = req.body as Record<string, string>;
   const d = parseFloat(debit) || 0;
   const c = parseFloat(credit) || 0;
   const net = c - d;
-  db.prepare(`
+  await execute(`
     UPDATE mkgh_transactions SET
       driver_name=?, cost_center=?, activity=?, account_tab=?, account_name=?,
       tx_date=?, doc_number=?, description=?, debit=?, credit=?, net=?, month=?, year=?
     WHERE id=?
-  `).run(
+  `,
     driver_name || null, cost_center || null, activity || null, account_tab || null, account_name || null,
     tx_date || null, doc_number || null, description || null,
     d, c, net,
@@ -289,11 +284,12 @@ function buildDashConditions(q: Record<string, string>): { conditions: string; p
 
 // GET /mkgh/analytics/summary
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/analytics/summary", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.get("/mkgh/analytics/summary", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { conditions, params } = buildDashConditions(req.query as Record<string, string>);
   const where = "WHERE 1=1" + conditions;
-  const row = db.prepare(`
+  const [row, imp] = await Promise.all([
+    queryOne<Record<string, unknown>>(`
     SELECT
       COUNT(*)                                                    AS total_rows,
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)   AS total_revenue,
@@ -304,19 +300,20 @@ router.get("/mkgh/analytics/summary", (req, res) => {
       MIN(year || '-' || printf('%02d', month))                  AS period_from,
       MAX(year || '-' || printf('%02d', month))                  AS period_to
     FROM mkgh_transactions ${where}
-  `).get(...params) as Record<string, unknown>;
-  const imp = db.prepare("SELECT * FROM mkgh_imports ORDER BY id DESC LIMIT 1").get() as Record<string, unknown> | undefined;
+    `, ...params),
+    queryOne<Record<string, unknown>>("SELECT * FROM mkgh_imports ORDER BY id DESC LIMIT 1"),
+  ]);
   res.json({ ...row, last_import: imp || null });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/analytics/drivers
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/analytics/drivers", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.get("/mkgh/analytics/drivers", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { conditions, params } = buildDashConditions(req.query as Record<string, string>);
   const where = "WHERE driver_name IS NOT NULL AND driver_name != ''" + conditions;
-  const rows = db.prepare(`
+  const rows = await queryAll(`
     SELECT
       driver_name,
       COUNT(*)                                                               AS tx_count,
@@ -330,18 +327,18 @@ router.get("/mkgh/analytics/drivers", (req, res) => {
     FROM mkgh_transactions ${where}
     GROUP BY driver_name
     ORDER BY net_profit DESC
-  `).all(...params as string[]);
+  `, ...params);
   res.json(rows);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/analytics/vehicles  — per-vehicle performance (full VehicleStat shape)
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/analytics/vehicles", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.get("/mkgh/analytics/vehicles", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { conditions: extraWhere, params } = buildDashConditions(req.query as Record<string, string>);
   const allParams = [...params, ...params];
-  const rows = db.prepare(`
+  const rows = await queryAll(`
     WITH vehicle_stats AS (
       SELECT
         cost_center                                                             AS vehicle,
@@ -383,16 +380,16 @@ router.get("/mkgh/analytics/vehicles", (req, res) => {
     FROM vehicle_stats vs
     LEFT JOIN best_drivers bd ON bd.vehicle = vs.vehicle AND bd.rn = 1
     ORDER BY vs.net_profit DESC
-  `).all(...allParams);
+  `, ...allParams);
   res.json(rows);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/analytics/driver-vehicle-matrix
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/analytics/driver-vehicle-matrix", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
-  const rows = db.prepare(`
+router.get("/mkgh/analytics/driver-vehicle-matrix", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
+  const rows = await queryAll<{ driver_name: string; vehicle: string; workshop_count: number; total_cost: number }>(`
     SELECT
       driver_name,
       cost_center                          AS vehicle,
@@ -405,7 +402,7 @@ router.get("/mkgh/analytics/driver-vehicle-matrix", (req, res) => {
            OR account_name LIKE '%غيار زيت%')
     GROUP BY driver_name, cost_center
     ORDER BY workshop_count DESC
-  `).all() as { driver_name: string; vehicle: string; workshop_count: number; total_cost: number }[];
+  `);
 
   const matrix: Record<string, Record<string, { count: number; cost: number }>> = {};
   for (const r of rows) {
@@ -421,13 +418,15 @@ router.get("/mkgh/analytics/driver-vehicle-matrix", (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/meta
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/meta", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
-  const drivers      = db.prepare("SELECT DISTINCT driver_name  FROM mkgh_transactions WHERE driver_name  IS NOT NULL ORDER BY driver_name").all()  as { driver_name: string }[];
-  const vehicles     = db.prepare("SELECT DISTINCT cost_center  FROM mkgh_transactions WHERE cost_center  IS NOT NULL ORDER BY cost_center").all()  as { cost_center: string }[];
-  const months       = db.prepare("SELECT DISTINCT month, year  FROM mkgh_transactions WHERE month IS NOT NULL ORDER BY year, month").all() as { month: number; year: number }[];
-  const accountTabs  = db.prepare("SELECT DISTINCT account_tab  FROM mkgh_transactions WHERE account_tab  IS NOT NULL ORDER BY account_tab").all() as { account_tab: string }[];
-  const accountNames = db.prepare("SELECT DISTINCT account_name FROM mkgh_transactions WHERE account_name IS NOT NULL ORDER BY account_name").all() as { account_name: string }[];
+router.get("/mkgh/meta", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
+  const [drivers, vehicles, months, accountTabs, accountNames] = await Promise.all([
+    queryAll<{ driver_name: string }>("SELECT DISTINCT driver_name FROM mkgh_transactions WHERE driver_name IS NOT NULL ORDER BY driver_name"),
+    queryAll<{ cost_center: string }>("SELECT DISTINCT cost_center FROM mkgh_transactions WHERE cost_center IS NOT NULL ORDER BY cost_center"),
+    queryAll<{ month: number; year: number }>("SELECT DISTINCT month, year FROM mkgh_transactions WHERE month IS NOT NULL ORDER BY year, month"),
+    queryAll<{ account_tab: string }>("SELECT DISTINCT account_tab FROM mkgh_transactions WHERE account_tab IS NOT NULL ORDER BY account_tab"),
+    queryAll<{ account_name: string }>("SELECT DISTINCT account_name FROM mkgh_transactions WHERE account_name IS NOT NULL ORDER BY account_name"),
+  ]);
   res.json({
     drivers:      drivers.map(r => r.driver_name),
     vehicles:     vehicles.map(r => r.cost_center),
@@ -440,16 +439,16 @@ router.get("/mkgh/meta", (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/analytics/breakdown-types
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/analytics/breakdown-types", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
-  const raw = db.prepare(`
+router.get("/mkgh/analytics/breakdown-types", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
+  const raw = await queryAll<{ vehicle: string; doc_number: string | null; cost: number }>(`
     SELECT cost_center AS vehicle, doc_number, ABS(net) AS cost
     FROM mkgh_transactions
     WHERE cost_center IS NOT NULL
       AND (account_name LIKE '%صيانه%' OR account_name LIKE '%صيانة%'
            OR account_name LIKE '%قطع غيار%' OR account_name LIKE '%كفرات%'
            OR account_name LIKE '%غيار زيت%' OR account_name LIKE '%بطار%')
-  `).all() as { vehicle: string; doc_number: string | null; cost: number }[];
+  `);
 
   const byVehicle: Record<string, Record<string, { count: number; cost: number }>> = {};
   for (const r of raw) {
@@ -473,12 +472,12 @@ router.get("/mkgh/analytics/breakdown-types", (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/analytics/monthly
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/analytics/monthly", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.get("/mkgh/analytics/monthly", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { conditions, params } = buildDashConditions(req.query as Record<string, string>);
   const where = "WHERE year IS NOT NULL AND month IS NOT NULL" + conditions;
 
-  const rows = db.prepare(`
+  const rows = await queryAll(`
     SELECT
       printf('%d-%02d', year, month)                                        AS period,
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)              AS revenue,
@@ -486,15 +485,15 @@ router.get("/mkgh/analytics/monthly", (req, res) => {
       COALESCE(SUM(net), 0)                                                 AS net_profit
     FROM mkgh_transactions ${where}
     GROUP BY year, month ORDER BY year ASC, month ASC
-  `).all(...params);
+  `, ...params);
   res.json(rows);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/analytics/driver-vehicle-timeline
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/analytics/driver-vehicle-timeline", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.get("/mkgh/analytics/driver-vehicle-timeline", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { driver, vehicle } = req.query as Record<string, string>;
   if (!driver && !vehicle) return void res.status(400).json({ error: "يجب تحديد سائق أو سيارة" });
   const params: string[] = [];
@@ -502,7 +501,7 @@ router.get("/mkgh/analytics/driver-vehicle-timeline", (req, res) => {
   if (driver)  { where += " AND driver_name LIKE ?"; params.push(`%${driver}%`); }
   if (vehicle) { where += " AND cost_center = ?";    params.push(vehicle); }
 
-  const rows = db.prepare(`
+  const rows = await queryAll(`
     SELECT
       printf('%d-%02d', year, month)                                        AS period,
       driver_name,
@@ -513,17 +512,18 @@ router.get("/mkgh/analytics/driver-vehicle-timeline", (req, res) => {
     FROM mkgh_transactions ${where}
     GROUP BY year, month, driver_name, cost_center
     ORDER BY year ASC, month ASC
-  `).all(...params);
+  `, ...params);
   res.json(rows);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/export
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/export", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.get("/mkgh/export", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
 
-  const driverRows = db.prepare(`
+  const [driverRows, vehicleRows, monthlyRows, matrixRows] = await Promise.all([
+    queryAll<Record<string, unknown>>(`
     SELECT
       driver_name                                                            AS "السائق",
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)              AS "الإيرادات",
@@ -534,9 +534,9 @@ router.get("/mkgh/export", (req, res) => {
     FROM mkgh_transactions
     WHERE driver_name IS NOT NULL AND driver_name != ''
     GROUP BY driver_name ORDER BY "صافي الربح" DESC
-  `).all() as Record<string, unknown>[];
+    `),
 
-  const vehicleRows = db.prepare(`
+    queryAll<Record<string, unknown>>(`
     SELECT
       cost_center                                                           AS "السيارة",
       MAX(activity)                                                         AS "النشاط",
@@ -549,9 +549,9 @@ router.get("/mkgh/export", (req, res) => {
     FROM mkgh_transactions
     WHERE cost_center IS NOT NULL AND cost_center != ''
     GROUP BY cost_center ORDER BY "صافي الربح" DESC
-  `).all() as Record<string, unknown>[];
+    `),
 
-  const monthlyRows = db.prepare(`
+    queryAll<Record<string, unknown>>(`
     SELECT
       printf('%d-%02d', year, month) AS "الفترة",
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)  AS "الإيرادات",
@@ -560,9 +560,9 @@ router.get("/mkgh/export", (req, res) => {
     FROM mkgh_transactions
     WHERE year IS NOT NULL AND month IS NOT NULL
     GROUP BY year, month ORDER BY year ASC, month ASC
-  `).all() as Record<string, unknown>[];
+    `),
 
-  const matrixRows = db.prepare(`
+    queryAll<Record<string, unknown>>(`
     SELECT
       driver_name AS "السائق", cost_center AS "السيارة",
       COUNT(*) AS "عدد أوامر الورشة",
@@ -573,7 +573,8 @@ router.get("/mkgh/export", (req, res) => {
            OR account_name LIKE '%قطع غيار%' OR account_name LIKE '%كفرات%'
            OR account_name LIKE '%غيار زيت%')
     GROUP BY driver_name, cost_center ORDER BY "عدد أوامر الورشة" DESC
-  `).all() as Record<string, unknown>[];
+    `),
+  ]);
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(driverRows.length  ? driverRows  : [{}]), "تصنيف السائقين");
@@ -591,11 +592,12 @@ router.get("/mkgh/export", (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/vehicle/:vehicle
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/vehicle/:vehicle", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.get("/mkgh/vehicle/:vehicle", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { vehicle } = req.params;
 
-  const kpi = db.prepare(`
+  const [kpi, monthly, driverRows, rawMaint] = await Promise.all([
+    queryOne<Record<string, unknown>>(`
     SELECT
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)      AS revenue,
       COALESCE(SUM(CASE WHEN net < 0 THEN ABS(net) ELSE 0 END), 0) AS expenses,
@@ -608,18 +610,18 @@ router.get("/mkgh/vehicle/:vehicle", (req, res) => {
       MAX(printf('%d-%02d', year, month))                            AS period_to,
       COUNT(DISTINCT printf('%d-%02d', year, month))                 AS active_months
     FROM mkgh_transactions WHERE cost_center = ?
-  `).get(vehicle) as Record<string, unknown>;
+    `, vehicle),
 
-  const monthly = db.prepare(`
+    queryAll(`
     SELECT printf('%d-%02d', year, month) AS period,
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)      AS revenue,
       COALESCE(SUM(CASE WHEN net < 0 THEN ABS(net) ELSE 0 END), 0) AS expenses,
       COALESCE(SUM(net), 0)                                         AS net_profit
     FROM mkgh_transactions WHERE cost_center = ? AND year IS NOT NULL
     GROUP BY year, month ORDER BY year, month
-  `).all(vehicle);
+    `, vehicle),
 
-  const driverRows = db.prepare(`
+    queryAll(`
     SELECT driver_name, COUNT(*) AS tx_count,
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)      AS revenue,
       COALESCE(SUM(CASE WHEN net < 0 THEN ABS(net) ELSE 0 END), 0) AS expenses,
@@ -628,15 +630,16 @@ router.get("/mkgh/vehicle/:vehicle", (req, res) => {
       MAX(printf('%d-%02d', year, month)) AS period_to
     FROM mkgh_transactions WHERE cost_center = ? AND driver_name IS NOT NULL
     GROUP BY driver_name ORDER BY tx_count DESC
-  `).all(vehicle);
+    `, vehicle),
 
-  const rawMaint = db.prepare(`
+    queryAll<{ doc_number: string | null; cost: number }>(`
     SELECT doc_number, ABS(net) AS cost
     FROM mkgh_transactions WHERE cost_center = ?
       AND (account_name LIKE '%صيانه%' OR account_name LIKE '%صيانة%'
            OR account_name LIKE '%قطع غيار%' OR account_name LIKE '%كفرات%'
            OR account_name LIKE '%غيار زيت%' OR account_name LIKE '%بطار%')
-  `).all(vehicle) as { doc_number: string | null; cost: number }[];
+    `, vehicle),
+  ]);
 
   const breakdownTypes: Record<string, { count: number; cost: number }> = {};
   for (const r of rawMaint) {
@@ -650,11 +653,12 @@ router.get("/mkgh/vehicle/:vehicle", (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/driver/:driver
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/driver/:driver", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.get("/mkgh/driver/:driver", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { driver } = req.params;
 
-  const kpi = db.prepare(`
+  const [kpi, monthly, vehicleRows, rawMaint] = await Promise.all([
+    queryOne<Record<string, unknown>>(`
     SELECT
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)      AS revenue,
       COALESCE(SUM(CASE WHEN net < 0 THEN ABS(net) ELSE 0 END), 0) AS expenses,
@@ -665,18 +669,18 @@ router.get("/mkgh/driver/:driver", (req, res) => {
       MAX(printf('%d-%02d', year, month))                            AS period_to,
       COUNT(DISTINCT printf('%d-%02d', year, month))                 AS active_months
     FROM mkgh_transactions WHERE driver_name = ?
-  `).get(driver) as Record<string, unknown>;
+    `, driver),
 
-  const monthly = db.prepare(`
+    queryAll(`
     SELECT printf('%d-%02d', year, month) AS period,
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)      AS revenue,
       COALESCE(SUM(CASE WHEN net < 0 THEN ABS(net) ELSE 0 END), 0) AS expenses,
       COALESCE(SUM(net), 0)                                         AS net_profit
     FROM mkgh_transactions WHERE driver_name = ? AND year IS NOT NULL
     GROUP BY year, month ORDER BY year, month
-  `).all(driver);
+    `, driver),
 
-  const vehicleRows = db.prepare(`
+    queryAll(`
     SELECT cost_center AS vehicle, MAX(activity) AS activity,
       COUNT(*) AS tx_count,
       COALESCE(SUM(CASE WHEN net > 0 THEN net ELSE 0 END), 0)      AS revenue,
@@ -686,15 +690,16 @@ router.get("/mkgh/driver/:driver", (req, res) => {
       MAX(printf('%d-%02d', year, month)) AS period_to
     FROM mkgh_transactions WHERE driver_name = ? AND cost_center IS NOT NULL
     GROUP BY cost_center ORDER BY tx_count DESC
-  `).all(driver);
+    `, driver),
 
-  const rawMaint = db.prepare(`
+    queryAll<{ doc_number: string | null; cost: number }>(`
     SELECT doc_number, ABS(net) AS cost
     FROM mkgh_transactions WHERE driver_name = ?
       AND (account_name LIKE '%صيانه%' OR account_name LIKE '%صيانة%'
            OR account_name LIKE '%قطع غيار%' OR account_name LIKE '%كفرات%'
            OR account_name LIKE '%غيار زيت%' OR account_name LIKE '%بطار%')
-  `).all(driver) as { doc_number: string | null; cost: number }[];
+    `, driver),
+  ]);
 
   const breakdownTypes: Record<string, { count: number; cost: number }> = {};
   for (const r of rawMaint) {
@@ -709,7 +714,7 @@ router.get("/mkgh/driver/:driver", (req, res) => {
 // POST /mkgh/analyze-descriptions  — AI analysis of the description field
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/mkgh/analyze-descriptions", async (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+  if (!(await requireMkghAccess(req, res)).ok) return;
 
   const BASE_URL = process.env.AI_INTEGRATIONS_OPENAI_BASE_URL;
   const API_KEY  = process.env.AI_INTEGRATIONS_OPENAI_API_KEY;
@@ -724,9 +729,9 @@ router.post("/mkgh/analyze-descriptions", async (req, res) => {
   if (vehicle) { where += " AND cost_center = ?"; params.push(vehicle); }
   if (driver)  { where += " AND driver_name = ?"; params.push(driver); }
 
-  const rows = db.prepare(
+  const rows = await queryAll<{ description: string }>(
     `SELECT description FROM mkgh_transactions ${where} ORDER BY id DESC LIMIT 200`
-  ).all(...params) as { description: string }[];
+  , ...params);
 
   if (!rows.length)
     return void res.json({ items: [], summary: "لا توجد بيانات بيان للتحليل" });
@@ -781,26 +786,24 @@ ${descriptions.map((d, i) => `${i + 1}. ${d}`).join("\n")}`;
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/gmail-config
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/gmail-config", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
-  const getVal = (key: string) =>
-    (db.prepare("SELECT value FROM system_config WHERE key=?").get(key) as any)?.value?.trim() ?? "";
-  const gmailUser = getVal("gmail_user") || process.env.GMAIL_USER?.trim();
-  const gmailPass = getVal("gmail_pass") || process.env.GMAIL_APP_PASSWORD?.trim();
+router.get("/mkgh/gmail-config", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
+  const getVal = async (key: string) =>
+    (await queryOne<{ value?: string }>("SELECT value FROM system_config WHERE key=?", key))?.value?.trim() ?? "";
+  const gmailUser = await getVal("gmail_user") || process.env.GMAIL_USER?.trim();
+  const gmailPass = await getVal("gmail_pass") || process.env.GMAIL_APP_PASSWORD?.trim();
   res.json({ gmail_user: gmailUser, gmail_pass_set: (gmailPass ?? "").length > 0 });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PUT /mkgh/gmail-config
 // ─────────────────────────────────────────────────────────────────────────────
-router.put("/mkgh/gmail-config", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.put("/mkgh/gmail-config", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { gmail_user, gmail_pass } = req.body as { gmail_user?: string; gmail_pass?: string };
-  const upsert = db.prepare(
-    "INSERT INTO system_config (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')"
-  );
-  if (gmail_user !== undefined) upsert.run("gmail_user", gmail_user.trim());
-  if (gmail_pass !== undefined && gmail_pass.trim().length > 0) upsert.run("gmail_pass", gmail_pass.trim());
+  const upsert = "INSERT INTO system_config (key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=datetime('now')";
+  if (gmail_user !== undefined) await execute(upsert, "gmail_user", gmail_user.trim());
+  if (gmail_pass !== undefined && gmail_pass.trim().length > 0) await execute(upsert, "gmail_pass", gmail_pass.trim());
   res.json({ ok: true });
 });
 
@@ -808,12 +811,12 @@ router.put("/mkgh/gmail-config", (req, res) => {
 // POST /mkgh/test-email
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/mkgh/test-email", async (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
-  const getVal = (key: string) =>
-    (db.prepare("SELECT value FROM system_config WHERE key=?").get(key) as any)?.value?.trim() ?? "";
-  const gmailUser = getVal("gmail_user") || process.env.GMAIL_USER?.trim();
-  const gmailPass = getVal("gmail_pass") || process.env.GMAIL_APP_PASSWORD?.trim();
-  const toEmail   = (req.body as any).to_email || getVal("otp_email") || gmailUser;
+  if (!(await requireMkghAccess(req, res)).ok) return;
+  const getVal = async (key: string) =>
+    (await queryOne<{ value?: string }>("SELECT value FROM system_config WHERE key=?", key))?.value?.trim() ?? "";
+  const gmailUser = await getVal("gmail_user") || process.env.GMAIL_USER?.trim();
+  const gmailPass = await getVal("gmail_pass") || process.env.GMAIL_APP_PASSWORD?.trim();
+  const toEmail   = (req.body as any).to_email || await getVal("otp_email") || gmailUser;
   if (!gmailUser || !gmailPass)
     return void res.status(400).json({ ok: false, error: "بيانات Gmail غير مُعدَّة" });
   if (!toEmail)
@@ -842,9 +845,9 @@ router.post("/mkgh/test-email", async (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/email-settings
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/email-settings", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
-  const settingRows = db.prepare("SELECT key, value FROM mkgh_email_settings").all() as { key: string; value: string }[];
+router.get("/mkgh/email-settings", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
+  const settingRows = await queryAll<{ key: string; value: string }>("SELECT key, value FROM mkgh_email_settings");
   const obj: Record<string, string> = {};
   for (const r of settingRows) obj[r.key] = r.value;
   res.json({
@@ -859,18 +862,18 @@ router.get("/mkgh/email-settings", (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // PUT /mkgh/email-settings
 // ─────────────────────────────────────────────────────────────────────────────
-router.put("/mkgh/email-settings", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+router.put("/mkgh/email-settings", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { enabled, send_day, recipients, fallback_email } = req.body as {
     enabled?: boolean; send_day?: number; recipients?: string[]; fallback_email?: string;
   };
-  const upd = db.prepare("UPDATE mkgh_email_settings SET value=? WHERE key=?");
-  if (enabled !== undefined) upd.run(enabled ? "1" : "0", "enabled");
-  if (send_day !== undefined) upd.run(String(Math.max(1, Math.min(28, Number(send_day)))), "send_day");
-  if (Array.isArray(recipients)) upd.run(JSON.stringify(recipients.filter(e => e && e.includes("@"))), "recipients");
+  const upd = "UPDATE mkgh_email_settings SET value=? WHERE key=?";
+  if (enabled !== undefined) await execute(upd, enabled ? "1" : "0", "enabled");
+  if (send_day !== undefined) await execute(upd, String(Math.max(1, Math.min(28, Number(send_day)))), "send_day");
+  if (Array.isArray(recipients)) await execute(upd, JSON.stringify(recipients.filter(e => e && e.includes("@"))), "recipients");
   if (fallback_email !== undefined) {
     const cleaned = fallback_email.trim();
-    upd.run(cleaned && cleaned.includes("@") ? cleaned : "", "fallback_email");
+    await execute(upd, cleaned && cleaned.includes("@") ? cleaned : "", "fallback_email");
   }
   res.json({ ok: true });
 });
@@ -878,9 +881,9 @@ router.put("/mkgh/email-settings", (req, res) => {
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /mkgh/report-log  — send history
 // ─────────────────────────────────────────────────────────────────────────────
-router.get("/mkgh/report-log", (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
-  const rows = db.prepare("SELECT * FROM mkgh_report_log ORDER BY id DESC LIMIT 50").all();
+router.get("/mkgh/report-log", async (req, res) => {
+  if (!(await requireMkghAccess(req, res)).ok) return;
+  const rows = await queryAll("SELECT * FROM mkgh_report_log ORDER BY id DESC LIMIT 50");
   res.json(rows);
 });
 
@@ -888,7 +891,7 @@ router.get("/mkgh/report-log", (req, res) => {
 // POST /mkgh/send-report-now
 // ─────────────────────────────────────────────────────────────────────────────
 router.post("/mkgh/send-report-now", async (req, res) => {
-  if (!requireMkghAccess(req, res).ok) return;
+  if (!(await requireMkghAccess(req, res)).ok) return;
   const { sendMkghReport } = await import("../lib/mkgh-scheduler.js");
   const result = await sendMkghReport("manual");
   if (result.ok) {

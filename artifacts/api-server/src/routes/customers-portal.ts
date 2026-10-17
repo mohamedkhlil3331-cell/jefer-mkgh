@@ -1,30 +1,32 @@
 import { Router } from "express";
 import multer from "multer";
-import db from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
 const router = Router();
 const upload = multer({ storage: r2MulterStorage(name => uniqueUploadName("transfer-", name)), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // ── Customer list ──────────────────────────────────────────────────────────
-router.get("/portal/customers", (_req, res) => {
-  const customers = db.prepare(
+router.get("/portal/customers", async (_req, res) => {
+  const customers = await queryAll(
     "SELECT id,name,phone,company_name,vat_number,cr_number,created_at FROM users WHERE role='customer' AND active=1 ORDER BY name"
-  ).all();
+  );
   res.json(customers);
 });
 
 // ── Customer account statement ─────────────────────────────────────────────
-router.get("/portal/customers/:phone/statement", (req, res) => {
+router.get("/portal/customers/:phone/statement", async (req, res) => {
   const { phone } = req.params;
 
-  const customer = db.prepare("SELECT * FROM users WHERE phone = ?").get(phone) as Record<string, unknown> | undefined;
-  const orders = db.prepare(
+  const [customer, orders, transfers] = await Promise.all([
+    queryOne<Record<string, unknown>>("SELECT * FROM users WHERE phone = ?", phone),
+    queryAll<Record<string, unknown>>(
     "SELECT * FROM workflow_orders WHERE customer_phone = ? ORDER BY created_at DESC"
-  ).all(phone) as Record<string, unknown>[];
-  const transfers = db.prepare(
+    , phone),
+    queryAll<Record<string, unknown>>(
     "SELECT * FROM customer_transfers WHERE customer_phone = ? ORDER BY created_at DESC"
-  ).all(phone) as Record<string, unknown>[];
+    , phone),
+  ]);
 
   const totalOrders = orders.reduce((s, o) => s + ((o.total_with_vat as number)||0), 0);
   const totalTransfers = transfers.filter(t => t.confirmed).reduce((s, t) => s + ((t.amount as number)||0), 0);
@@ -43,15 +45,18 @@ router.get("/portal/customers/:phone/statement", (req, res) => {
 });
 
 // ── VAT invoice for a specific order ──────────────────────────────────────
-router.get("/portal/customers/:phone/orders/:orderId/vat-invoice", (req, res) => {
+router.get("/portal/customers/:phone/orders/:orderId/vat-invoice", async (req, res) => {
   const { phone, orderId } = req.params;
-  const order = db.prepare("SELECT * FROM workflow_orders WHERE id = ? AND customer_phone = ?").get(orderId, phone) as Record<string, unknown> | undefined;
+  const order = await queryOne<Record<string, unknown>>(
+    "SELECT * FROM workflow_orders WHERE id = ? AND customer_phone = ?",
+    orderId, phone,
+  );
   if (!order) return void res.status(404).json({ error: "الطلب غير موجود" });
 
-  const customer = db.prepare("SELECT * FROM users WHERE phone = ?").get(phone) as Record<string, unknown> | undefined;
+  const customer = await queryOne<Record<string, unknown>>("SELECT * FROM users WHERE phone = ?", phone);
   const entityId = (order.company_entity_id as number | undefined) || 1;
-  const company  = (db.prepare("SELECT * FROM company_settings WHERE id=? AND active=1").get(entityId)
-    || db.prepare("SELECT * FROM company_settings WHERE active=1 ORDER BY id LIMIT 1").get()) as Record<string, unknown> | undefined;
+  const company  = (await queryOne<Record<string, unknown>>("SELECT * FROM company_settings WHERE id=? AND active=1", entityId))
+    || await queryOne<Record<string, unknown>>("SELECT * FROM company_settings WHERE active=1 ORDER BY id LIMIT 1");
 
   const invoiceNo    = (order.invoice_number as string) || `INV-${order.order_number}`;
   const invoiceDate  = new Date((order.invoice_date as string) || (order.created_at as string)).toLocaleDateString("ar-SA");
@@ -159,11 +164,13 @@ router.get("/portal/customers/:phone/orders/:orderId/vat-invoice", (req, res) =>
 });
 
 // ── Statement print (HTML) ────────────────────────────────────────────────
-router.get("/portal/customers/:phone/statement/print", (req, res) => {
+router.get("/portal/customers/:phone/statement/print", async (req, res) => {
   const { phone } = req.params;
-  const customer  = db.prepare("SELECT * FROM users WHERE phone = ?").get(phone) as Record<string, unknown> | undefined;
-  const orders    = db.prepare("SELECT * FROM workflow_orders WHERE customer_phone = ? ORDER BY created_at DESC").all(phone) as Record<string, unknown>[];
-  const transfers = db.prepare("SELECT * FROM customer_transfers WHERE customer_phone = ? ORDER BY created_at DESC").all(phone) as Record<string, unknown>[];
+  const [customer, orders, transfers] = await Promise.all([
+    queryOne<Record<string, unknown>>("SELECT * FROM users WHERE phone = ?", phone),
+    queryAll<Record<string, unknown>>("SELECT * FROM workflow_orders WHERE customer_phone = ? ORDER BY created_at DESC", phone),
+    queryAll<Record<string, unknown>>("SELECT * FROM customer_transfers WHERE customer_phone = ? ORDER BY created_at DESC", phone),
+  ]);
 
   const totalOrders    = orders.reduce((s, o) => s + (Number(o.total_with_vat) || 0), 0);
   const totalTransfers = transfers.filter(t => t.confirmed).reduce((s, t) => s + (Number(t.amount) || 0), 0);
@@ -266,81 +273,84 @@ router.get("/portal/customers/:phone/statement/print", (req, res) => {
 });
 
 // ── Transfers ─────────────────────────────────────────────────────────────
-router.get("/portal/transfers", (req, res) => {
+router.get("/portal/transfers", async (req, res) => {
   const { phone, role } = req.query as Record<string, string>;
   let sql = "SELECT * FROM customer_transfers WHERE 1=1";
   const params: string[] = [];
   if (role === "customer") { sql += " AND customer_phone = ?"; params.push(phone); }
   sql += " ORDER BY created_at DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
-router.post("/portal/transfers", upload.single("transfer_image"), (req, res) => {
+router.post("/portal/transfers", upload.single("transfer_image"), async (req, res) => {
   const { customer_phone, customer_name, amount, transfer_date, transfer_ref, bank_name, notes } = req.body;
   if (!customer_phone || !amount) return void res.status(400).json({ error: "البيانات ناقصة" });
   const imageUrl = req.file ? `/api/uploads/${req.file.filename}` : null;
 
-  const result = db.prepare(`
+  const result = await execute(`
     INSERT INTO customer_transfers
       (customer_phone, customer_name, amount, transfer_date, transfer_ref, bank_name, transfer_image, notes)
     VALUES (?,?,?,?,?,?,?,?)
-  `).run(customer_phone, customer_name||null, parseFloat(amount), transfer_date||new Date().toISOString().slice(0,10), transfer_ref||null, bank_name||null, imageUrl, notes||null);
+  `, customer_phone, customer_name||null, parseFloat(amount), transfer_date||new Date().toISOString().slice(0,10), transfer_ref||null, bank_name||null, imageUrl, notes||null);
 
   // Notify reviewers
-  const reviewers = db.prepare("SELECT phone FROM users WHERE role = 'reviewer' AND active = 1").all() as {phone: string}[];
-  reviewers.forEach(r => db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)").run(r.phone, "تحويل جديد", `تحويل من ${customer_name||customer_phone} بمبلغ ${amount} ر.س`));
+  const reviewers = await queryAll<{ phone: string }>("SELECT phone FROM users WHERE role = 'reviewer' AND active = 1");
+  await Promise.all(reviewers.map(r => execute("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+    r.phone, "تحويل جديد", `تحويل من ${customer_name||customer_phone} بمبلغ ${amount} ر.س`)));
 
   res.status(201).json({ id: result.lastInsertRowid, message: "تم تسجيل التحويل" });
 });
 
-router.put("/portal/transfers/:id/confirm", (req, res) => {
+router.put("/portal/transfers/:id/confirm", async (req, res) => {
   const { reviewer_phone } = req.body;
-  const reviewer = db.prepare("SELECT name FROM users WHERE phone = ?").get(reviewer_phone) as {name:string} | undefined;
-  db.prepare("UPDATE customer_transfers SET confirmed=1, confirmed_by=?, confirmed_date=datetime('now') WHERE id=?")
-    .run(reviewer?.name || reviewer_phone, req.params.id);
+  const reviewer = await queryOne<{ name: string }>("SELECT name FROM users WHERE phone = ?", reviewer_phone);
+  await execute("UPDATE customer_transfers SET confirmed=1, confirmed_by=?, confirmed_date=datetime('now') WHERE id=?",
+    reviewer?.name || reviewer_phone, req.params.id);
   res.json({ message: "تم تأكيد التحويل" });
 });
 
-router.delete("/portal/transfers/:id", (req, res) => {
+router.delete("/portal/transfers/:id", async (req, res) => {
   const { password, caller_phone } = req.body as Record<string, string>;
   if (password !== "mkgh") return void res.status(403).json({ error: "كلمة المرور غير صحيحة" });
   if (caller_phone) {
-    const caller = db.prepare("SELECT role FROM users WHERE phone=? AND active=1").get(caller_phone) as { role: string } | undefined;
+    const caller = await queryOne<{ role: string }>("SELECT role FROM users WHERE phone=? AND active=1", caller_phone);
     if (!caller || !["reviewer", "admin"].includes(caller.role)) {
       return void res.status(403).json({ error: "غير مصرح لك بهذه العملية" });
     }
   }
-  db.prepare("DELETE FROM customer_transfers WHERE id = ?").run(req.params.id);
+  await execute("DELETE FROM customer_transfers WHERE id = ?", req.params.id);
   res.json({ message: "تم الحذف" });
 });
 
-router.get("/portal/fleet-vehicles", (_req, res) => {
-  const vehicles = db.prepare(
+router.get("/portal/fleet-vehicles", async (_req, res) => {
+  const vehicles = await queryAll(
     `SELECT id, plate_number, vehicle_type, vehicle_subtype, vehicle_category,
             driver_name, status, load_capacity_tons, equipment_type, notes
      FROM fleet_vehicles ORDER BY vehicle_type, plate_number`
-  ).all();
+  );
   res.json(vehicles);
 });
 
-router.get("/portal/rental-location-presets", (_req, res) => {
-  const warehouses = db.prepare(
+router.get("/portal/rental-location-presets", async (_req, res) => {
+  const [warehouses, topPickups, topDests] = await Promise.all([
+    queryAll<{ name: string; location: string; lat: number; lng: number }>(
     "SELECT name, location, lat, lng FROM warehouses WHERE active=1 AND lat IS NOT NULL ORDER BY id"
-  ).all() as { name: string; location: string; lat: number; lng: number }[];
+    ),
 
-  const topPickups = db.prepare(`
+    queryAll<{ loc: string; lat: number; lng: number }>(`
     SELECT pickup_location AS loc, pickup_lat AS lat, pickup_lng AS lng, COUNT(*) AS cnt
     FROM external_rentals
     WHERE pickup_location IS NOT NULL AND TRIM(pickup_location)!='' AND pickup_lat IS NOT NULL
     GROUP BY pickup_location ORDER BY cnt DESC LIMIT 8
-  `).all() as { loc: string; lat: number; lng: number }[];
+    `),
 
-  const topDests = db.prepare(`
+    queryAll<{ loc: string; lat: number; lng: number }>(`
     SELECT destination_location AS loc, destination_lat AS lat, destination_lng AS lng, COUNT(*) AS cnt
     FROM external_rentals
     WHERE destination_location IS NOT NULL AND TRIM(destination_location)!='' AND destination_lat IS NOT NULL
     GROUP BY destination_location ORDER BY cnt DESC LIMIT 8
-  `).all() as { loc: string; lat: number; lng: number }[];
+    `),
+  ]);
 
   const seen = new Set<string>();
   const pickups: { label: string; location: string; lat: number; lng: number }[] = [];
@@ -383,44 +393,42 @@ router.get("/portal/resolve-maps-url", async (req, res) => {
   } catch { res.status(500).json({ error: "failed to resolve" }); }
 });
 
-router.get("/portal/supervisor-contact", (_req, res) => {
-  const entry = db
-    .prepare("SELECT label AS name, phone FROM contact_entries WHERE active=1 ORDER BY sort_order, id LIMIT 1")
-    .get() as { name: string; phone: string } | undefined;
+router.get("/portal/supervisor-contact", async (_req, res) => {
+  const entry = await queryOne<{ name: string; phone: string }>(
+    "SELECT label AS name, phone FROM contact_entries WHERE active=1 ORDER BY sort_order, id LIMIT 1",
+  );
   if (entry) return void res.json(entry);
-  const supervisor = db
-    .prepare("SELECT name, phone FROM users WHERE role='supervisor' AND active=1 ORDER BY id LIMIT 1")
-    .get() as { name: string; phone: string } | undefined;
+  const supervisor = await queryOne<{ name: string; phone: string }>(
+    "SELECT name, phone FROM users WHERE role='supervisor' AND active=1 ORDER BY id LIMIT 1",
+  );
   if (!supervisor) return void res.status(404).json({ error: "لا يوجد مشرف" });
   res.json({ name: supervisor.name, phone: supervisor.phone });
 });
 
-router.get("/portal/contact-entries", (_req, res) => {
-  const entries = db
-    .prepare("SELECT id, label, phone, has_whatsapp FROM contact_entries WHERE active=1 ORDER BY sort_order, id")
-    .all();
+router.get("/portal/contact-entries", async (_req, res) => {
+  const entries = await queryAll("SELECT id, label, phone, has_whatsapp FROM contact_entries WHERE active=1 ORDER BY sort_order, id");
   res.json(entries);
 });
 
 // ── Site CMS public reads ─────────────────────────────────────────────────────
 
-router.get("/portal/site-content", (_req, res) => {
-  const rows = db.prepare("SELECT key, value FROM site_content").all() as { key: string; value: string }[];
+router.get("/portal/site-content", async (_req, res) => {
+  const rows = await queryAll<{ key: string; value: string }>("SELECT key, value FROM site_content");
   const obj: Record<string, string> = {};
   for (const r of rows) obj[r.key] = r.value;
   res.json(obj);
 });
 
-router.get("/portal/site-services", (_req, res) => {
-  res.json(db.prepare("SELECT id, icon, label, sub FROM site_services WHERE active=1 ORDER BY sort_order, id").all());
+router.get("/portal/site-services", async (_req, res) => {
+  res.json(await queryAll("SELECT id, icon, label, sub FROM site_services WHERE active=1 ORDER BY sort_order, id"));
 });
 
-router.get("/portal/site-emails", (_req, res) => {
-  res.json(db.prepare("SELECT id, label, email FROM site_emails WHERE active=1 ORDER BY sort_order, id").all());
+router.get("/portal/site-emails", async (_req, res) => {
+  res.json(await queryAll("SELECT id, label, email FROM site_emails WHERE active=1 ORDER BY sort_order, id"));
 });
 
-router.get("/portal/business-card", (_req, res) => {
-  const rows = db.prepare("SELECT key, value FROM business_card_info").all() as { key: string; value: string }[];
+router.get("/portal/business-card", async (_req, res) => {
+  const rows = await queryAll<{ key: string; value: string }>("SELECT key, value FROM business_card_info");
   const obj: Record<string, string> = {};
   for (const r of rows) obj[r.key] = r.value;
   res.json(obj);

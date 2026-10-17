@@ -1,8 +1,8 @@
 import { Router } from "express";
 import multer from "multer";
 import * as XLSX from "xlsx";
-import db from "../lib/db.js";
-import { checkpointWAL } from "../lib/db.js";
+import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
+import { isD1DatabaseMode } from "../lib/database-mode.js";
 import { uploadDbBackup, getDefaultDbPath } from "../lib/db-sync.js";
 
 const router = Router();
@@ -10,7 +10,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 
 /* ── Column aliases: maps Arabic / English header variants → DB column name ── */
 const TABLE_MAP: Record<string, {
-  insert: (rows: Record<string, unknown>[], importedBy: string) => { inserted: number; skipped: number; errors: string[] };
+  insert: (rows: Record<string, unknown>[], importedBy: string) => Promise<{ inserted: number; skipped: number; errors: string[] }>;
   columns: Record<string, string[]>; /* dbCol → [aliases] */
   hint: string;
 }> = {
@@ -25,18 +25,17 @@ const TABLE_MAP: Record<string, {
       status:       ["الحالة","status"],
       notes:        ["ملاحظات","notes","بيانات"],
     },
-    insert(rows, importedBy) {
-      const stmt = db.prepare(`
-        INSERT OR IGNORE INTO fleet_vehicles (plate_number, vehicle_type, driver_name, driver_phone, status, notes)
-        VALUES (?,?,?,?,?,?)
-      `);
+    async insert(rows, importedBy) {
       let inserted = 0, skipped = 0;
       const errors: string[] = [];
       for (const r of rows) {
         const plate = String(r.plate_number || "").trim();
         if (!plate) { skipped++; continue; }
         try {
-          const res = stmt.run(
+          const res = await execute(`
+            INSERT OR IGNORE INTO fleet_vehicles (plate_number, vehicle_type, driver_name, driver_phone, status, notes)
+            VALUES (?,?,?,?,?,?)
+          `,
             plate,
             r.vehicle_type || null,
             r.driver_name  || null,
@@ -66,20 +65,19 @@ const TABLE_MAP: Record<string, {
       price_after_vat:  ["السعر بعد الضريبة","الإجمالي","المجموع","price_after_vat","total","إجمالي"],
       notes:            ["ملاحظات","notes","ملاحظة"],
     },
-    insert(rows, importedBy) {
-      const stmt = db.prepare(`
-        INSERT INTO purchase_invoices
-          (serial_no, invoice_date, branch, vehicle_plate, invoice_number, supplier_name,
-           item_name, price_before_vat, quantity, price_after_vat, notes, imported_by)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-      `);
+    async insert(rows, importedBy) {
       let inserted = 0, skipped = 0;
       const errors: string[] = [];
       for (const r of rows) {
         const item = String(r.item_name || "").trim();
         if (!item) { skipped++; continue; }
         try {
-          stmt.run(
+          await execute(`
+            INSERT INTO purchase_invoices
+              (serial_no, invoice_date, branch, vehicle_plate, invoice_number, supplier_name,
+               item_name, price_before_vat, quantity, price_after_vat, notes, imported_by)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+          `,
             r.serial_no        || null,
             r.invoice_date     || null,
             r.branch           || null,
@@ -112,23 +110,19 @@ const TABLE_MAP: Record<string, {
       cost_per_unit: ["التكلفة","السعر","سعر الوحدة","cost_per_unit","price","تكلفة"],
       supplier:      ["المورد","المصدر","supplier"],
     },
-    insert(rows, importedBy) {
+    async insert(rows, importedBy) {
       const actor = importedBy || null;
-      const stmt = db.prepare(`
-        INSERT OR IGNORE INTO workshop_inventory
-          (item_name, item_code, category, quantity, unit, min_stock, cost_per_unit, supplier, updated_by)
-        VALUES (?,?,?,?,?,?,?,?,?)
-      `);
-      const updateStmt = db.prepare(`
-        UPDATE workshop_inventory SET quantity=quantity+?, last_updated=datetime('now'), updated_by=? WHERE item_name=?
-      `);
       let inserted = 0, skipped = 0;
       const errors: string[] = [];
       for (const r of rows) {
         const name = String(r.item_name || "").trim();
         if (!name) { skipped++; continue; }
         try {
-          const res = stmt.run(
+          const res = await execute(`
+            INSERT OR IGNORE INTO workshop_inventory
+              (item_name, item_code, category, quantity, unit, min_stock, cost_per_unit, supplier, updated_by)
+            VALUES (?,?,?,?,?,?,?,?,?)
+          `,
             name,
             r.item_code     || null,
             r.category      || "عام",
@@ -144,7 +138,10 @@ const TABLE_MAP: Record<string, {
           } else {
             /* item exists — add quantity */
             if (Number(r.quantity) > 0) {
-              updateStmt.run(Number(r.quantity), actor, name);
+              await execute(
+                "UPDATE workshop_inventory SET quantity=quantity+?, last_updated=datetime('now'), updated_by=? WHERE item_name=?",
+                Number(r.quantity), actor, name,
+              );
             }
             skipped++;
           }
@@ -168,22 +165,21 @@ const TABLE_MAP: Record<string, {
       total_amount: ["الإجمالي","المجموع","total_amount","total","مجموع"],
       net_amount:   ["الصافي","net_amount","net","صافي"],
     },
-    insert(rows, _importedBy) {
+    async insert(rows, _importedBy) {
       // Pre-fetch trailer snapshots for all unique plates
       const uniquePlates = [...new Set(rows.map(r => String(r.car_id || "").trim()).filter(Boolean))];
       const trailerMap = new Map<string, string | null>();
       if (uniquePlates.length > 0) {
-        const ph = uniquePlates.map(() => "?").join(",");
-        const fvRows = db.prepare(
-          `SELECT plate_number, linked_trailer_number FROM fleet_vehicles WHERE plate_number IN (${ph})`
-        ).all(...uniquePlates) as { plate_number: string; linked_trailer_number: string | null }[];
-        for (const fv of fvRows) trailerMap.set(fv.plate_number, fv.linked_trailer_number || null);
+        for (let start = 0; start < uniquePlates.length; start += 80) {
+          const plateBatch = uniquePlates.slice(start, start + 80);
+          const placeholders = plateBatch.map(() => "?").join(",");
+          const fvRows = await queryAll<{ plate_number: string; linked_trailer_number: string | null }>(
+            `SELECT plate_number, linked_trailer_number FROM fleet_vehicles WHERE plate_number IN (${placeholders})`,
+            ...plateBatch,
+          );
+          for (const fv of fvRows) trailerMap.set(fv.plate_number, fv.linked_trailer_number || null);
+        }
       }
-      const stmt = db.prepare(`
-        INSERT INTO trips (date, car_id, driver_name, driver_phone, client_name, material_type, destination,
-                           trips_count, unit_price, total_amount, net_amount, trailer_number)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-      `);
       let inserted = 0, skipped = 0;
       const errors: string[] = [];
       for (const r of rows) {
@@ -192,12 +188,16 @@ const TABLE_MAP: Record<string, {
         if (!carId || !date) { skipped++; continue; }
         try {
           const driverName = String(r.driver_name || "").trim();
-          const profile = db.prepare(`
+          const profile = await queryOne<{ phone: string | null }>(`
             SELECT phone FROM driver_profiles
             WHERE (driver_name=? AND ? != '') OR vehicle_plate=?
             LIMIT 1
-          `).get(driverName, driverName, carId) as { phone: string | null } | undefined;
-          stmt.run(
+          `, driverName, driverName, carId);
+          await execute(`
+            INSERT INTO trips (date, car_id, driver_name, driver_phone, client_name, material_type, destination,
+                               trips_count, unit_price, total_amount, net_amount, trailer_number)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+          `,
             date, carId,
             driverName || null,
             profile?.phone || null,
@@ -229,13 +229,7 @@ const TABLE_MAP: Record<string, {
       description:       ["الوصف","البيان","description","وصف"],
       amount:            ["المبلغ","التكلفة","amount","مبلغ","تكلفة"],
     },
-    insert(rows, importedBy) {
-      const stmt = db.prepare(`
-        INSERT INTO maintenance_logs
-          (card_number, maintenance_date, vehicle_plate, driver_name, branch,
-           maintenance_type, description, amount, imported_by)
-        VALUES (?,?,?,?,?,?,?,?,?)
-      `);
+    async insert(rows, importedBy) {
       let inserted = 0, skipped = 0;
       const errors: string[] = [];
       for (const r of rows) {
@@ -243,7 +237,12 @@ const TABLE_MAP: Record<string, {
         const date  = String(r.maintenance_date || "").trim();
         if (!plate && !date) { skipped++; continue; }
         try {
-          stmt.run(
+          await execute(`
+            INSERT INTO maintenance_logs
+              (card_number, maintenance_date, vehicle_plate, driver_name, branch,
+               maintenance_type, description, amount, imported_by)
+            VALUES (?,?,?,?,?,?,?,?,?)
+          `,
             r.card_number      || null,
             date               || null,
             plate              || null,
@@ -335,12 +334,13 @@ router.post("/admin/excel-import", upload.single("file"), async (req, res) => {
   });
 
   const importedBy = (req as unknown as Record<string, unknown>).userPhone as string || "excel_import";
-  const { inserted, skipped, errors } = TABLE_MAP[table].insert(rows, importedBy);
+  const { inserted, skipped, errors } = await TABLE_MAP[table].insert(rows, importedBy);
 
   // Trigger an immediate backup after every successful import so the data
   // is safely stored in object storage right away (not just at the next
   // 30-second periodic tick).
-  if (inserted > 0) {
+  if (inserted > 0 && !isD1DatabaseMode()) {
+    const { checkpointWAL } = await import("../lib/db.js");
     uploadDbBackup(getDefaultDbPath(), checkpointWAL).catch(() => {});
   }
 

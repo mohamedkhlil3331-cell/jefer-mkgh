@@ -1,17 +1,17 @@
-import db from "./db.js";
+import { execute, queryAll, queryOne } from "./erp-sql.js";
 import { logger } from "./logger.js";
 
-function isEnabled(): boolean {
+async function isEnabled(): Promise<boolean> {
   try {
-    const row = db.prepare("SELECT value FROM system_config WHERE key='show_vehicle_stops'").get() as { value: string } | undefined;
+    const row = await queryOne<{ value: string }>("SELECT value FROM system_config WHERE key='show_vehicle_stops'");
     return row?.value === "1";
   } catch {
     return false;
   }
 }
 
-function recordNightlyStops() {
-  if (!isEnabled()) return;
+async function recordNightlyStops() {
+  if (!await isEnabled()) return;
 
   // Run at midnight → evaluate the day that just ENDED (yesterday in local wall-clock).
   // Using explicit UTC-3 offset (Arabia Standard Time = UTC+3); getTimezoneOffset is 0
@@ -22,11 +22,11 @@ function recordNightlyStops() {
 
   let vehicles: { plate_number: string }[] = [];
   try {
-    vehicles = db.prepare(
+    vehicles = await queryAll<{ plate_number: string }>(
       `SELECT plate_number FROM fleet_vehicles
        WHERE (branch='النقليات' OR branch IS NULL)
          AND status NOT IN ('معطلة','غير_فعّال','خارج الخدمة')`
-    ).all() as { plate_number: string }[];
+    );
   } catch (err) {
     logger.warn({ err }, "[stop-scheduler] Failed to fetch fleet vehicles");
     return;
@@ -35,25 +35,25 @@ function recordNightlyStops() {
   let recorded = 0;
   for (const v of vehicles) {
     try {
-      const existing = db.prepare(
+      const existing = await queryOne(
         "SELECT id FROM vehicle_stop_records WHERE vehicle_plate=? AND stop_date=?"
-      ).get(v.plate_number, today);
+      , v.plate_number, today);
       if (existing) continue;
 
-      const hasTrip = db.prepare(
+      const hasTrip = await queryOne(
         "SELECT id FROM trips WHERE car_id=? AND date=? LIMIT 1"
-      ).get(v.plate_number, today);
+      , v.plate_number, today);
       if (hasTrip) continue;
 
-      const openJob = db.prepare(
+      const openJob = await queryOne(
         `SELECT id FROM workshop_jobs WHERE vehicle_plate=?
          AND status NOT IN ('completed','مكتملة','مكتمل','منتهية') LIMIT 1`
-      ).get(v.plate_number);
+      , v.plate_number);
       const reason = openJob ? "في الورشة" : "توقف بدون عذر";
 
-      db.prepare(
+      await execute(
         "INSERT OR IGNORE INTO vehicle_stop_records (vehicle_plate, stop_date, reason, source) VALUES (?,?,?,'auto')"
-      ).run(v.plate_number, today, reason);
+      , v.plate_number, today, reason);
       recorded++;
     } catch (err) {
       logger.warn({ err, plate: v.plate_number }, "[stop-scheduler] Insert failed");
@@ -77,7 +77,7 @@ export function startNightlyStopScheduler() {
   logger.info({ delayHrs: (delay / 3_600_000).toFixed(2) }, "[stop-scheduler] First run at midnight");
 
   setTimeout(() => {
-    recordNightlyStops();
-    setInterval(recordNightlyStops, 24 * 60 * 60 * 1_000);
+    void recordNightlyStops();
+    setInterval(() => { void recordNightlyStops(); }, 24 * 60 * 60 * 1_000);
   }, delay);
 }

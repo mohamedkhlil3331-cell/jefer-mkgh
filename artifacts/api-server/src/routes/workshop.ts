@@ -7,7 +7,8 @@ import {
   type SupplierPurchaseInvoicePasteResult,
   type SupplierPurchaseInvoicePasteSavedRow,
 } from "@workspace/api-zod";
-import db, { UPLOADS_PATH } from "../lib/db.js";
+import { UPLOADS_PATH } from "../lib/upload-paths.js";
+import { execute, executeBatch, queryAll, queryOne } from "../lib/erp-sql.js";
 import { createJournalEntry } from "../lib/journal.js";
 import { isSysAdminToken } from "./auth.js";
 import path from "path";
@@ -25,11 +26,11 @@ const router = Router();
 
 type SupplierClaimActor = { id: number; role: string; name: string };
 
-function getSupplierClaimActor(req: Request): SupplierClaimActor | null {
+async function getSupplierClaimActor(req: Request): Promise<SupplierClaimActor | null> {
   const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (!token || token === "guest") return null;
-  if (isSysAdminToken(token)) return { id: 0, role: "admin", name: "مدير النظام" };
-  const actor = db.prepare(`
+  if (await isSysAdminToken(token)) return { id: 0, role: "admin", name: "مدير النظام" };
+  const actor = await queryOne<SupplierClaimActor>(`
     SELECT u.id, u.role, u.name
     FROM sessions s
     JOIN users u ON u.id=s.user_id
@@ -38,16 +39,16 @@ function getSupplierClaimActor(req: Request): SupplierClaimActor | null {
       AND s.rowid=(SELECT MAX(current.rowid) FROM sessions current WHERE current.user_id=s.user_id)
       AND u.active=1
     LIMIT 1
-  `).get(token) as SupplierClaimActor | undefined;
+  `, token);
   return actor || null;
 }
 
-function requireSupplierClaimActor(
+async function requireSupplierClaimActor(
   req: Request,
   res: Response,
   adminOnly = false,
-): SupplierClaimActor | null {
-  const actor = getSupplierClaimActor(req);
+): Promise<SupplierClaimActor | null> {
+  const actor = await getSupplierClaimActor(req);
   if (!actor) {
     res.status(401).json({ error: "تسجيل الدخول مطلوب لتسجيل الطباعة" });
     return null;
@@ -63,7 +64,7 @@ function requireSupplierClaimActor(
 //  WORKSHOP JOBS — أوامر العمل
 // ══════════════════════════════════════════════════════════════════
 
-router.get("/workshop-jobs", (req, res) => {
+router.get("/workshop-jobs", async (req, res) => {
   const { vehicle_plate } = req.query as Record<string, string>;
   let sql = `
     SELECT wj.*, br.breakdown_type, br.driver_name, br.driver_phone
@@ -74,44 +75,44 @@ router.get("/workshop-jobs", (req, res) => {
   const params: string[] = [];
   if (vehicle_plate) { sql += " AND wj.vehicle_plate = ?"; params.push(vehicle_plate); }
   sql += " ORDER BY wj.created_at DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
 // Vehicle dashboard — all data for a specific car in one call
-router.get("/vehicle-dashboard/:plate", (req, res) => {
+router.get("/vehicle-dashboard/:plate", async (req, res) => {
   const plate = req.params.plate;
-  const vehicle = db.prepare("SELECT * FROM fleet_vehicles WHERE plate_number=?").get(plate);
-  const expenses = db.prepare(
+  const vehicle = await queryOne("SELECT * FROM fleet_vehicles WHERE plate_number=?", plate);
+  const expenses = await queryAll(
     "SELECT * FROM fleet_expenses WHERE car_id=? ORDER BY date DESC LIMIT 100"
-  ).all(plate);
-  const jobs = db.prepare(`
+  , plate);
+  const jobs = await queryAll(`
     SELECT wj.*, br.breakdown_type FROM workshop_jobs wj
     LEFT JOIN breakdown_reports br ON wj.breakdown_report_id = br.id
     WHERE wj.vehicle_plate=? ORDER BY wj.created_at DESC LIMIT 50
-  `).all(plate);
-  const breakdowns = db.prepare(
+  `, plate);
+  const breakdowns = await queryAll(
     "SELECT * FROM breakdown_reports WHERE vehicle_plate=? ORDER BY created_at DESC LIMIT 50"
-  ).all(plate);
-  const trips = db.prepare(
+  , plate);
+  const trips = await queryAll(
     "SELECT * FROM trips WHERE car_id=? ORDER BY date DESC LIMIT 50"
-  ).all(plate);
+  , plate);
   const totalExpenses = (expenses as {amount:number}[]).reduce((s,e) => s + e.amount, 0);
   const totalJobs = (jobs as {total_cost:number}[]).reduce((s,j) => s + (j.total_cost||0), 0);
 
   // Linked driver
-  const linked_driver = db.prepare(
+  const linked_driver = await queryOne(
     "SELECT id, name, phone FROM users WHERE vehicle_plate=? AND role='driver' LIMIT 1"
-  ).get(plate);
+  , plate);
 
   // Active workflow orders on this vehicle
-  const active_orders = db.prepare(
+  const active_orders = await queryAll(
     "SELECT * FROM workflow_orders WHERE vehicle_plate=? AND stage IN ('vehicle_assigned','invoiced','loaded','delivered') ORDER BY created_at DESC LIMIT 10"
-  ).all(plate);
+  , plate);
 
   res.json({ vehicle, expenses, jobs, breakdowns, trips, totalExpenses, totalJobs, linked_driver, active_orders });
 });
 
-router.post("/workshop-jobs", (req, res) => {
+router.post("/workshop-jobs", async (req, res) => {
   const {
     vehicle_plate, breakdown_report_id, title, job_type, description,
     parts_used, labor_cost, parts_cost, invoice_target, created_by, notes,
@@ -119,12 +120,12 @@ router.post("/workshop-jobs", (req, res) => {
   if (!title) return void res.status(400).json({ error: "عنوان أمر العمل مطلوب" });
 
   const total = (Number(labor_cost) || 0) + (Number(parts_cost) || 0);
-  const r = db.prepare(`
+  const r = await execute(`
     INSERT INTO workshop_jobs
       (vehicle_plate, breakdown_report_id, title, job_type, description,
        parts_used, labor_cost, parts_cost, total_cost, invoice_target, created_by, notes)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(
+  `,
     vehicle_plate || null,
     breakdown_report_id || null,
     title,
@@ -141,10 +142,10 @@ router.post("/workshop-jobs", (req, res) => {
 
   // If this job is linked to a breakdown report, auto-resolve it
   if (breakdown_report_id) {
-    db.prepare(`
+    await execute(`
       UPDATE breakdown_reports SET status='resolved', resolved_by=?, resolve_notes=?, resolved_at=datetime('now')
       WHERE id=? AND status='open'
-    `).run(created_by || "مدير الورشة", `تم إنشاء أمر عمل: ${title}`, breakdown_report_id);
+    `, created_by || "مدير الورشة", `تم إنشاء أمر عمل: ${title}`, breakdown_report_id);
   }
 
   // If invoice_target = 'inventory', deduct from workshop inventory and log
@@ -153,15 +154,15 @@ router.post("/workshop-jobs", (req, res) => {
       const parts = JSON.parse(parts_used);
       for (const p of parts) {
         if (p.inventory_id && p.qty) {
-          const invItem = db.prepare("SELECT item_name FROM workshop_inventory WHERE id=?").get(p.inventory_id) as { item_name: string } | undefined;
-          db.prepare(`
+           const invItem = await queryOne<{ item_name: string }>("SELECT item_name FROM workshop_inventory WHERE id=?", p.inventory_id);
+           await execute(`
             UPDATE workshop_inventory SET quantity = quantity - ?, last_updated = datetime('now'), updated_by=?
             WHERE id = ?
-          `).run(Number(p.qty), created_by || null, p.inventory_id);
+           `, Number(p.qty), created_by || null, p.inventory_id);
           if (invItem) {
-            logInventoryTransaction(Number(p.inventory_id), invItem.item_name, "out", Number(p.qty),
+             await logInventoryTransaction(Number(p.inventory_id), invItem.item_name, "out", Number(p.qty),
               "صرف_أمر_عمل", `أمر_عمل_#${r.lastInsertRowid}`, created_by, undefined, vehicle_plate || undefined);
-            checkLowStock(Number(p.inventory_id));
+             await checkLowStock(Number(p.inventory_id));
           }
         }
       }
@@ -171,9 +172,9 @@ router.post("/workshop-jobs", (req, res) => {
   res.json({ id: r.lastInsertRowid });
 });
 
-router.put("/workshop-jobs/:id/complete", (req, res) => {
+router.put("/workshop-jobs/:id/complete", async (req, res) => {
   const { notes, labor_cost, parts_cost, created_by } = req.body;
-  const job = db.prepare("SELECT * FROM workshop_jobs WHERE id=?").get(req.params.id) as Record<string, unknown> | undefined;
+  const job = await queryOne<Record<string, unknown>>("SELECT * FROM workshop_jobs WHERE id=?", req.params.id);
   if (!job) return void res.status(404).json({ error: "أمر العمل غير موجود" });
 
   const lc = labor_cost !== undefined ? Number(labor_cost) : Number(job.labor_cost);
@@ -181,39 +182,36 @@ router.put("/workshop-jobs/:id/complete", (req, res) => {
   const total = lc + pc;
   const isInventory = job.invoice_target === "inventory";
 
-  db.transaction(() => {
-    db.prepare(`
-      UPDATE workshop_jobs SET status='done', notes=?, labor_cost=?, parts_cost=?, total_cost=?, completed_at=datetime('now')
-      WHERE id=?
-    `).run(notes || job.notes || null, lc, pc, total, req.params.id);
+  await execute(`
+    UPDATE workshop_jobs SET status='done', notes=?, labor_cost=?, parts_cost=?, total_cost=?, completed_at=datetime('now')
+    WHERE id=?
+  `, notes || job.notes || null, lc, pc, total, req.params.id);
 
-    // ── Journal Entry: Close work order ────────────────────────────────────
-    if (total > 0) {
-      createJournalEntry({
-        reference_type: isInventory ? "job_inventory" : "job_external",
-        reference_id: String(job.id),
-        debit_account:  "5010",
-        credit_account: isInventory ? "1040" : "2030",
-        amount: total,
-        description: `إغلاق أمر عمل #${job.id}: ${job.title} — ${job.vehicle_plate || ""}`,
-        created_by: created_by || job.created_by as string || undefined,
-      });
-    }
-  })();
+  if (total > 0) {
+    await createJournalEntry({
+      reference_type: isInventory ? "job_inventory" : "job_external",
+      reference_id: String(job.id),
+      debit_account:  "5010",
+      credit_account: isInventory ? "1040" : "2030",
+      amount: total,
+      description: `إغلاق أمر عمل #${job.id}: ${job.title} — ${job.vehicle_plate || ""}`,
+      created_by: created_by || job.created_by as string || undefined,
+    });
+  }
 
   res.json({ ok: true });
 });
 
-router.put("/workshop-jobs/:id/status", (req, res) => {
+router.put("/workshop-jobs/:id/status", async (req, res) => {
   const { status } = req.body;
   if (!["open","in_progress","done"].includes(status))
     return void res.status(400).json({ error: "حالة غير صالحة" });
-  db.prepare("UPDATE workshop_jobs SET status=? WHERE id=?").run(status, req.params.id);
+  await execute("UPDATE workshop_jobs SET status=? WHERE id=?", status, req.params.id);
   res.json({ ok: true });
 });
 
-router.delete("/workshop-jobs/:id", (req, res) => {
-  db.prepare("DELETE FROM workshop_jobs WHERE id=?").run(req.params.id);
+router.delete("/workshop-jobs/:id", async (req, res) => {
+  await execute("DELETE FROM workshop_jobs WHERE id=?", req.params.id);
   res.json({ ok: true });
 });
 
@@ -222,60 +220,62 @@ router.delete("/workshop-jobs/:id", (req, res) => {
 // ══════════════════════════════════════════════════════════════════
 
 // ── helper: log a movement and send low-stock alert if needed ──────────────
-function logInventoryTransaction(
+async function logInventoryTransaction(
   itemId: number, itemName: string, type: "in" | "out",
   qty: number, reason: string, referenceNo?: string, createdBy?: string, costPerUnit?: number, vehicleNo?: string,
 ) {
   try {
-    db.prepare(`
+    await execute(`
       INSERT INTO workshop_inventory_transactions (item_id, item_name, type, quantity, cost_per_unit, reason, reference_no, created_by, vehicle_no)
       VALUES (?,?,?,?,?,?,?,?,?)
-    `).run(itemId, itemName, type, qty, costPerUnit || 0, reason, referenceNo || null, createdBy || null, vehicleNo || null);
+    `, itemId, itemName, type, qty, costPerUnit || 0, reason, referenceNo || null, createdBy || null, vehicleNo || null);
   } catch { /* non-fatal */ }
 }
 
 // Weighted average cost: new_avg = (old_qty*old_cost + in_qty*in_cost) / (old_qty + in_qty)
-function updateWeightedCost(itemId: number, inQty: number, inCost: number, updatedBy?: string | null) {
+async function updateWeightedCost(itemId: number, inQty: number, inCost: number, updatedBy?: string | null) {
   if (inCost <= 0) return;
-  const item = db.prepare("SELECT quantity, cost_per_unit FROM workshop_inventory WHERE id=?").get(itemId) as { quantity: number; cost_per_unit: number } | undefined;
+  const item = await queryOne<{ quantity: number; cost_per_unit: number }>("SELECT quantity, cost_per_unit FROM workshop_inventory WHERE id=?", itemId);
   if (!item) return;
   const oldQty  = Number(item.quantity);
   const oldCost = Number(item.cost_per_unit);
   const totalQty = oldQty + inQty;
   const newCost  = totalQty > 0 ? (oldQty * oldCost + inQty * inCost) / totalQty : inCost;
-  db.prepare("UPDATE workshop_inventory SET cost_per_unit=?, last_updated=datetime('now'), updated_by=COALESCE(?, updated_by) WHERE id=?").run(newCost, updatedBy ?? null, itemId);
+  await execute("UPDATE workshop_inventory SET cost_per_unit=?, last_updated=datetime('now'), updated_by=COALESCE(?, updated_by) WHERE id=?", newCost, updatedBy ?? null, itemId);
 }
 
-function checkLowStock(itemId: number) {
-  const item = db.prepare("SELECT * FROM workshop_inventory WHERE id=?").get(itemId) as Record<string,unknown> | undefined;
+async function checkLowStock(itemId: number) {
+  const item = await queryOne<Record<string,unknown>>("SELECT * FROM workshop_inventory WHERE id=?", itemId);
   if (!item) return;
   const qty = Number(item.quantity); const minStock = Number(item.min_stock);
   if (minStock > 0 && qty <= minStock) {
     const alertTitle = `⚠️ مخزون منخفض: ${item.item_name}`;
     const alertBody  = `الكمية الحالية ${qty} ${item.unit} وصلت للحد الأدنى (${minStock}). يرجى إنشاء طلب شراء.`;
-    const roles = db.prepare("SELECT phone FROM users WHERE role IN ('workshop_manager','purchasing','admin') AND active=1").all() as { phone: string }[];
-    const ins = db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)");
-    roles.forEach(u => ins.run(u.phone, alertTitle, alertBody));
+    const roles = await queryAll<{ phone: string }>("SELECT phone FROM users WHERE role IN ('workshop_manager','purchasing','admin') AND active=1");
+    await executeBatch(roles.map(u => ({
+      sql: "INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+      params: [u.phone, alertTitle, alertBody],
+    })));
   }
 }
 
-router.get("/workshop-inventory", (_req, res) => {
-  const items = db.prepare("SELECT * FROM workshop_inventory ORDER BY item_name ASC").all();
+router.get("/workshop-inventory", async (_req, res) => {
+  const items = await queryAll("SELECT * FROM workshop_inventory ORDER BY item_name ASC");
   res.json(items);
 });
 
 // ── transaction history ────────────────────────────────────────────────────
-router.get("/workshop-inventory/transactions/counts", (_req, res) => {
-  const row = db.prepare(`
+router.get("/workshop-inventory/transactions/counts", async (_req, res) => {
+  const row = await queryOne<{ inCount: number; outCount: number }>(`
     SELECT
       SUM(CASE WHEN type='in'  THEN 1 ELSE 0 END) AS inCount,
       SUM(CASE WHEN type='out' THEN 1 ELSE 0 END) AS outCount
     FROM workshop_inventory_transactions
-  `).get() as { inCount: number; outCount: number };
-  res.json({ in: row.inCount ?? 0, out: row.outCount ?? 0 });
+  `);
+  res.json({ in: row?.inCount ?? 0, out: row?.outCount ?? 0 });
 });
 
-router.get("/workshop-inventory/transactions", (req, res) => {
+router.get("/workshop-inventory/transactions", async (req, res) => {
   const { type, item_id, limit: lim } = req.query as Record<string, string>;
   let sql = `
     SELECT t.*, wi.item_code
@@ -288,25 +288,25 @@ router.get("/workshop-inventory/transactions", (req, res) => {
   if (item_id) { sql += " AND t.item_id=?"; params.push(Number(item_id)); }
   sql += " ORDER BY t.created_at DESC";
   if (lim) { sql += " LIMIT ?"; params.push(Number(lim)); }
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
-router.post("/workshop-inventory", (req, res) => {
+router.post("/workshop-inventory", async (req, res) => {
   const { item_name, item_code, category, quantity, unit, min_stock, cost_per_unit, supplier, created_by } = req.body;
   if (!item_name) return void res.status(400).json({ error: "اسم القطعة مطلوب" });
 
   try {
-    const r = db.prepare(`
+    const r = await execute(`
       INSERT INTO workshop_inventory (item_name, item_code, category, quantity, unit, min_stock, cost_per_unit, supplier, updated_by)
       VALUES (?,?,?,?,?,?,?,?,?)
-    `).run(
+    `,
       item_name, item_code || null, category || "عام",
       Number(quantity) || 0, unit || "قطعة",
       Number(min_stock) || 0, Number(cost_per_unit) || 0, supplier || null, created_by || null,
     );
     const newId = Number(r.lastInsertRowid);
     if (Number(quantity) > 0) {
-      logInventoryTransaction(newId, item_name, "in", Number(quantity), "رصيد_أولي", undefined, created_by);
+      await logInventoryTransaction(newId, item_name, "in", Number(quantity), "رصيد_أولي", undefined, created_by);
     }
     res.json({ id: newId });
   } catch (e: unknown) {
@@ -317,9 +317,9 @@ router.post("/workshop-inventory", (req, res) => {
   }
 });
 
-router.put("/workshop-inventory/:id", (req, res) => {
+router.put("/workshop-inventory/:id", async (req, res) => {
   const { item_name, item_code, category, quantity, unit, min_stock, cost_per_unit, supplier, updated_by } = req.body;
-  const existing = db.prepare("SELECT * FROM workshop_inventory WHERE id=?").get(req.params.id) as Record<string, unknown> | undefined;
+  const existing = await queryOne<Record<string, unknown>>("SELECT * FROM workshop_inventory WHERE id=?", req.params.id);
   if (!existing) return void res.status(404).json({ error: "القطعة غير موجودة" });
 
   const newQty      = quantity !== undefined ? Number(quantity) : Number(existing.quantity);
@@ -327,11 +327,11 @@ router.put("/workshop-inventory/:id", (req, res) => {
   const itemName    = item_name || String(existing.item_name);
 
   try {
-    db.prepare(`
+    await execute(`
       UPDATE workshop_inventory
       SET item_name=?, item_code=?, category=?, quantity=?, unit=?, min_stock=?, cost_per_unit=?, supplier=?, last_updated=datetime('now'), updated_by=?
       WHERE id=?
-    `).run(
+    `,
       itemName,
       item_code !== undefined ? item_code : existing.item_code,
       category || existing.category,
@@ -350,38 +350,39 @@ router.put("/workshop-inventory/:id", (req, res) => {
     throw e;
   }
 
-  checkLowStock(Number(req.params.id));
+  await checkLowStock(Number(req.params.id));
   res.json({ ok: true });
 });
 
 // ── Bulk delete inventory items — must be BEFORE /:id or Express swallows it ──
-router.delete("/workshop-inventory/bulk", (req, res) => {
+router.delete("/workshop-inventory/bulk", async (req, res) => {
   const { ids } = req.body as { ids?: unknown };
   if (!Array.isArray(ids) || ids.length === 0) return void res.status(400).json({ error: "ids مطلوبة" });
-  const del = db.prepare("DELETE FROM workshop_inventory WHERE id=?");
-  const run = db.transaction((list: number[]) => { for (const id of list) del.run(id); });
-  run(ids.map(Number));
+  await executeBatch(ids.map(id => ({
+    sql: "DELETE FROM workshop_inventory WHERE id=?",
+    params: [Number(id)],
+  })));
   res.json({ ok: true, deleted: ids.length });
 });
 
-router.delete("/workshop-inventory/:id", (req, res) => {
-  db.prepare("DELETE FROM workshop_inventory WHERE id=?").run(req.params.id);
+router.delete("/workshop-inventory/:id", async (req, res) => {
+  await execute("DELETE FROM workshop_inventory WHERE id=?", req.params.id);
   res.json({ ok: true });
 });
 
 // ── Receive stock (وارد) ───────────────────────────────────────────────────
-router.put("/workshop-inventory/:id/receive", (req, res) => {
+router.put("/workshop-inventory/:id/receive", async (req, res) => {
   const { qty, cost_per_unit, purchase_request_id, created_by, reason } = req.body;
   if (!qty || Number(qty) <= 0) return void res.status(400).json({ error: "الكمية غير صالحة" });
 
-  const item = db.prepare("SELECT * FROM workshop_inventory WHERE id=?").get(req.params.id) as Record<string,unknown> | undefined;
+  const item = await queryOne<Record<string,unknown>>("SELECT * FROM workshop_inventory WHERE id=?", req.params.id);
   if (!item) return void res.status(404).json({ error: "القطعة غير موجودة" });
 
   const inQty  = Number(qty);
   const inCost = Number(cost_per_unit) || 0;
   const refNo  = purchase_request_id ? `طلب_شراء_#${purchase_request_id}` : undefined;
   const purchaseRequest = purchase_request_id
-    ? db.prepare("SELECT supplier FROM purchase_requests WHERE id=?").get(purchase_request_id) as { supplier?: string | null } | undefined
+    ? await queryOne<{ supplier?: string | null }>("SELECT supplier FROM purchase_requests WHERE id=?", purchase_request_id)
     : undefined;
   const supplierName = String(purchaseRequest?.supplier || "").trim();
   const receiveReason = reason || `فاتورة مشتريات${supplierName ? ` — ${supplierName}` : ""}`;
@@ -391,37 +392,32 @@ router.put("/workshop-inventory/:id/receive", (req, res) => {
     ? `PR-${purchase_request_id}-item-${req.params.id}`
     : `INV-recv-${req.params.id}-${Date.now()}`;
 
-  // Single transactional block: quantity update + cost + log + journal entry all commit or all roll back
-  db.transaction(() => {
-    db.prepare(`UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=? WHERE id=?`).run(inQty, created_by || null, req.params.id);
-    if (inCost > 0) updateWeightedCost(Number(req.params.id), inQty, inCost, created_by || null);
+  await execute("UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=? WHERE id=?",
+    inQty, created_by || null, req.params.id);
+  if (inCost > 0) await updateWeightedCost(Number(req.params.id), inQty, inCost, created_by || null);
+  await logInventoryTransaction(Number(req.params.id), String(item.item_name), "in", inQty,
+    receiveReason, refNo, created_by, inCost);
+  if (purchase_request_id) {
+    await execute("UPDATE purchase_requests SET status='received', received_at=datetime('now') WHERE id=?", purchase_request_id);
+  }
 
-    logInventoryTransaction(Number(req.params.id), String(item.item_name), "in", inQty,
-      receiveReason, refNo, created_by, inCost);
-
-    // ── Journal Entry: Receive parts/inventory ──────────────────────────────
-    if (totalPartsCost > 0) {
-      createJournalEntry({
-        reference_type: "purchase_receive",
-        reference_id: journalRef,
-        debit_account:  "1040",
-        credit_account: "2030",
-        amount: totalPartsCost,
-        description: `استلام مخزون: ${item.item_name} (${inQty} وحدة)`,
-        created_by: created_by || undefined,
-      });
-    }
-
-    if (purchase_request_id) {
-      db.prepare(`UPDATE purchase_requests SET status='received', received_at=datetime('now') WHERE id=?`).run(purchase_request_id);
-    }
-  })();
+  if (totalPartsCost > 0) {
+    await createJournalEntry({
+      reference_type: "purchase_receive",
+      reference_id: journalRef,
+      debit_account:  "1040",
+      credit_account: "2030",
+      amount: totalPartsCost,
+      description: `استلام مخزون: ${item.item_name} (${inQty} وحدة)`,
+      created_by: created_by || undefined,
+    });
+  }
 
   res.json({ ok: true });
 });
 
 // ── Manual adjustment (تعديل يدوي وارد/منصرف) ─────────────────────────────
-router.post("/workshop-inventory/:id/adjust", (req, res) => {
+router.post("/workshop-inventory/:id/adjust", async (req, res) => {
   const { type, qty, reason, created_by, reference_no, cost_per_unit, vehicle_no } = req.body as {
     type: "in" | "out"; qty: number; cost_per_unit?: number;
     reason?: string; created_by?: string; reference_no?: string; vehicle_no?: string;
@@ -429,26 +425,26 @@ router.post("/workshop-inventory/:id/adjust", (req, res) => {
   if (!type || !["in","out"].includes(type)) return void res.status(400).json({ error: "نوع التعديل غير صالح" });
   if (!qty || Number(qty) <= 0) return void res.status(400).json({ error: "الكمية غير صالحة" });
 
-  const item = db.prepare("SELECT * FROM workshop_inventory WHERE id=?").get(req.params.id) as Record<string,unknown> | undefined;
+  const item = await queryOne<Record<string,unknown>>("SELECT * FROM workshop_inventory WHERE id=?", req.params.id);
   if (!item) return void res.status(404).json({ error: "القطعة غير موجودة" });
 
   const inQty  = Number(qty);
   const inCost = Number(cost_per_unit) || 0;
   const delta  = type === "in" ? inQty : -inQty;
 
-  db.prepare(`UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=? WHERE id=?`).run(delta, created_by || null, req.params.id);
-  if (type === "in" && inCost > 0) updateWeightedCost(Number(req.params.id), inQty, inCost, created_by || null);
+  await execute(`UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=? WHERE id=?`, delta, created_by || null, req.params.id);
+  if (type === "in" && inCost > 0) await updateWeightedCost(Number(req.params.id), inQty, inCost, created_by || null);
 
-  logInventoryTransaction(Number(req.params.id), String(item.item_name), type, inQty,
+  await logInventoryTransaction(Number(req.params.id), String(item.item_name), type, inQty,
     reason || (type === "in" ? "إضافة_يدوية" : "صرف_يدوي"), reference_no, created_by, inCost, vehicle_no);
 
-  if (type === "out") checkLowStock(Number(req.params.id));
+  if (type === "out") await checkLowStock(Number(req.params.id));
   res.json({ ok: true });
 });
 
 // ── Export inventory as Excel ──────────────────────────────────────────────
-router.get("/workshop-inventory/export", (_req, res) => {
-  const items = db.prepare("SELECT * FROM workshop_inventory ORDER BY category, item_name").all() as Record<string, unknown>[];
+router.get("/workshop-inventory/export", async (_req, res) => {
+  const items = await queryAll<Record<string, unknown>>("SELECT * FROM workshop_inventory ORDER BY category, item_name");
   const rows = items.map(i => ({
     "الكود":       i.item_code || "",
     "اسم الصنف":   i.item_name,
@@ -472,7 +468,7 @@ router.get("/workshop-inventory/export", (_req, res) => {
 });
 
 // ── Export transactions as Excel ───────────────────────────────────────────
-router.get("/workshop-inventory/transactions/export", (req, res) => {
+router.get("/workshop-inventory/transactions/export", async (req, res) => {
   const { type } = req.query as Record<string, string>;
   let sql = `
     SELECT t.*, wi.item_code
@@ -483,7 +479,7 @@ router.get("/workshop-inventory/transactions/export", (req, res) => {
   const params: (string | number)[] = [];
   if (type && ["in","out"].includes(type)) { sql += " AND t.type=?"; params.push(type); }
   sql += " ORDER BY t.created_at DESC";
-  const txs = db.prepare(sql).all(...params) as Record<string, unknown>[];
+  const txs = await queryAll<Record<string, unknown>>(sql, ...params);
   const rows = txs.map(t => ({
     "التاريخ":          t.created_at,
     "النوع":            t.type === "in" ? "وارد" : "منصرف",
@@ -509,7 +505,7 @@ router.get("/workshop-inventory/transactions/export", (req, res) => {
 });
 
 // ── Import inventory from Excel ────────────────────────────────────────────
-router.post("/workshop-inventory/import", upload.single("file"), (req, res) => {
+router.post("/workshop-inventory/import", upload.single("file"), async (req, res) => {
   if (!req.file) return void res.status(400).json({ error: "لم يُرفق ملف" });
   try {
     const wb   = XLSX.read(req.file.buffer, { type: "buffer" });
@@ -525,17 +521,14 @@ router.post("/workshop-inventory/import", upload.single("file"), (req, res) => {
 
     const inserted: string[] = []; const skipped: string[] = [];
     const importedBy = String(req.body?.created_by || "") || null;
-    const ins = db.prepare(`
-      INSERT INTO workshop_inventory (item_name, item_code, category, quantity, unit, min_stock, cost_per_unit, supplier, updated_by)
-      VALUES (?,?,?,?,?,?,?,?,?)
-    `);
-
-    const insertMany = db.transaction((rws: Record<string, unknown>[]) => {
-      for (const r of rws) {
+    for (const r of rows) {
         const name = String(g(r, "اسم الصنف", "item_name", "Name") ?? "").trim();
         if (!name) { skipped.push("صف بدون اسم"); continue; }
         const qty  = Number(g(r, "الكمية", "quantity", "Qty") ?? 0);
-        const res2 = ins.run(
+        const res2 = await execute(`
+          INSERT INTO workshop_inventory (item_name, item_code, category, quantity, unit, min_stock, cost_per_unit, supplier, updated_by)
+          VALUES (?,?,?,?,?,?,?,?,?)
+        `,
           name,
           g(r, "الكود", "item_code", "Code") || null,
           String(g(r, "الفئة", "category", "Category") ?? "عام"),
@@ -546,11 +539,9 @@ router.post("/workshop-inventory/import", upload.single("file"), (req, res) => {
           importedBy,
         );
         const newId = Number(res2.lastInsertRowid);
-        if (qty > 0) logInventoryTransaction(newId, name, "in", qty, "استيراد_إكسل", undefined, String(req.body?.created_by || ""));
+        if (qty > 0) await logInventoryTransaction(newId, name, "in", qty, "استيراد_إكسل", undefined, String(req.body?.created_by || ""));
         inserted.push(name);
-      }
-    });
-    insertMany(rows);
+    }
     res.json({ ok: true, inserted: inserted.length, skipped: skipped.length, skipped_names: skipped });
   } catch (err) {
     res.status(400).json({ error: "خطأ في قراءة الملف", detail: String(err) });
@@ -558,7 +549,7 @@ router.post("/workshop-inventory/import", upload.single("file"), (req, res) => {
 });
 
 // ── Bulk disbursement import (استيراد منصرف من Excel) ──────────────────────
-router.post("/workshop-inventory/transactions/bulk-out", (req, res) => {
+router.post("/workshop-inventory/transactions/bulk-out", async (req, res) => {
   const { rows, created_by } = req.body as {
     rows: { item_name: string; quantity: number; reason?: string; reference_no?: string; cost_per_unit?: number; vehicle_no?: string }[];
     created_by?: string;
@@ -569,39 +560,34 @@ router.post("/workshop-inventory/transactions/bulk-out", (req, res) => {
   const inserted: string[] = [];
   const skipped: { name: string; reason: string }[] = [];
 
-  const doAll = db.transaction(() => {
-    for (const r of rows) {
+  for (const r of rows) {
       const name = String(r.item_name || "").trim();
       if (!name) { skipped.push({ name: "—", reason: "بدون اسم صنف" }); continue; }
       const qty = Number(r.quantity);
       if (!qty || qty <= 0) { skipped.push({ name, reason: "كمية غير صالحة" }); continue; }
-      const item = db.prepare(
+      const item = await queryOne<Record<string, unknown>>(
         "SELECT * FROM workshop_inventory WHERE LOWER(TRIM(item_name))=LOWER(TRIM(?))"
-      ).get(name) as Record<string, unknown> | undefined;
+      , name);
       if (!item) { skipped.push({ name, reason: "الصنف غير موجود في المخزون" }); continue; }
-      db.prepare(
+      await execute(
         "UPDATE workshop_inventory SET quantity = quantity - ?, last_updated = datetime('now'), updated_by=? WHERE id=?"
-      ).run(qty, created_by || null, item.id);
-      logInventoryTransaction(
+      , qty, created_by || null, item.id);
+      await logInventoryTransaction(
         Number(item.id), String(item.item_name), "out", qty,
         r.reason || "صرف_يدوي", r.reference_no, created_by,
         Number(r.cost_per_unit) || 0, r.vehicle_no,
       );
       inserted.push(String(item.item_name));
-    }
-  });
-
-  doAll();
+  }
   res.json({ ok: true, inserted: inserted.length, skipped: skipped.length, skipped_details: skipped });
 });
 
 // ── Edit a single transaction ────────────────────────────────────────────────
-router.put("/workshop-inventory/transactions/:id", (req, res) => {
+router.put("/workshop-inventory/transactions/:id", async (req, res) => {
   const { quantity, reason, reference_no, cost_per_unit, updated_by } = req.body as {
     quantity?: number; reason?: string; reference_no?: string; cost_per_unit?: number; updated_by?: string;
   };
-  const tx = db.prepare("SELECT * FROM workshop_inventory_transactions WHERE id=?")
-    .get(req.params.id) as Record<string, unknown> | undefined;
+  const tx = await queryOne<Record<string, unknown>>("SELECT * FROM workshop_inventory_transactions WHERE id=?", req.params.id);
   if (!tx) return void res.status(404).json({ error: "السجل غير موجود" });
 
   const oldQty = Number(tx.quantity);
@@ -611,15 +597,15 @@ router.put("/workshop-inventory/transactions/:id", (req, res) => {
   const delta = newQty - oldQty;
   if (delta !== 0) {
     const invDelta = tx.type === "in" ? delta : -delta;
-    db.prepare("UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=COALESCE(?,updated_by) WHERE id=?")
-      .run(invDelta, updated_by || null, tx.item_id);
+    await execute("UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=COALESCE(?,updated_by) WHERE id=?",
+      invDelta, updated_by || null, tx.item_id);
   }
 
-  db.prepare(`
+  await execute(`
     UPDATE workshop_inventory_transactions
     SET quantity=?, reason=?, reference_no=?, cost_per_unit=?
     WHERE id=?
-  `).run(
+  `,
     newQty,
     reason !== undefined ? reason : tx.reason,
     reference_no !== undefined ? (reference_no || null) : tx.reference_no,
@@ -632,44 +618,45 @@ router.put("/workshop-inventory/transactions/:id", (req, res) => {
 
 // ── Bulk delete transactions (with stock reversal) ──────────────────────────
 // NOTE: must be registered BEFORE /:id or Express matches "bulk" as an id
-router.delete("/workshop-inventory/transactions/bulk", (req, res) => {
+router.delete("/workshop-inventory/transactions/bulk", async (req, res) => {
   const { ids, deleted_by } = req.body as { ids: number[]; deleted_by?: string };
   if (!Array.isArray(ids) || ids.length === 0)
     return void res.status(400).json({ error: "ids مطلوب" });
 
-  const doBulk = db.transaction((list: number[]) => {
-    for (const id of list) {
-      const tx = db.prepare("SELECT * FROM workshop_inventory_transactions WHERE id=?")
-        .get(id) as Record<string, unknown> | undefined;
-      if (!tx) continue;
-      const qty = Number(tx.quantity);
-      const delta = tx.type === "in" ? -qty : qty;
-      db.prepare("UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=COALESCE(?,updated_by) WHERE id=?")
-        .run(delta, deleted_by || null, tx.item_id);
-      db.prepare("DELETE FROM workshop_inventory_transactions WHERE id=?").run(id);
-    }
-  });
-  doBulk(ids);
+  const operations: { sql: string; params: unknown[] }[] = [];
+  for (const rawId of ids) {
+    const tx = await queryOne<Record<string, unknown>>("SELECT * FROM workshop_inventory_transactions WHERE id=?", Number(rawId));
+    if (!tx) continue;
+    const qty = Number(tx.quantity);
+    const delta = tx.type === "in" ? -qty : qty;
+    operations.push(
+      { sql: "UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=COALESCE(?,updated_by) WHERE id=?",
+        params: [delta, deleted_by || null, tx.item_id] },
+      { sql: "DELETE FROM workshop_inventory_transactions WHERE id=?", params: [Number(rawId)] },
+    );
+  }
+  await executeBatch(operations);
   res.json({ ok: true, deleted: ids.length });
 });
 
 // ── Delete a single transaction (with stock reversal) ────────────────────────
-router.delete("/workshop-inventory/transactions/:id", (req, res) => {
+router.delete("/workshop-inventory/transactions/:id", async (req, res) => {
   const { deleted_by } = (req.body || {}) as { deleted_by?: string };
-  const tx = db.prepare("SELECT * FROM workshop_inventory_transactions WHERE id=?")
-    .get(req.params.id) as Record<string, unknown> | undefined;
+  const tx = await queryOne<Record<string, unknown>>("SELECT * FROM workshop_inventory_transactions WHERE id=?", req.params.id);
   if (!tx) return void res.status(404).json({ error: "السجل غير موجود" });
 
   const qty = Number(tx.quantity);
   const invDelta = tx.type === "in" ? -qty : qty;
-  db.prepare("UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=COALESCE(?,updated_by) WHERE id=?")
-    .run(invDelta, deleted_by || null, tx.item_id);
-  db.prepare("DELETE FROM workshop_inventory_transactions WHERE id=?").run(req.params.id);
+  await executeBatch([
+    { sql: "UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=COALESCE(?,updated_by) WHERE id=?",
+      params: [invDelta, deleted_by || null, tx.item_id] },
+    { sql: "DELETE FROM workshop_inventory_transactions WHERE id=?", params: [req.params.id] },
+  ]);
   res.json({ ok: true });
 });
 
 // ── Bulk in import (استيراد وارد من Excel) ──────────────────────────────────
-router.post("/workshop-inventory/transactions/bulk-in", (req, res) => {
+router.post("/workshop-inventory/transactions/bulk-in", async (req, res) => {
   const { rows, created_by } = req.body as {
     rows: { item_name: string; quantity: number; reason?: string; reference_no?: string; cost_per_unit?: number; vehicle_no?: string }[];
     created_by?: string;
@@ -680,29 +667,25 @@ router.post("/workshop-inventory/transactions/bulk-in", (req, res) => {
   const inserted: string[] = [];
   const skipped: { name: string; reason: string }[] = [];
 
-  const doAll = db.transaction(() => {
-    for (const r of rows) {
+  for (const r of rows) {
       const name = String(r.item_name || "").trim();
       if (!name) { skipped.push({ name: "—", reason: "بدون اسم صنف" }); continue; }
       const qty = Number(r.quantity);
       if (!qty || qty <= 0) { skipped.push({ name, reason: "كمية غير صالحة" }); continue; }
-      const item = db.prepare(
+      const item = await queryOne<Record<string, unknown>>(
         "SELECT * FROM workshop_inventory WHERE LOWER(TRIM(item_name))=LOWER(TRIM(?))"
-      ).get(name) as Record<string, unknown> | undefined;
+      , name);
       if (!item) { skipped.push({ name, reason: "الصنف غير موجود في المخزون" }); continue; }
       const cost = Number(r.cost_per_unit) || 0;
-      db.prepare("UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=? WHERE id=?")
-        .run(qty, created_by || null, item.id);
-      if (cost > 0) updateWeightedCost(Number(item.id), qty, cost, created_by || null);
-      logInventoryTransaction(
+      await execute("UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=? WHERE id=?",
+        qty, created_by || null, item.id);
+      if (cost > 0) await updateWeightedCost(Number(item.id), qty, cost, created_by || null);
+      await logInventoryTransaction(
         Number(item.id), String(item.item_name), "in", qty,
         r.reason || "إضافة_يدوية", r.reference_no, created_by, cost, r.vehicle_no,
       );
       inserted.push(String(item.item_name));
-    }
-  });
-
-  doAll();
+  }
   res.json({ ok: true, inserted: inserted.length, skipped: skipped.length, skipped_details: skipped });
 });
 
@@ -710,20 +693,20 @@ router.post("/workshop-inventory/transactions/bulk-in", (req, res) => {
 //  PURCHASE REQUESTS — طلبات الشراء
 // ══════════════════════════════════════════════════════════════════
 
-router.get("/purchase-requests", (_req, res) => {
-  const rows = db.prepare("SELECT * FROM purchase_requests ORDER BY created_at DESC").all();
+router.get("/purchase-requests", async (_req, res) => {
+  const rows = await queryAll("SELECT * FROM purchase_requests ORDER BY created_at DESC");
   res.json(rows);
 });
 
-router.post("/purchase-requests", (req, res) => {
+router.post("/purchase-requests", async (req, res) => {
   const { item_name, quantity, unit, reason, workshop_job_id, requested_by, estimated_cost, supplier, supplier_id, vehicle_plate } = req.body;
   if (!item_name || !quantity || !requested_by)
     return void res.status(400).json({ error: "البيانات ناقصة" });
 
-  const r = db.prepare(`
+  const r = await execute(`
     INSERT INTO purchase_requests (item_name, quantity, unit, reason, workshop_job_id, requested_by, estimated_cost, supplier, supplier_id, vehicle_plate)
     VALUES (?,?,?,?,?,?,?,?,?,?)
-  `).run(
+  `,
     item_name, Number(quantity), unit || "قطعة",
     reason || null, workshop_job_id || null,
     requested_by, Number(estimated_cost) || 0, supplier || null,
@@ -732,16 +715,18 @@ router.post("/purchase-requests", (req, res) => {
   );
 
   // Notify purchasing managers
-  const purchasing = db.prepare("SELECT phone FROM users WHERE role='purchasing' AND active=1").all() as {phone: string}[];
-  const ins = db.prepare("INSERT INTO notifications (user_phone, title, body) VALUES (?,?,?)");
-  for (const u of purchasing) ins.run(u.phone, "طلب شراء جديد", `${item_name} (${quantity} ${unit || "قطعة"}) من ${requested_by}`);
+  const purchasing = await queryAll<{phone: string}>("SELECT phone FROM users WHERE role='purchasing' AND active=1");
+  await executeBatch(purchasing.map(u => ({
+    sql: "INSERT INTO notifications (user_phone, title, body) VALUES (?,?,?)",
+    params: [u.phone, "طلب شراء جديد", `${item_name} (${quantity} ${unit || "قطعة"}) من ${requested_by}`],
+  })));
 
   res.json({ id: r.lastInsertRowid });
 });
 
-router.put("/purchase-requests/:id/approve", (req, res) => {
+router.put("/purchase-requests/:id/approve", async (req, res) => {
   const { approved_by, actual_cost, supplier, supplier_id } = req.body;
-  const row = db.prepare("SELECT * FROM purchase_requests WHERE id=?").get(req.params.id) as Record<string, unknown> | undefined;
+  const row = await queryOne<Record<string, unknown>>("SELECT * FROM purchase_requests WHERE id=?", req.params.id);
   if (!row) return void res.status(404).json({ error: "الطلب غير موجود" });
   if (row.status !== "pending") return void res.status(400).json({ error: "الطلب ليس في حالة انتظار" });
 
@@ -749,40 +734,42 @@ router.put("/purchase-requests/:id/approve", (req, res) => {
   let resolvedName = supplier || row.supplier;
   let resolvedId = supplier_id ? Number(supplier_id) : (row.supplier_id as number | null);
   if (supplier_id) {
-    const sup = db.prepare("SELECT name FROM suppliers WHERE id=?").get(Number(supplier_id)) as { name: string } | undefined;
+    const sup = await queryOne<{ name: string }>("SELECT name FROM suppliers WHERE id=?", Number(supplier_id));
     if (sup) resolvedName = sup.name;
   }
 
-  db.prepare(`
+  await execute(`
     UPDATE purchase_requests SET status='approved', approved_by=?, actual_cost=?, supplier=?, supplier_id=? WHERE id=?
-  `).run(approved_by || null, Number(actual_cost) || row.actual_cost, resolvedName, resolvedId, req.params.id);
+  `, approved_by || null, Number(actual_cost) || row.actual_cost, resolvedName, resolvedId, req.params.id);
 
   // Notify workshop_manager
-  const managers = db.prepare("SELECT phone FROM users WHERE role='workshop_manager' AND active=1").all() as {phone: string}[];
-  const insN = db.prepare("INSERT INTO notifications (user_phone, title, body) VALUES (?,?,?)");
-  for (const u of managers) insN.run(u.phone, "موافقة على طلب شراء", `تمت الموافقة على: ${row.item_name}`);
+  const managers = await queryAll<{phone: string}>("SELECT phone FROM users WHERE role='workshop_manager' AND active=1");
+  await executeBatch(managers.map(u => ({
+    sql: "INSERT INTO notifications (user_phone, title, body) VALUES (?,?,?)",
+    params: [u.phone, "موافقة على طلب شراء", `تمت الموافقة على: ${row.item_name}`],
+  })));
 
   res.json({ ok: true });
 });
 
-router.put("/purchase-requests/:id/reject", (req, res) => {
+router.put("/purchase-requests/:id/reject", async (req, res) => {
   const { rejection_reason } = req.body;
-  db.prepare(`
+  await execute(`
     UPDATE purchase_requests SET status='rejected', rejection_reason=? WHERE id=?
-  `).run(rejection_reason || null, req.params.id);
+  `, rejection_reason || null, req.params.id);
   res.json({ ok: true });
 });
 
-router.put("/purchase-requests/:id/receive", (req, res) => {
+router.put("/purchase-requests/:id/receive", async (req, res) => {
   const { actual_cost, inventory_id, qty, rating, quality_notes, received_by, supplier } = req.body;
-  const row = db.prepare("SELECT * FROM purchase_requests WHERE id=?").get(req.params.id) as Record<string, unknown> | undefined;
+  const row = await queryOne<Record<string, unknown>>("SELECT * FROM purchase_requests WHERE id=?", req.params.id);
   if (!row) return void res.status(404).json({ error: "الطلب غير موجود" });
 
-  db.prepare(`
+  await execute(`
     UPDATE purchase_requests
     SET status='received', actual_cost=?, received_at=datetime('now'), rating=?, quality_notes=?
     WHERE id=?
-  `).run(
+  `,
     Number(actual_cost) || row.actual_cost,
     rating ? Number(rating) : null,
     quality_notes || null,
@@ -797,13 +784,12 @@ router.put("/purchase-requests/:id/receive", (req, res) => {
     const supplierName = String(supplier || row.supplier || "").trim();
     const receiveReason = `فاتورة مشتريات${supplierName ? ` — ${supplierName}` : ""}`;
     const referenceNo = `طلب_شراء_#${req.params.id}`;
-    db.prepare(`
+    await execute(`
       UPDATE workshop_inventory SET quantity = quantity + ?, last_updated = datetime('now'), updated_by=COALESCE(?,updated_by) WHERE id=?
-    `).run(receiveQty, received_by || null, inventory_id);
-    const inventoryItem = db.prepare("SELECT item_name FROM workshop_inventory WHERE id=?")
-      .get(inventory_id) as { item_name?: string } | undefined;
+    `, receiveQty, received_by || null, inventory_id);
+    const inventoryItem = await queryOne<{ item_name?: string }>("SELECT item_name FROM workshop_inventory WHERE id=?", inventory_id);
     if (inventoryItem) {
-      logInventoryTransaction(
+      await logInventoryTransaction(
         Number(inventory_id),
         String(inventoryItem.item_name || row.item_name || ""),
         "in",
@@ -823,7 +809,7 @@ router.put("/purchase-requests/:id/receive", (req, res) => {
 //  PURCHASE INVOICES — فواتير المشتريات (استيراد إكسل)
 // ══════════════════════════════════════════════════════════════════
 
-router.get("/purchase-invoices", (req, res) => {
+router.get("/purchase-invoices", async (req, res) => {
   const { vehicle_plate, branch, supplier_name, from, to, unclaimed, created_by } = req.query as Record<string, string>;
   let sql = `
     SELECT i.*,
@@ -851,7 +837,7 @@ router.get("/purchase-invoices", (req, res) => {
   if (unclaimed === "true") sql += " AND (i.reimbursement_claim_id IS NULL OR i.reimbursement_claim_id = 0)";
   if (created_by)     { sql += " AND i.imported_by = ?"; params.push(created_by); }
   sql += " ORDER BY i.invoice_date DESC, i.id DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
 // ── Single invoice creation — إضافة فاتورة يدوياً ──────────────────────────
@@ -869,7 +855,7 @@ function purchaseInvoiceCreateFailure(message: string, statusCode = 400): Purcha
   return Object.assign(new Error(message), { statusCode });
 }
 
-function createPurchaseInvoiceRecord(body: Record<string, unknown>): PurchaseInvoiceCreateResult {
+async function createPurchaseInvoiceRecord(body: Record<string, unknown>): Promise<PurchaseInvoiceCreateResult> {
   const {
     serial_no, invoice_date, branch, vehicle_plate, invoice_number,
     supplier_name, supplier_id, item_name, price_before_vat, quantity, price_after_vat, discount_amount,
@@ -890,20 +876,18 @@ function createPurchaseInvoiceRecord(body: Record<string, unknown>): PurchaseInv
   if (workOn === "trailer" && !trailerNumber)
     throw purchaseInvoiceCreateFailure("اختر رقم التيدر الذي تخصه الفاتورة");
   if (workOn === "trailer" && trailerNumber) {
-    const trailerExists = db.prepare(
+    const trailerExists = await queryOne(
       "SELECT id FROM teidarat WHERE TRIM(COALESCE(teidara_number,''))=? LIMIT 1"
-    ).get(trailerNumber);
+    , trailerNumber);
     if (!trailerExists)
       throw purchaseInvoiceCreateFailure("رقم التيدر غير موجود في إدارة التيدارات");
   }
 
   const fleetVehicle = vehiclePlate
-    ? db.prepare("SELECT branch FROM fleet_vehicles WHERE LOWER(TRIM(plate_number))=LOWER(?)")
-        .get(vehiclePlate) as { branch?: string | null } | undefined
+    ? await queryOne<{ branch?: string | null }>("SELECT branch FROM fleet_vehicles WHERE LOWER(TRIM(plate_number))=LOWER(?)", vehiclePlate)
     : undefined;
   const trailerFleetVehicle = trailerNumber
-    ? db.prepare("SELECT branch FROM fleet_vehicles WHERE linked_trailer_number=? LIMIT 1")
-        .get(trailerNumber) as { branch?: string | null } | undefined
+    ? await queryOne<{ branch?: string | null }>("SELECT branch FROM fleet_vehicles WHERE linked_trailer_number=? LIMIT 1", trailerNumber)
     : undefined;
   const resolvedBranch = fleetVehicle?.branch
     ? String(fleetVehicle.branch).trim()
@@ -917,9 +901,9 @@ function createPurchaseInvoiceRecord(body: Record<string, unknown>): PurchaseInv
       : "اختيار الفرع مطلوب");
 
   if (fleetVehicle || trailerFleetVehicle) {
-    const activeBranch = db.prepare(
+    const activeBranch = await queryOne(
       "SELECT id FROM company_settings WHERE active=1 AND LOWER(TRIM(entity_name))=LOWER(?)"
-    ).get(resolvedBranch);
+    , resolvedBranch);
     if (!activeBranch)
       throw purchaseInvoiceCreateFailure("فرع السيارة غير موجود ضمن فروع الشركة؛ حدّث السيارة من إدارة الأسطول");
   }
@@ -931,35 +915,35 @@ function createPurchaseInvoiceRecord(body: Record<string, unknown>): PurchaseInv
   let resolvedSupplierId = supplier_id ? Number(supplier_id) : null;
 
   if (resolvedSupplierId) {
-    const selectedSupplier = db.prepare(
+    const selectedSupplier = await queryOne<{ id: number; name: string }>(
       "SELECT id, name FROM suppliers WHERE id=? AND is_active=1"
-    ).get(resolvedSupplierId) as { id: number; name: string } | undefined;
+    , resolvedSupplierId);
     if (selectedSupplier) resolvedSupplierName = selectedSupplier.name;
     else resolvedSupplierId = null;
   }
 
   if (!resolvedSupplierId && resolvedSupplierName) {
-    const existingSupplier = db.prepare(
+    const existingSupplier = await queryOne<{ id: number; name: string }>(
       "SELECT id, name FROM suppliers WHERE LOWER(TRIM(name))=LOWER(?) AND is_active=1 ORDER BY id LIMIT 1"
-    ).get(resolvedSupplierName) as { id: number; name: string } | undefined;
+    , resolvedSupplierName);
     if (existingSupplier) {
       resolvedSupplierId = existingSupplier.id;
       resolvedSupplierName = existingSupplier.name;
     } else {
-      const newSupplier = db.prepare(
+      const newSupplier = await execute(
         "INSERT INTO suppliers (name) VALUES (?)"
-      ).run(resolvedSupplierName);
+      , resolvedSupplierName);
       resolvedSupplierId = Number(newSupplier.lastInsertRowid);
     }
   }
 
-  const inserted = db.prepare(`
+  const inserted = await execute(`
     INSERT INTO purchase_invoices
       (serial_no, invoice_date, branch, vehicle_plate, invoice_number,
         supplier_name, supplier_id, item_name, price_before_vat, quantity, price_after_vat, discount_amount,
         notes, imported_by, work_on, trailer_number)
      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(
+  `,
     serial_no ?? null, invoice_date ?? null, resolvedBranch, vehicle_plate ?? null,
     invoice_number ?? null, resolvedSupplierName || null, resolvedSupplierId,
     String(item_name), Number(price_before_vat) || 0, inQty, Number(price_after_vat) || 0,
@@ -973,24 +957,24 @@ function createPurchaseInvoiceRecord(body: Record<string, unknown>): PurchaseInv
   if (isWorkshop && inQty > 0) {
     const name = String(item_name).trim();
     workshopItemName = name;
-    const existing = db.prepare(
+    const existing = await queryOne<{ id: number; item_name: string; quantity: number; cost_per_unit: number }>(
       "SELECT * FROM workshop_inventory WHERE LOWER(item_name)=LOWER(?)"
-    ).get(name) as { id: number; item_name: string; quantity: number; cost_per_unit: number } | undefined;
+    , name);
 
     if (existing) {
-      db.prepare(
+      await execute(
         "UPDATE workshop_inventory SET quantity=quantity+?, last_updated=datetime('now'), updated_by=? WHERE id=?"
-      ).run(inQty, String(imported_by || "") || null, existing.id);
-      if (costUnit > 0) updateWeightedCost(existing.id, inQty, costUnit, String(imported_by || "") || null);
-      logInventoryTransaction(existing.id, name, "in", inQty, "فاتورة_مشتريات",
+      , inQty, String(imported_by || "") || null, existing.id);
+      if (costUnit > 0) await updateWeightedCost(existing.id, inQty, costUnit, String(imported_by || "") || null);
+      await logInventoryTransaction(existing.id, name, "in", inQty, "فاتورة_مشتريات",
         String(invoice_number || id), String(imported_by || ""), costUnit);
     } else {
-      const newR = db.prepare(`
+      const newR = await execute(`
         INSERT INTO workshop_inventory
           (item_name, category, quantity, unit, min_stock, cost_per_unit, supplier, updated_by)
         VALUES (?, 'عام', ?, 'قطعة', 0, ?, ?, ?)
-      `).run(name, inQty, costUnit, resolvedSupplierName || null, String(imported_by || "") || null);
-      logInventoryTransaction(Number(newR.lastInsertRowid), name, "in", inQty, "فاتورة_مشتريات",
+      `, name, inQty, costUnit, resolvedSupplierName || null, String(imported_by || "") || null);
+      await logInventoryTransaction(Number(newR.lastInsertRowid), name, "in", inQty, "فاتورة_مشتريات",
         String(invoice_number || id), String(imported_by || ""), costUnit);
     }
     workshopAdded = true;
@@ -998,7 +982,7 @@ function createPurchaseInvoiceRecord(body: Record<string, unknown>): PurchaseInv
 
   return {
     id,
-    invoice: db.prepare("SELECT * FROM purchase_invoices WHERE id=?").get(id) as SupplierPurchaseInvoicePasteSavedRow,
+    invoice: (await queryOne<SupplierPurchaseInvoicePasteSavedRow>("SELECT * FROM purchase_invoices WHERE id=?", id))!,
     workshopAdded,
     workshopItemName,
     supplierId: resolvedSupplierId,
@@ -1006,9 +990,9 @@ function createPurchaseInvoiceRecord(body: Record<string, unknown>): PurchaseInv
   };
 }
 
-router.post("/purchase-invoices", (req, res) => {
+router.post("/purchase-invoices", async (req, res) => {
   try {
-    const result = createPurchaseInvoiceRecord(req.body as Record<string, unknown>);
+    const result = await createPurchaseInvoiceRecord(req.body as Record<string, unknown>);
     res.status(201).json({ ok: true, ...result });
   } catch (error) {
     const failure = error as Partial<PurchaseInvoiceCreateFailure>;
@@ -1022,8 +1006,8 @@ router.post("/purchase-invoices", (req, res) => {
   }
 });
 
-router.post("/purchase-invoices/paste", (req, res) => {
-  const actor = getSupplierClaimActor(req);
+router.post("/purchase-invoices/paste", async (req, res) => {
+  const actor = await getSupplierClaimActor(req);
   if (!actor) {
     res.status(401).json({ error: "تسجيل الدخول مطلوب لإضافة فواتير الموردين" });
     return;
@@ -1044,32 +1028,32 @@ router.post("/purchase-invoices/paste", (req, res) => {
     | { conflict: false; replayed: boolean; invoiceIds: number[]; workshopItemNames: string[] };
 
   try {
-    const saveBatch = db.transaction((): PasteBatchResult => {
-      const existing = db.prepare(`
-        SELECT payload_hash, invoice_ids_json, workshop_item_names_json
-        FROM purchase_invoice_paste_batches WHERE request_key=?
-      `).get(requestKey) as {
-        payload_hash: string;
-        invoice_ids_json: string;
-        workshop_item_names_json: string;
-      } | undefined;
-
-      if (existing) {
-        if (existing.payload_hash !== payloadHash) return { conflict: true };
-        return {
-          conflict: false,
-          replayed: true,
-          invoiceIds: JSON.parse(existing.invoice_ids_json) as number[],
-          workshopItemNames: JSON.parse(existing.workshop_item_names_json) as string[],
-        };
-      }
-
-      const created = rows.map((row, index) => {
+    const existing = await queryOne<{
+      payload_hash: string;
+      invoice_ids_json: string;
+      workshop_item_names_json: string;
+    }>(`
+      SELECT payload_hash, invoice_ids_json, workshop_item_names_json
+      FROM purchase_invoice_paste_batches WHERE request_key=?
+    `, requestKey);
+    let batch: PasteBatchResult;
+    if (existing) {
+      batch = existing.payload_hash !== payloadHash
+        ? { conflict: true }
+        : {
+            conflict: false,
+            replayed: true,
+            invoiceIds: JSON.parse(existing.invoice_ids_json) as number[],
+            workshopItemNames: JSON.parse(existing.workshop_item_names_json) as string[],
+          };
+    } else {
+      const created: PurchaseInvoiceCreateResult[] = [];
+      for (const [index, row] of rows.entries()) {
         try {
-          return createPurchaseInvoiceRecord({
+          created.push(await createPurchaseInvoiceRecord({
             ...row,
             imported_by: actor.name,
-          });
+          }));
         } catch (error) {
           const failure = error as Partial<PurchaseInvoiceCreateFailure>;
           if ((Number(failure.statusCode) || 500) < 500) {
@@ -1077,20 +1061,18 @@ router.post("/purchase-invoices/paste", (req, res) => {
           }
           throw error;
         }
-      });
+      }
       const invoiceIds = created.map(record => record.id);
       const workshopItemNames = created
         .filter(record => record.workshopAdded)
         .map(record => record.workshopItemName);
-      db.prepare(`
+      await execute(`
         INSERT INTO purchase_invoice_paste_batches
           (request_key, payload_hash, invoice_ids_json, workshop_item_names_json)
         VALUES (?, ?, ?, ?)
-      `).run(requestKey, payloadHash, JSON.stringify(invoiceIds), JSON.stringify(workshopItemNames));
-      return { conflict: false, replayed: false, invoiceIds, workshopItemNames };
-    });
-
-    const batch = saveBatch();
+      `, requestKey, payloadHash, JSON.stringify(invoiceIds), JSON.stringify(workshopItemNames));
+      batch = { conflict: false, replayed: false, invoiceIds, workshopItemNames };
+    }
     if (batch.conflict) {
       res.status(409).json({
         error: "رمز الحفظ مرتبط بدفعة سابقة ببيانات مختلفة؛ لم يتم حفظ هذه البيانات.",
@@ -1099,9 +1081,11 @@ router.post("/purchase-invoices/paste", (req, res) => {
       return;
     }
 
-    const invoices = batch.invoiceIds
-      .map(id => db.prepare("SELECT * FROM purchase_invoices WHERE id=?").get(id))
-      .filter((invoice): invoice is SupplierPurchaseInvoicePasteSavedRow => Boolean(invoice));
+    const invoices: SupplierPurchaseInvoicePasteSavedRow[] = [];
+    for (const id of batch.invoiceIds) {
+      const invoice = await queryOne<SupplierPurchaseInvoicePasteSavedRow>("SELECT * FROM purchase_invoices WHERE id=?", id);
+      if (invoice) invoices.push(invoice);
+    }
     const result = {
       ok: true,
       inserted: batch.invoiceIds.length,
@@ -1124,41 +1108,39 @@ router.post("/purchase-invoices/paste", (req, res) => {
   }
 });
 
-router.post("/purchase-invoices/import", (req, res) => {
+router.post("/purchase-invoices/import", async (req, res) => {
   const { rows, imported_by } = req.body as { rows: Record<string, unknown>[]; imported_by?: string };
   if (!Array.isArray(rows) || rows.length === 0)
     return void res.status(400).json({ error: "لا توجد صفوف للاستيراد" });
 
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO purchase_invoices
       (serial_no, invoice_date, branch, vehicle_plate, invoice_number,
        supplier_name, item_name, price_before_vat, quantity, price_after_vat, notes, imported_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-  `);
-
-  const importAll = db.transaction((rows: Record<string, unknown>[]) => {
-    for (const r of rows) {
-      insert.run(
+  `;
+  const importStatements = rows.map(r => ({
+    sql: insertSql,
+    params: [
         r.serial_no ?? null, r.invoice_date ?? null, r.branch ?? null,
         r.vehicle_plate ?? null, r.invoice_number ?? null, r.supplier_name ?? null,
         r.item_name ?? "", Number(r.price_before_vat) || 0,
         Number(r.quantity) || 0, Number(r.price_after_vat) || 0,
         r.notes ?? null, imported_by ?? null,
-      );
-    }
-  });
-
-  importAll(rows);
+    ],
+  }));
+  await executeBatch(importStatements);
   res.json({ ok: true, inserted: rows.length });
 });
 
-router.put("/purchase-invoices/:id", (req, res) => {
+router.put("/purchase-invoices/:id", async (req, res) => {
   const { serial_no, invoice_date, branch, vehicle_plate, invoice_number,
     supplier_name, supplier_id, item_name, price_before_vat, quantity, price_after_vat, notes,
     work_on, trailer_number } = req.body as Record<string, unknown>;
   if (!item_name) return void res.status(400).json({ error: "اسم قطعة الغيار مطلوب" });
-  const existing = db.prepare("SELECT id, work_on, trailer_number, supplier_id FROM purchase_invoices WHERE id=?")
-    .get(req.params.id) as { id:number; work_on:string|null; trailer_number:string|null; supplier_id:number|null } | undefined;
+  const existing = await queryOne<{ id:number; work_on:string|null; trailer_number:string|null; supplier_id:number|null }>(
+    "SELECT id, work_on, trailer_number, supplier_id FROM purchase_invoices WHERE id=?", req.params.id,
+  );
   if (!existing) return void res.status(404).json({ error: "الفاتورة غير موجودة" });
 
   const body = req.body as Record<string, unknown>;
@@ -1189,82 +1171,77 @@ router.put("/purchase-invoices/:id", (req, res) => {
   if (workOn === "trailer" && !trailerNumber)
     return void res.status(400).json({ error: "اختر رقم التيدر الذي تخصه الفاتورة" });
   if (workOn === "trailer" && trailerNumber) {
-    const trailerExists = db.prepare(
+    const trailerExists = await queryOne(
       "SELECT id FROM teidarat WHERE TRIM(COALESCE(teidara_number,''))=? LIMIT 1"
-    ).get(trailerNumber);
+    , trailerNumber);
     if (!trailerExists)
       return void res.status(400).json({ error: "رقم التيدر غير موجود في إدارة التيدارات" });
   }
-  const savedInvoice = db.transaction(() => {
-    let resolvedSupplierId = existing.supplier_id;
-    let resolvedSupplierName: string | null =
-      supplier_name == null ? null : String(supplier_name).trim() || null;
+  let resolvedSupplierId = existing.supplier_id;
+  let resolvedSupplierName: string | null =
+    supplier_name == null ? null : String(supplier_name).trim() || null;
 
-    if (hasSupplierSelection) {
-      resolvedSupplierId = null;
-      if (requestedSupplierId) {
-        const selectedSupplier = db.prepare(
-          "SELECT id, name FROM suppliers WHERE id=? AND is_active=1"
-        ).get(requestedSupplierId) as { id: number; name: string } | undefined;
-        if (selectedSupplier) {
-          resolvedSupplierId = selectedSupplier.id;
-          resolvedSupplierName = selectedSupplier.name;
-        }
-      }
-
-      if (!resolvedSupplierId && resolvedSupplierName) {
-        const existingSupplier = db.prepare(
-          "SELECT id, name FROM suppliers WHERE LOWER(TRIM(name))=LOWER(?) AND is_active=1 ORDER BY id LIMIT 1"
-        ).get(resolvedSupplierName) as { id: number; name: string } | undefined;
-        if (existingSupplier) {
-          resolvedSupplierId = existingSupplier.id;
-          resolvedSupplierName = existingSupplier.name;
-        } else {
-          const newSupplier = db.prepare(
-            "INSERT INTO suppliers (name) VALUES (?)"
-          ).run(resolvedSupplierName);
-          resolvedSupplierId = Number(newSupplier.lastInsertRowid);
-        }
+  if (hasSupplierSelection) {
+    resolvedSupplierId = null;
+    if (requestedSupplierId) {
+      const selectedSupplier = await queryOne<{ id: number; name: string }>(
+        "SELECT id, name FROM suppliers WHERE id=? AND is_active=1", requestedSupplierId,
+      );
+      if (selectedSupplier) {
+        resolvedSupplierId = selectedSupplier.id;
+        resolvedSupplierName = selectedSupplier.name;
       }
     }
 
-    db.prepare(`
+    if (!resolvedSupplierId && resolvedSupplierName) {
+      const existingSupplier = await queryOne<{ id: number; name: string }>(
+        "SELECT id, name FROM suppliers WHERE LOWER(TRIM(name))=LOWER(?) AND is_active=1 ORDER BY id LIMIT 1",
+        resolvedSupplierName,
+      );
+      if (existingSupplier) {
+        resolvedSupplierId = existingSupplier.id;
+        resolvedSupplierName = existingSupplier.name;
+      } else {
+        const newSupplier = await execute("INSERT INTO suppliers (name) VALUES (?)", resolvedSupplierName);
+        resolvedSupplierId = Number(newSupplier.lastInsertRowid);
+      }
+    }
+  }
+
+  await execute(`
       UPDATE purchase_invoices SET
         serial_no=?, invoice_date=?, branch=?, vehicle_plate=?, invoice_number=?,
         supplier_name=?, supplier_id=?, item_name=?, price_before_vat=?, quantity=?, price_after_vat=?, notes=?,
         work_on=?, trailer_number=?
       WHERE id=?
-    `).run(
+    `,
       serial_no ?? null, invoice_date ?? null, branch ?? null, vehiclePlate || null,
       invoice_number ?? null, resolvedSupplierName, resolvedSupplierId, item_name,
       Number(price_before_vat) || 0, Number(quantity) || 0, Number(price_after_vat) || 0,
       notes ?? null, workOn, trailerNumber || null, req.params.id,
     );
-    return db.prepare("SELECT * FROM purchase_invoices WHERE id=?").get(req.params.id);
-  })();
+  const savedInvoice = await queryOne("SELECT * FROM purchase_invoices WHERE id=?", req.params.id);
   res.json({
     ok: true,
     invoice: savedInvoice,
   });
 });
 
-router.delete("/purchase-invoices/clear", (_req, res) => {
-  const { changes } = db.prepare("DELETE FROM purchase_invoices").run();
+router.delete("/purchase-invoices/clear", async (_req, res) => {
+  const { changes } = await execute("DELETE FROM purchase_invoices");
   res.json({ ok: true, deleted: changes });
 });
 
-router.delete("/purchase-invoices/bulk", (req, res) => {
+router.delete("/purchase-invoices/bulk", async (req, res) => {
   const { ids } = req.body as { ids?: number[] };
   if (!Array.isArray(ids) || ids.length === 0)
     return void res.status(400).json({ error: "لا توجد معرّفات" });
-  const del = db.prepare("DELETE FROM purchase_invoices WHERE id=?");
-  const bulkDel = db.transaction((list: number[]) => { for (const id of list) del.run(id); });
-  bulkDel(ids);
+  await executeBatch(ids.map(id => ({ sql: "DELETE FROM purchase_invoices WHERE id=?", params: [id] })));
   res.json({ ok: true, deleted: ids.length });
 });
 
-router.delete("/purchase-invoices/:id", (req, res) => {
-  db.prepare("DELETE FROM purchase_invoices WHERE id=?").run(req.params.id);
+router.delete("/purchase-invoices/:id", async (req, res) => {
+  await execute("DELETE FROM purchase_invoices WHERE id=?", req.params.id);
   res.json({ ok: true });
 });
 
@@ -1272,8 +1249,8 @@ router.delete("/purchase-invoices/:id", (req, res) => {
 //  SUPPLIERS — الموردين
 // ══════════════════════════════════════════════════════════════════
 
-router.get("/suppliers", (_req, res) => {
-  const rows = db.prepare(`
+router.get("/suppliers", async (_req, res) => {
+  const rows = await queryAll(`
     SELECT s.*,
       COALESCE(pr.order_count,    0) AS order_count,
       COALESCE(pr.total_amount,   0) AS total_amount,
@@ -1302,53 +1279,52 @@ router.get("/suppliers", (_req, res) => {
     ) inv ON inv.supplier_id = s.id
     WHERE s.is_active = 1
     ORDER BY s.name
-  `).all();
+  `);
   res.json(rows);
 });
 
-router.post("/suppliers", (req, res) => {
+router.post("/suppliers", async (req, res) => {
   const { name, phone, specialty, notes } = req.body as Record<string, string>;
   if (!name?.trim()) return void res.status(400).json({ error: "اسم المورد مطلوب" });
-  const r = db.prepare(
+  const r = await execute(
     "INSERT INTO suppliers (name, phone, specialty, notes) VALUES (?,?,?,?)"
-  ).run(name.trim(), phone || null, specialty || null, notes || null);
+  , name.trim(), phone || null, specialty || null, notes || null);
   res.status(201).json({ id: r.lastInsertRowid });
 });
 
-router.put("/suppliers/:id", (req, res) => {
+router.put("/suppliers/:id", async (req, res) => {
   const { name, phone, specialty, notes } = req.body as Record<string, string>;
   if (!name?.trim()) return void res.status(400).json({ error: "اسم المورد مطلوب" });
-  const exists = db.prepare("SELECT id FROM suppliers WHERE id=?").get(req.params.id);
+  const exists = await queryOne("SELECT id FROM suppliers WHERE id=?", req.params.id);
   if (!exists) return void res.status(404).json({ error: "المورد غير موجود" });
-  db.prepare(
+  await execute(
     "UPDATE suppliers SET name=?, phone=?, specialty=?, notes=? WHERE id=?"
-  ).run(name.trim(), phone || null, specialty || null, notes || null, req.params.id);
+  , name.trim(), phone || null, specialty || null, notes || null, req.params.id);
   res.json({ ok: true });
 });
 
-router.delete("/suppliers/:id", (req, res) => {
-  db.prepare("UPDATE suppliers SET is_active=0 WHERE id=?").run(req.params.id);
+router.delete("/suppliers/:id", async (req, res) => {
+  await execute("UPDATE suppliers SET is_active=0 WHERE id=?", req.params.id);
   res.json({ ok: true });
 });
 
-router.get("/suppliers/:id/history", (req, res) => {
-  const supplier = db.prepare("SELECT * FROM suppliers WHERE id=?").get(req.params.id) as
-    { id: number; name: string } | undefined;
+router.get("/suppliers/:id/history", async (req, res) => {
+  const supplier = await queryOne<{ id: number; name: string }>("SELECT * FROM suppliers WHERE id=?", req.params.id);
   if (!supplier) return void res.status(404).json({ error: "المورد غير موجود" });
 
-  const requests = db.prepare(`
+  const requests = await queryAll(`
     SELECT * FROM purchase_requests
     WHERE supplier_id = ?
        OR (supplier_id IS NULL AND supplier LIKE ?)
     ORDER BY created_at DESC
-  `).all(supplier.id, `%${supplier.name}%`);
+  `, supplier.id, `%${supplier.name}%`);
 
-  const invoices = db.prepare(`
+  const invoices = await queryAll(`
     SELECT * FROM purchase_invoices
     WHERE supplier_id = ?
        OR (supplier_id IS NULL AND supplier_name LIKE ?)
     ORDER BY invoice_date DESC, id DESC
-  `).all(supplier.id, `%${supplier.name}%`);
+  `, supplier.id, `%${supplier.name}%`);
 
   res.json({ requests, invoices });
 });
@@ -1357,7 +1333,7 @@ router.get("/suppliers/:id/history", (req, res) => {
 //  PURCHASE INVOICE RETURNS — مرتجعات فواتير الموردين
 // ══════════════════════════════════════════════════════════════════
 
-router.get("/purchase-invoice-returns", (req, res) => {
+router.get("/purchase-invoice-returns", async (req, res) => {
   const { q } = req.query as Record<string, string>;
   let sql = "SELECT * FROM purchase_invoice_returns WHERE 1=1";
   const params: unknown[] = [];
@@ -1366,10 +1342,10 @@ router.get("/purchase-invoice-returns", (req, res) => {
     params.push(`%${q}%`, `%${q}%`, `%${q}%`, `%${q}%`);
   }
   sql += " ORDER BY returned_at DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
-router.post("/purchase-invoice-returns", (req, res) => {
+router.post("/purchase-invoice-returns", async (req, res) => {
   const { items, returned_by } = req.body as {
     items: { invoice_id: number; invoice_number: string | null; supplier_name: string | null; item_name: string; return_quantity: number; reason: string; vehicle_plate?: string | null }[];
     returned_by?: string;
@@ -1377,18 +1353,16 @@ router.post("/purchase-invoice-returns", (req, res) => {
   if (!Array.isArray(items) || items.length === 0)
     return void res.status(400).json({ error: "لا توجد أصناف للإرجاع" });
 
-  const ins = db.prepare(`
+  const insertSql = `
     INSERT INTO purchase_invoice_returns
       (invoice_id, invoice_number, supplier_name, item_name, return_quantity, reason, returned_by, vehicle_plate)
     VALUES (?,?,?,?,?,?,?,?)
-  `);
-  const doInsert = db.transaction((list: typeof items) => {
-    for (const it of list) {
-      ins.run(it.invoice_id, it.invoice_number ?? null, it.supplier_name ?? null,
-        it.item_name, it.return_quantity, it.reason ?? null, returned_by ?? null, it.vehicle_plate ?? null);
-    }
-  });
-  doInsert(items);
+  `;
+  await executeBatch(items.map(it => ({
+    sql: insertSql,
+    params: [it.invoice_id, it.invoice_number ?? null, it.supplier_name ?? null,
+      it.item_name, it.return_quantity, it.reason ?? null, returned_by ?? null, it.vehicle_plate ?? null],
+  })));
   res.status(201).json({ ok: true, count: items.length });
 });
 
@@ -1417,20 +1391,20 @@ type MaintenancePartRecord = {
   item_code: string | null;
 };
 
-function attachMaintenanceParts(logs: Record<string, unknown>[]) {
+async function attachMaintenanceParts(logs: Record<string, unknown>[]) {
   const cardNumbers = logs.map(l => l.card_number).filter(Boolean) as string[];
   const partsByRef = new Map<string, MaintenancePartRecord[]>();
 
   if (cardNumbers.length > 0) {
     const ph = cardNumbers.map(() => "?").join(",");
-    const txns = db.prepare(
+    const txns = await queryAll<MaintenancePartRecord & { reference_no: string }>(
       `SELECT t.item_id, t.item_name, t.quantity, t.cost_per_unit, t.reference_no,
               COALESCE(i.unit, 'قطعة') AS unit,
               i.item_code
        FROM workshop_inventory_transactions t
        LEFT JOIN workshop_inventory i ON t.item_id = i.id
        WHERE t.reason='سجل_عطل' AND t.type='out' AND t.reference_no IN (${ph})`
-    ).all(...cardNumbers) as Array<MaintenancePartRecord & { reference_no: string }>;
+     , ...cardNumbers);
 
     for (const t of txns) {
       if (!partsByRef.has(t.reference_no)) partsByRef.set(t.reference_no, []);
@@ -1507,7 +1481,7 @@ function hasOilFilter(log: Record<string, unknown>) {
   ));
 }
 
-router.get("/maintenance-logs", (req, res) => {
+router.get("/maintenance-logs", async (req, res) => {
   const { vehicle_plate, branch, from, to, search } = req.query as Record<string, string>;
   let sql = "SELECT * FROM maintenance_logs WHERE 1=1";
   const params: unknown[] = [];
@@ -1519,7 +1493,7 @@ router.get("/maintenance-logs", (req, res) => {
     params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
   sql += " ORDER BY id DESC";
-  let logs = db.prepare(sql).all(...params) as Record<string, unknown>[];
+  let logs = await queryAll<Record<string, unknown>>(sql, ...params);
 
   // Date filter in JS — handles both ISO and M/D/YY formats
   if (from || to) {
@@ -1534,13 +1508,13 @@ router.get("/maintenance-logs", (req, res) => {
 
   if (logs.length === 0) return void res.json([]);
 
-  res.json(attachMaintenanceParts(logs));
+  res.json(await attachMaintenanceParts(logs));
 });
 
 // Oil-change register — same card data as the company export, with an
 // inventory-backed filter status and oil-only amount.
 // Keep this route before any /maintenance-logs/:id routes.
-router.get("/maintenance-logs/oil-changes", (req, res) => {
+router.get("/maintenance-logs/oil-changes", async (req, res) => {
   const { vehicle_plate, branch, from, to, search, filter_status } =
     req.query as Record<string, string>;
   let sql = "SELECT * FROM maintenance_logs WHERE 1=1";
@@ -1552,7 +1526,7 @@ router.get("/maintenance-logs/oil-changes", (req, res) => {
     params.push(`%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`, `%${search}%`);
   }
   sql += " ORDER BY id DESC";
-  let logs = db.prepare(sql).all(...params) as Record<string, unknown>[];
+  let logs = await queryAll<Record<string, unknown>>(sql, ...params);
 
   if (from || to) {
     logs = logs.filter(log => {
@@ -1564,7 +1538,7 @@ router.get("/maintenance-logs/oil-changes", (req, res) => {
     });
   }
 
-  const oilLogs = attachMaintenanceParts(logs)
+  const oilLogs = (await attachMaintenanceParts(logs))
     .filter(hasOilChange)
     .map(log => ({
       ...log,
@@ -1580,7 +1554,7 @@ router.get("/maintenance-logs/oil-changes", (req, res) => {
   res.json(oilLogs);
 });
 
-router.post("/maintenance-logs", (req, res) => {
+router.post("/maintenance-logs", async (req, res) => {
   const { card_number, maintenance_date, entry_time, exit_time, exit_date,
     vehicle_plate, driver_name, branch, maintenance_type, description, amount,
     amount_mechanical, amount_electrical, amount_salvage, salvage_source,
@@ -1589,8 +1563,7 @@ router.post("/maintenance-logs", (req, res) => {
     vehicle_choice } = req.body as Record<string, unknown>;
   const vehiclePlate = typeof vehicle_plate === "string" ? vehicle_plate.trim() : "";
   const fleetVehicle = vehiclePlate
-    ? db.prepare("SELECT branch FROM fleet_vehicles WHERE TRIM(plate_number)=?")
-        .get(vehiclePlate) as { branch?: string | null } | undefined
+    ? await queryOne<{ branch?: string | null }>("SELECT branch FROM fleet_vehicles WHERE TRIM(plate_number)=?", vehiclePlate)
     : undefined;
   const branchName = fleetVehicle
     ? String(fleetVehicle.branch || "").trim()
@@ -1603,9 +1576,9 @@ router.post("/maintenance-logs", (req, res) => {
     });
   }
   if (fleetVehicle) {
-    const activeBranch = db.prepare(
+    const activeBranch = await queryOne(
       "SELECT id FROM company_settings WHERE active=1 AND LOWER(TRIM(entity_name))=LOWER(?)"
-    ).get(branchName);
+    , branchName);
     if (!activeBranch) {
       return void res.status(400).json({ error: "فرع السيارة غير موجود ضمن فروع الشركة؛ حدّث السيارة من إدارة الأسطول" });
     }
@@ -1626,14 +1599,14 @@ router.post("/maintenance-logs", (req, res) => {
   const totalAmount = Number(amount) || (amtMech + amtElec + amtSalv) || 0;
   const vc = vehicle_choice === "trailer" ? "trailer" : "vehicle";
 
-  const r = db.prepare(`
+  const r = await execute(`
     INSERT INTO maintenance_logs
       (card_number, maintenance_date, entry_time, exit_time, exit_date,
        vehicle_plate, driver_name, branch, maintenance_type, description, amount,
        amount_mechanical, amount_electrical, amount_salvage, salvage_source, technicians, tires,
        trailer_number, trailer_type, is_external, amount_breakdown, vehicle_choice)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-  `).run(
+  `,
     card_number ? String(card_number).trim() : null,
     maintenance_date || null, entry_time || null,
     exit_time || null, exit_date || null, vehicle_plate || null,
@@ -1659,13 +1632,14 @@ router.post("/maintenance-logs", (req, res) => {
 
   for (const { id, qty } of itemsToDeduct) {
     if (!id || qty <= 0) continue;
-    const item = db.prepare("SELECT * FROM workshop_inventory WHERE id=?")
-      .get(id) as { id: number; item_name: string; quantity: number; cost_per_unit: number; unit: string } | undefined;
+    const item = await queryOne<{ id: number; item_name: string; quantity: number; cost_per_unit: number; unit: string }>(
+      "SELECT * FROM workshop_inventory WHERE id=?", id,
+    );
     if (item) {
       const newQty = Math.max(0, Number(item.quantity) - qty);
-      db.prepare("UPDATE workshop_inventory SET quantity=?, last_updated=datetime('now'), updated_by=? WHERE id=?")
-        .run(newQty, performed_by ? String(performed_by) : null, item.id);
-      logInventoryTransaction(
+      await execute("UPDATE workshop_inventory SET quantity=?, last_updated=datetime('now'), updated_by=? WHERE id=?",
+        newQty, performed_by ? String(performed_by) : null, item.id);
+      await logInventoryTransaction(
         item.id, item.item_name, "out", qty, "سجل_عطل",
         refNo, String(performed_by || ""), Number(item.cost_per_unit), vehicle_plate ? String(vehicle_plate) : undefined,
       );
@@ -1679,21 +1653,21 @@ router.post("/maintenance-logs", (req, res) => {
     const vc = String((req.body as Record<string, unknown>).vehicle_choice || "vehicle");
     const def = (vc === "trailer" && tn) ? "trailer" : "vehicle";
     if (tn) {
-      db.prepare(
+      await execute(
         "UPDATE fleet_vehicles SET linked_trailer_number=?, linked_trailer_default=? WHERE plate_number=?"
-      ).run(tn, def, vp);
+      , tn, def, vp);
     } else {
       // no trailer in this log — only update the default if explicitly set to vehicle
-      db.prepare(
+      await execute(
         "UPDATE fleet_vehicles SET linked_trailer_default='vehicle' WHERE plate_number=? AND linked_trailer_default IS NOT NULL"
-      ).run(vp);
+      , vp);
     }
   }
 
   res.json({ id: r.lastInsertRowid });
 });
 
-router.put("/maintenance-logs/:id", (req, res) => {
+router.put("/maintenance-logs/:id", async (req, res) => {
   const { card_number, maintenance_date, entry_time, exit_time, exit_date,
     vehicle_plate, driver_name, branch, maintenance_type, description, amount,
     amount_mechanical, amount_electrical, amount_salvage, salvage_source,
@@ -1703,22 +1677,21 @@ router.put("/maintenance-logs/:id", (req, res) => {
 
   // Preserve the historical vehicle attribution on old records unless the
   // user explicitly changes the vehicle itself.
-  const oldLog = db.prepare(
-    "SELECT card_number, vehicle_plate, trailer_number, branch, is_external FROM maintenance_logs WHERE id=?"
-  ).get(id) as {
+  const oldLog = await queryOne<{
     card_number: string | null;
     vehicle_plate: string | null;
     trailer_number: string | null;
     branch: string | null;
     is_external: number | null;
-  } | undefined;
+  }>(
+    "SELECT card_number, vehicle_plate, trailer_number, branch, is_external FROM maintenance_logs WHERE id=?"
+  , id);
   if (!oldLog) return void res.status(404).json({ error: "سجل العطل غير موجود" });
 
   const vehiclePlate = typeof vehicle_plate === "string" ? vehicle_plate.trim() : "";
   const vehicleChanged = vehiclePlate !== String(oldLog.vehicle_plate || "").trim();
   const fleetVehicle = vehiclePlate
-    ? db.prepare("SELECT branch FROM fleet_vehicles WHERE TRIM(plate_number)=?")
-        .get(vehiclePlate) as { branch?: string | null } | undefined
+    ? await queryOne<{ branch?: string | null }>("SELECT branch FROM fleet_vehicles WHERE TRIM(plate_number)=?", vehiclePlate)
     : undefined;
   const branchName = !vehicleChanged
     ? String(oldLog.branch || "").trim()
@@ -1733,9 +1706,9 @@ router.put("/maintenance-logs/:id", (req, res) => {
     });
   }
   if (vehicleChanged && fleetVehicle) {
-    const activeBranch = db.prepare(
+    const activeBranch = await queryOne(
       "SELECT id FROM company_settings WHERE active=1 AND LOWER(TRIM(entity_name))=LOWER(?)"
-    ).get(branchName);
+    , branchName);
     if (!activeBranch) {
       return void res.status(400).json({ error: "فرع السيارة غير موجود ضمن فروع الشركة؛ حدّث السيارة من إدارة الأسطول" });
     }
@@ -1763,8 +1736,8 @@ router.put("/maintenance-logs/:id", (req, res) => {
 
   const vcSaved = vehicle_choice === "trailer" ? "trailer" : "vehicle";
 
-  db.transaction(() => {
-    db.prepare(`
+  const maintenanceUpdates: { sql: string; params: unknown[] }[] = [{
+    sql: `
       UPDATE maintenance_logs SET
         card_number=?, maintenance_date=?, entry_time=?, exit_time=?, exit_date=?,
         vehicle_plate=?, driver_name=?, branch=?, maintenance_type=?, description=?, amount=?,
@@ -1772,7 +1745,8 @@ router.put("/maintenance-logs/:id", (req, res) => {
         technicians=?, tires=?, trailer_number=?, trailer_type=?, is_external=?, amount_breakdown=?,
         vehicle_choice=?
       WHERE id=?
-    `).run(
+    `,
+    params: [
       card_number ? String(card_number).trim() : null,
       maintenance_date || null, entry_time || null,
       exit_time || null, exit_date || null, newVehicle,
@@ -1789,37 +1763,38 @@ router.put("/maintenance-logs/:id", (req, res) => {
       amount_breakdown ? String(amount_breakdown) : null,
       vcSaved,
       id,
-    );
+    ],
+  }];
 
-    // ── Sync trailer link + default to fleet_vehicles ───────────────────────
-    const oldVehicle = oldLog?.vehicle_plate ?? null;
-    const oldTrailer = oldLog?.trailer_number ?? null;
-    const linkedVehicleChanged = oldVehicle !== newVehicle;
-    const trailerChanged = trailer_number !== undefined && oldTrailer !== newTrailer;
-    const vc = String((req.body as Record<string, unknown>).vehicle_choice || "vehicle");
-    const newDefault = (vc === "trailer" && newTrailer) ? "trailer" : "vehicle";
+  // ── Sync trailer link + default to fleet_vehicles ───────────────────────
+  const oldVehicle = oldLog.vehicle_plate ?? null;
+  const oldTrailer = oldLog.trailer_number ?? null;
+  const linkedVehicleChanged = oldVehicle !== newVehicle;
+  const trailerChanged = trailer_number !== undefined && oldTrailer !== newTrailer;
+  const vc = String((req.body as Record<string, unknown>).vehicle_choice || "vehicle");
+  const newDefault = (vc === "trailer" && newTrailer) ? "trailer" : "vehicle";
 
-    if (linkedVehicleChanged || trailerChanged) {
-      // Clear old vehicle's link if it was pointing at the old trailer
-      if (oldVehicle && oldTrailer) {
-        db.prepare(
-          "UPDATE fleet_vehicles SET linked_trailer_number=NULL WHERE plate_number=? AND linked_trailer_number=?"
-        ).run(oldVehicle, oldTrailer);
-      }
-    }
+  if ((linkedVehicleChanged || trailerChanged) && oldVehicle && oldTrailer) {
+    maintenanceUpdates.push({
+      sql: "UPDATE fleet_vehicles SET linked_trailer_number=NULL WHERE plate_number=? AND linked_trailer_number=?",
+      params: [oldVehicle, oldTrailer],
+    });
+  }
 
-    // Always sync default (and trailer number) on the new vehicle when vehicle_plate present
-    if (newVehicle && newTrailer) {
-      db.prepare(
-        "UPDATE fleet_vehicles SET linked_trailer_number=?, linked_trailer_default=? WHERE plate_number=?"
-      ).run(newTrailer, newDefault, newVehicle);
-    } else if (newVehicle && !newTrailer) {
-      // Trailer explicitly cleared — clear number and reset default to vehicle
-      db.prepare(
-        "UPDATE fleet_vehicles SET linked_trailer_number=NULL, linked_trailer_default='vehicle' WHERE plate_number=? AND linked_trailer_number=?"
-      ).run(newVehicle, oldTrailer ?? "");
-    }
-  })();
+  // Always sync default (and trailer number) on the new vehicle when vehicle_plate present
+  if (newVehicle && newTrailer) {
+    maintenanceUpdates.push({
+      sql: "UPDATE fleet_vehicles SET linked_trailer_number=?, linked_trailer_default=? WHERE plate_number=?",
+      params: [newTrailer, newDefault, newVehicle],
+    });
+  } else if (newVehicle && !newTrailer) {
+    // Trailer explicitly cleared — clear number and reset default to vehicle
+    maintenanceUpdates.push({
+      sql: "UPDATE fleet_vehicles SET linked_trailer_number=NULL, linked_trailer_default='vehicle' WHERE plate_number=? AND linked_trailer_number=?",
+      params: [newVehicle, oldTrailer ?? ""],
+    });
+  }
+  await executeBatch(maintenanceUpdates);
 
   // ── Update inventory parts if inv_items provided ───────────────────────────
   if (Array.isArray(inv_items)) {
@@ -1827,53 +1802,70 @@ router.put("/maintenance-logs/:id", (req, res) => {
     const oldRefNo  = oldLog?.card_number ? String(oldLog.card_number).trim() : String(id);
 
     // Restore old items back to inventory
-    const oldTxns = db.prepare(
+    const oldTxns = await queryAll<{ item_id: number; quantity: number }>(
       "SELECT item_id, quantity FROM workshop_inventory_transactions WHERE reason='سجل_عطل' AND type='out' AND reference_no=?"
-    ).all(oldRefNo) as { item_id: number; quantity: number }[];
+    , oldRefNo);
+    const inventoryUpdates: { sql: string; params: unknown[] }[] = [];
     for (const t of oldTxns) {
-      db.prepare("UPDATE workshop_inventory SET quantity=quantity+?, last_updated=datetime('now'), updated_by=? WHERE id=?")
-        .run(t.quantity, performed_by ? String(performed_by) : null, t.item_id);
+      inventoryUpdates.push({
+        sql: "UPDATE workshop_inventory SET quantity=quantity+?, last_updated=datetime('now'), updated_by=? WHERE id=?",
+        params: [t.quantity, performed_by ? String(performed_by) : null, t.item_id],
+      });
     }
     // Delete old transactions for this log
-    db.prepare("DELETE FROM workshop_inventory_transactions WHERE reason='سجل_عطل' AND type='out' AND reference_no=?")
-      .run(oldRefNo);
+    inventoryUpdates.push({
+      sql: "DELETE FROM workshop_inventory_transactions WHERE reason='سجل_عطل' AND type='out' AND reference_no=?",
+      params: [oldRefNo],
+    });
 
     // Apply new items
     const newItems = (inv_items as Array<{ id: unknown; qty: unknown }>)
       .map(x => ({ id: Number(x.id), qty: Number(x.qty) || 1 }));
+    const inventoryItemIds = new Set<number>();
     for (const { id: itemId, qty } of newItems) {
       if (!itemId || qty <= 0) continue;
-      const item = db.prepare("SELECT * FROM workshop_inventory WHERE id=?")
-        .get(itemId) as { id: number; item_name: string; quantity: number; cost_per_unit: number; unit: string } | undefined;
+      const item = await queryOne<{ id: number; item_name: string; quantity: number; cost_per_unit: number; unit: string }>(
+        "SELECT * FROM workshop_inventory WHERE id=?", itemId,
+      );
       if (item) {
         const newQty = Math.max(0, Number(item.quantity) - qty);
-        db.prepare("UPDATE workshop_inventory SET quantity=?, last_updated=datetime('now'), updated_by=? WHERE id=?")
-          .run(newQty, performed_by ? String(performed_by) : null, item.id);
-        logInventoryTransaction(item.id, item.item_name, "out", qty, "سجل_عطل",
-          newRefNo, String(performed_by || ""), Number(item.cost_per_unit), newVehicle || undefined);
-        checkLowStock(item.id);
+        inventoryUpdates.push(
+          {
+            sql: "UPDATE workshop_inventory SET quantity=?, last_updated=datetime('now'), updated_by=? WHERE id=?",
+            params: [newQty, performed_by ? String(performed_by) : null, item.id],
+          },
+          {
+            sql: `INSERT INTO workshop_inventory_transactions
+              (item_id,item_name,type,quantity,cost_per_unit,reason,reference_no,created_by,vehicle_no)
+              VALUES (?,?, 'out', ?, ?, 'سجل_عطل', ?, ?, ?)`,
+            params: [item.id, item.item_name, qty, Number(item.cost_per_unit), newRefNo,
+              String(performed_by || ""), newVehicle || null],
+          },
+        );
+        inventoryItemIds.add(item.id);
       }
     }
+    await executeBatch(inventoryUpdates);
+    for (const itemId of inventoryItemIds) await checkLowStock(itemId);
   }
 
   res.json({ ok: true });
 });
 
-router.post("/maintenance-logs/import", (req, res) => {
+router.post("/maintenance-logs/import", async (req, res) => {
   const { rows, imported_by } = req.body as { rows: Record<string, unknown>[]; imported_by?: string };
   if (!Array.isArray(rows) || rows.length === 0)
     return void res.status(400).json({ error: "لا توجد صفوف للاستيراد" });
 
-  const insert = db.prepare(`
+  const insertSql = `
     INSERT INTO maintenance_logs
       (card_number, maintenance_date, entry_time, exit_time, exit_date,
        vehicle_plate, driver_name, branch, maintenance_type, description, amount, imported_by)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-  `);
-  let inserted = 0; let skipped = 0;
-  const importAll = db.transaction((rows: Record<string, unknown>[]) => {
-    for (const r of rows) {
-      const result = insert.run(
+  `;
+  const statements = rows.map(r => ({
+    sql: insertSql,
+    params: [
         r.card_number ? String(r.card_number).trim() : null,
         r.maintenance_date ?? null,
         r.entry_time ?? null, r.exit_time ?? null, r.exit_date ?? null,
@@ -1881,30 +1873,30 @@ router.post("/maintenance-logs/import", (req, res) => {
         r.branch ?? null, r.maintenance_type ?? null,
         r.description ?? null, Number(r.amount) || 0,
         imported_by ?? null,
-      );
-      if (result.changes > 0) inserted++; else skipped++;
-    }
-  });
-  importAll(rows);
+    ],
+  }));
+  const results = await executeBatch(statements);
+  const inserted = results.filter(result => result.changes > 0).length;
+  const skipped = rows.length - inserted;
   res.json({ ok: true, inserted, skipped });
 });
 
-router.patch("/maintenance-logs/:id/printed", (req, res) => {
+router.patch("/maintenance-logs/:id/printed", async (req, res) => {
   const id = req.params.id;
-  const current = db.prepare("SELECT is_printed FROM maintenance_logs WHERE id=?").get(id) as { is_printed: number } | undefined;
+  const current = await queryOne<{ is_printed: number }>("SELECT is_printed FROM maintenance_logs WHERE id=?", id);
   if (!current) return void res.status(404).json({ error: "not found" });
   const next = current.is_printed ? 0 : 1;
-  db.prepare("UPDATE maintenance_logs SET is_printed=? WHERE id=?").run(next, id);
+  await execute("UPDATE maintenance_logs SET is_printed=? WHERE id=?", next, id);
   res.json({ ok: true, is_printed: next });
 });
 
-router.delete("/maintenance-logs/clear", (_req, res) => {
-  db.prepare("DELETE FROM maintenance_logs").run();
+router.delete("/maintenance-logs/clear", async (_req, res) => {
+  await execute("DELETE FROM maintenance_logs");
   res.json({ ok: true, message: "تم مسح جميع سجلات الأعطال" });
 });
 
-router.delete("/maintenance-logs/:id", (req, res) => {
-  db.prepare("DELETE FROM maintenance_logs WHERE id=?").run(req.params.id);
+router.delete("/maintenance-logs/:id", async (req, res) => {
+  await execute("DELETE FROM maintenance_logs WHERE id=?", req.params.id);
   res.json({ ok: true });
 });
 
@@ -1912,71 +1904,77 @@ router.delete("/maintenance-logs/:id", (req, res) => {
 //  REIMBURSEMENT REQUESTS — طلبات الاستعاضة
 // ══════════════════════════════════════════════════════════════════
 
-router.get("/reimbursement-requests", (req, res) => {
+router.get("/reimbursement-requests", async (req, res) => {
   const { status, submitted_by } = req.query as Record<string, string>;
   let sql = "SELECT * FROM reimbursement_requests WHERE 1=1";
   const params: unknown[] = [];
   if (status)       { sql += " AND status=?";       params.push(status); }
   if (submitted_by) { sql += " AND submitted_by=?"; params.push(submitted_by); }
   sql += " ORDER BY created_at DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
-router.post("/reimbursement-requests", diskUpload.single("invoice_image"), (req, res) => {
+router.post("/reimbursement-requests", diskUpload.single("invoice_image"), async (req, res) => {
   const { submitted_by, description, total_amount, invoice_count } = req.body as Record<string, string>;
   if (!submitted_by?.trim()) return void res.status(400).json({ error: "اسم مقدم الطلب مطلوب" });
   const request_number = "REIMB" + Date.now();
   const invoice_image_url = req.file ? `/api/uploads/${req.file.filename}` : null;
-  const r = db.prepare(`
+  const r = await execute(`
     INSERT INTO reimbursement_requests
       (request_number, submitted_by, description, total_amount, invoice_count, invoice_image_url, status)
     VALUES (?, ?, ?, ?, ?, ?, 'pending')
-  `).run(
+  `,
     request_number, submitted_by.trim(), description || null,
     parseFloat(total_amount) || 0, parseInt(invoice_count) || 0, invoice_image_url
   );
   // Notify accountants
-  const accountants = db.prepare("SELECT phone FROM users WHERE role='accountant' AND active=1").all() as {phone:string}[];
-  const insN = db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)");
-  for (const u of accountants) insN.run(u.phone, "طلب استعاضة جديد", `قدّم ${submitted_by} طلب استعاضة رقم ${request_number}`);
+  const accountants = await queryAll<{phone:string}>("SELECT phone FROM users WHERE role='accountant' AND active=1");
+  await executeBatch(accountants.map(u => ({
+    sql: "INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+    params: [u.phone, "طلب استعاضة جديد", `قدّم ${submitted_by} طلب استعاضة رقم ${request_number}`],
+  })));
   res.status(201).json({ id: r.lastInsertRowid, request_number });
 });
 
-router.put("/reimbursement-requests/:id/review", (req, res) => {
+router.put("/reimbursement-requests/:id/review", async (req, res) => {
   const { accountant_name, accountant_notes } = req.body as Record<string, string>;
-  const existing = db.prepare("SELECT * FROM reimbursement_requests WHERE id=?").get(req.params.id) as { submitted_by: string } | undefined;
+  const existing = await queryOne<{ submitted_by: string }>("SELECT * FROM reimbursement_requests WHERE id=?", req.params.id);
   if (!existing) return void res.status(404).json({ error: "الطلب غير موجود" });
-  db.prepare(`
+  await execute(`
     UPDATE reimbursement_requests
     SET status='accountant_reviewed', accountant_name=?, accountant_notes=?,
         accountant_reviewed_at=datetime('now')
     WHERE id=?
-  `).run(accountant_name || null, accountant_notes || null, req.params.id);
+  `, accountant_name || null, accountant_notes || null, req.params.id);
   // Notify bank officers
-  const banks = db.prepare("SELECT phone FROM users WHERE role='bank_officer' AND active=1").all() as {phone:string}[];
-  const insN = db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)");
-  for (const u of banks) insN.run(u.phone, "فاتورة استعاضة للمراجعة", `راجع المحاسب طلب استعاضة من ${existing.submitted_by}`);
+  const banks = await queryAll<{phone:string}>("SELECT phone FROM users WHERE role='bank_officer' AND active=1");
+  await executeBatch(banks.map(u => ({
+    sql: "INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+    params: [u.phone, "فاتورة استعاضة للمراجعة", `راجع المحاسب طلب استعاضة من ${existing.submitted_by}`],
+  })));
   res.json({ ok: true });
 });
 
-router.put("/reimbursement-requests/:id/reimburse", (req, res) => {
+router.put("/reimbursement-requests/:id/reimburse", async (req, res) => {
   const { bank_officer_notes } = req.body as Record<string, string>;
-  const existing = db.prepare("SELECT * FROM reimbursement_requests WHERE id=?").get(req.params.id) as { submitted_by: string } | undefined;
+  const existing = await queryOne<{ submitted_by: string }>("SELECT * FROM reimbursement_requests WHERE id=?", req.params.id);
   if (!existing) return void res.status(404).json({ error: "الطلب غير موجود" });
-  db.prepare(`
+  await execute(`
     UPDATE reimbursement_requests
     SET status='reimbursed', bank_officer_notes=?, reimbursed_at=datetime('now')
     WHERE id=?
-  `).run(bank_officer_notes || null, req.params.id);
+  `, bank_officer_notes || null, req.params.id);
   // Notify purchasing user
-  const purchasers = db.prepare("SELECT phone FROM users WHERE (role='purchasing' OR name=?) AND active=1").all(existing.submitted_by) as {phone:string}[];
-  const insN = db.prepare("INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)");
-  for (const u of purchasers) insN.run(u.phone, "تم صرف الاستعاضة ✓", `تمت الاستعاضة لطلبك المقدم من ${existing.submitted_by}`);
+  const purchasers = await queryAll<{phone:string}>("SELECT phone FROM users WHERE (role='purchasing' OR name=?) AND active=1", existing.submitted_by);
+  await executeBatch(purchasers.map(u => ({
+    sql: "INSERT INTO notifications (user_phone,title,body) VALUES (?,?,?)",
+    params: [u.phone, "تم صرف الاستعاضة ✓", `تمت الاستعاضة لطلبك المقدم من ${existing.submitted_by}`],
+  })));
   res.json({ ok: true });
 });
 
 router.delete("/reimbursement-requests/:id", async (req, res) => {
-  const row = db.prepare("SELECT invoice_image_url FROM reimbursement_requests WHERE id=?").get(req.params.id) as { invoice_image_url: string | null } | undefined;
+  const row = await queryOne<{ invoice_image_url: string | null }>("SELECT invoice_image_url FROM reimbursement_requests WHERE id=?", req.params.id);
   if (row?.invoice_image_url) {
     const fname = row.invoice_image_url.split("/").pop()!;
     if (/^[A-Za-z0-9._-]+$/.test(fname)) {
@@ -1984,7 +1982,7 @@ router.delete("/reimbursement-requests/:id", async (req, res) => {
     }
     try { fs.unlinkSync(`${UPLOADS_PATH}/${fname}`); } catch { /* ignore */ }
   }
-  db.prepare("DELETE FROM reimbursement_requests WHERE id=?").run(req.params.id);
+  await execute("DELETE FROM reimbursement_requests WHERE id=?", req.params.id);
   res.json({ ok: true });
 });
 
@@ -1998,7 +1996,7 @@ function claimRouteError(message: string, statusCode: number): ClaimRouteError {
   return Object.assign(new Error(message), { statusCode });
 }
 
-function reserveClaimsForPrinting(claimIds: number[], actor: SupplierClaimActor) {
+async function reserveClaimsForPrinting(claimIds: number[], actor: SupplierClaimActor) {
   if (!claimIds.length || claimIds.some(id => !Number.isSafeInteger(id) || id <= 0)) {
     throw claimRouteError("أرقام الكشوف غير صحيحة", 400);
   }
@@ -2006,46 +2004,51 @@ function reserveClaimsForPrinting(claimIds: number[], actor: SupplierClaimActor)
     throw claimRouteError("يوجد رقم كشف مكرر في الطلب", 400);
   }
 
-  return db.transaction(() => {
-    const placeholders = claimIds.map(() => "?").join(",");
-    const claims = db.prepare(`
+  const placeholders = claimIds.map(() => "?").join(",");
+  const claims = await queryAll<Record<string, unknown>>(`
       SELECT * FROM supplier_reimbursement_claims
       WHERE id IN (${placeholders})
-    `).all(...claimIds) as Array<Record<string, unknown>>;
-    if (claims.length !== claimIds.length) {
-      throw claimRouteError("بعض الكشوف غير موجودة", 404);
-    }
-    if (claims.some(claim => Number(claim.is_cancelled))) {
-      throw claimRouteError("لا يمكن طباعة كشف ملغي", 409);
-    }
-    if (claims.some(claim => Number(claim.is_printed))) {
-      throw claimRouteError("سبق طباعة أحد هذه الكشوف. ألغِه وأنشئ كشفاً جديداً إذا لزم.", 409);
-    }
+    `, ...claimIds);
+  if (claims.length !== claimIds.length) {
+    throw claimRouteError("بعض الكشوف غير موجودة", 404);
+  }
+  if (claims.some(claim => Number(claim.is_cancelled))) {
+    throw claimRouteError("لا يمكن طباعة كشف ملغي", 409);
+  }
+  if (claims.some(claim => Number(claim.is_printed))) {
+    throw claimRouteError("سبق طباعة أحد هذه الكشوف. ألغِه وأنشئ كشفاً جديداً إذا لزم.", 409);
+  }
 
-    const update = db.prepare(`
-      UPDATE supplier_reimbursement_claims
-      SET is_printed=1, printed_at=COALESCE(printed_at, datetime('now'))
-      WHERE id=? AND COALESCE(is_printed,0)=0 AND COALESCE(is_cancelled,0)=0
-    `);
-    const hasPrintHistory = db.prepare(`
-      SELECT 1 FROM supplier_reimbursement_claim_print_events
-      WHERE claim_id=? LIMIT 1
-    `);
-    const insertPrintEvent = db.prepare(`
-      INSERT INTO supplier_reimbursement_claim_print_events
-        (claim_id, event_type, actor_user_id, actor_name)
-      VALUES (?, ?, ?, ?)
-    `);
-    const claimsById = new Map(claims.map(claim => [Number(claim.id), claim]));
-    for (const id of claimIds) {
-      if (update.run(id).changes !== 1) {
-        throw claimRouteError("تغيّرت حالة أحد الكشوف. حدّث القائمة وحاول مرة أخرى.", 409);
-      }
-      const claim = claimsById.get(id);
-      const alreadyPrinted = Boolean(hasPrintHistory.get(id)) || Boolean(claim?.printed_at);
-      insertPrintEvent.run(id, alreadyPrinted ? "reprint" : "original", actor.id, actor.name);
+  const history = await queryAll<{ claim_id: number }>(
+    `SELECT DISTINCT claim_id FROM supplier_reimbursement_claim_print_events WHERE claim_id IN (${placeholders})`,
+    ...claimIds,
+  );
+  const printedBefore = new Set(history.map(row => Number(row.claim_id)));
+  const claimsById = new Map(claims.map(claim => [Number(claim.id), claim]));
+  const operations = claimIds.flatMap(id => {
+    const claim = claimsById.get(id);
+    const alreadyPrinted = printedBefore.has(id) || Boolean(claim?.printed_at);
+    return [
+      {
+        sql: `UPDATE supplier_reimbursement_claims
+          SET is_printed=1, printed_at=COALESCE(printed_at, datetime('now'))
+          WHERE id=? AND COALESCE(is_printed,0)=0 AND COALESCE(is_cancelled,0)=0`,
+        params: [id],
+      },
+      {
+        sql: `INSERT INTO supplier_reimbursement_claim_print_events
+          (claim_id, event_type, actor_user_id, actor_name) VALUES (?, ?, ?, ?)`,
+        params: [id, alreadyPrinted ? "reprint" : "original", actor.id, actor.name],
+      },
+    ];
+  });
+  const results = await executeBatch(operations);
+  for (let index = 0; index < claimIds.length; index++) {
+    if (results[index * 2]?.changes !== 1) {
+      throw claimRouteError("تغيّرت حالة أحد الكشوف. حدّث القائمة وحاول مرة أخرى.", 409);
     }
-    return db.prepare(`
+  }
+  return queryAll(`
       SELECT c.*,
         (SELECT actor_name FROM supplier_reimbursement_claim_print_events e
          WHERE e.claim_id=c.id AND e.event_type='original' ORDER BY e.id LIMIT 1) AS original_printed_by,
@@ -2056,14 +2059,13 @@ function reserveClaimsForPrinting(claimIds: number[], actor: SupplierClaimActor)
       FROM supplier_reimbursement_claims c
       WHERE c.id IN (${placeholders})
       ORDER BY c.sequence_no, c.id
-    `).all(...claimIds);
-  })();
+    `, ...claimIds);
 }
 
-router.get("/supplier-reimbursement-claims", (req, res) => {
+router.get("/supplier-reimbursement-claims", async (req, res) => {
   const { created_by, printed } = req.query as Record<string, string>;
   const printArchiveActor = printed === "true"
-    ? requireSupplierClaimActor(req, res)
+    ? await requireSupplierClaimActor(req, res)
     : null;
   if (printed === "true" && !printArchiveActor) return;
   let sql = `
@@ -2087,10 +2089,11 @@ router.get("/supplier-reimbursement-claims", (req, res) => {
     params.push(created_by);
   }
   sql += " ORDER BY c.sequence_no DESC, c.id DESC";
-  res.json(db.prepare(sql).all(...params));
+  res.json(await queryAll(sql, ...params));
 });
 
-router.post("/supplier-reimbursement-claims", (req, res) => {
+router.post("/supplier-reimbursement-claims", async (req, res) => {
+  const actor = await getSupplierClaimActor(req);
   const body = req.body as { invoice_ids?: unknown; notes?: unknown; created_by?: unknown };
   if (!Array.isArray(body.invoice_ids) || body.invoice_ids.length === 0)
     return void res.status(400).json({ error: "لا توجد فواتير محددة" });
@@ -2101,58 +2104,56 @@ router.post("/supplier-reimbursement-claims", (req, res) => {
   }
 
   try {
-    const created = db.transaction(() => {
-      const placeholders = invoiceIds.map(() => "?").join(",");
-      const invoices = db.prepare(`
+    const placeholders = invoiceIds.map(() => "?").join(",");
+    const invoices = await queryAll<Record<string, unknown>>(`
         SELECT * FROM purchase_invoices
         WHERE id IN (${placeholders})
         ORDER BY invoice_date, id
-      `).all(...invoiceIds) as Array<Record<string, unknown>>;
-      if (invoices.length !== invoiceIds.length) {
-        throw claimRouteError("بعض الفواتير لم تعد موجودة. حدّث القائمة وحاول مرة أخرى.", 409);
-      }
-      if (invoices.some(invoice => invoice.reimbursement_claim_id != null && Number(invoice.reimbursement_claim_id) !== 0)) {
-        throw claimRouteError("سبق إدراج إحدى الفواتير في كشف آخر. حدّث القائمة قبل إنشاء كشف جديد.", 409);
-      }
+      `, ...invoiceIds);
+    if (invoices.length !== invoiceIds.length) {
+      throw claimRouteError("بعض الفواتير لم تعد موجودة. حدّث القائمة وحاول مرة أخرى.", 409);
+    }
+    if (invoices.some(invoice => invoice.reimbursement_claim_id != null && Number(invoice.reimbursement_claim_id) !== 0)) {
+      throw claimRouteError("سبق إدراج إحدى الفواتير في كشف آخر. حدّث القائمة قبل إنشاء كشف جديد.", 409);
+    }
 
-      const branches = [...new Set(invoices.map(invoice => String(invoice.branch || "بدون فرع").trim() || "بدون فرع"))];
-      if (branches.length !== 1) {
-        throw claimRouteError("لا يمكن جمع فواتير أكثر من فرع في كشف واحد", 400);
-      }
+    const branches = [...new Set(invoices.map(invoice => String(invoice.branch || "بدون فرع").trim() || "بدون فرع"))];
+    if (branches.length !== 1) {
+      throw claimRouteError("لا يمكن جمع فواتير أكثر من فرع في كشف واحد", 400);
+    }
 
-      const total_before_vat = invoices.reduce((sum, invoice) =>
-        sum + (Number(invoice.quantity) || 0) * (Number(invoice.price_before_vat) || 0), 0);
-      const total_after_vat = invoices.reduce((sum, invoice) =>
-        sum + (Number(invoice.quantity) || 0) * (Number(invoice.price_after_vat) || 0), 0);
-      const sequenceNo = Number((db.prepare(
-        "SELECT COALESCE(MAX(sequence_no),0)+1 AS next FROM supplier_reimbursement_claims"
-      ).get() as { next: number }).next);
-      const claimNumber = `RCLAIM-${String(sequenceNo).padStart(6, "0")}`;
-      const actor = getSupplierClaimActor(req);
-      const createdBy = actor?.name ||
-        (typeof body.created_by === "string" ? body.created_by.trim().slice(0, 120) : "");
-      const notes = typeof body.notes === "string" ? body.notes.trim().slice(0, 2000) : "";
-      const insert = db.prepare(`
+    const total_before_vat = invoices.reduce((sum, invoice) =>
+      sum + (Number(invoice.quantity) || 0) * (Number(invoice.price_before_vat) || 0), 0);
+    const total_after_vat = invoices.reduce((sum, invoice) =>
+      sum + (Number(invoice.quantity) || 0) * (Number(invoice.price_after_vat) || 0), 0);
+    const next = await queryOne<{ next: number }>(
+      "SELECT COALESCE(MAX(sequence_no),0)+1 AS next FROM supplier_reimbursement_claims",
+    );
+    const sequenceNo = Number(next?.next || 1);
+    const claimNumber = `RCLAIM-${String(sequenceNo).padStart(6, "0")}`;
+    const createdBy = actor?.name ||
+      (typeof body.created_by === "string" ? body.created_by.trim().slice(0, 120) : "");
+    const notes = typeof body.notes === "string" ? body.notes.trim().slice(0, 2000) : "";
+    const insert = await execute(`
         INSERT INTO supplier_reimbursement_claims
           (claim_number, sequence_no, created_by, branch, total_before_vat, total_after_vat, invoice_count, notes, items_snapshot_json)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        claimNumber, sequenceNo, createdBy || null, branches[0], total_before_vat,
-        total_after_vat, invoices.length, notes || null, JSON.stringify(invoices),
-      );
-      const claimId = Number(insert.lastInsertRowid);
-      const updateInvoice = db.prepare(`
-        UPDATE purchase_invoices
-        SET reimbursement_claim_id=?
-        WHERE id=? AND (reimbursement_claim_id IS NULL OR reimbursement_claim_id=0)
-      `);
-      for (const id of invoiceIds) {
-        if (updateInvoice.run(claimId, id).changes !== 1) {
-          throw claimRouteError("سبق إدراج إحدى الفواتير في كشف آخر. لم يتم إنشاء الكشف.", 409);
-        }
-      }
-      return { id: claimId, claim_number: claimNumber, sequence_no: sequenceNo };
-    })();
+      `,
+      claimNumber, sequenceNo, createdBy || null, branches[0], total_before_vat,
+      total_after_vat, invoices.length, notes || null, JSON.stringify(invoices),
+    );
+    const claimId = Number(insert.lastInsertRowid);
+    const updates = await executeBatch(invoiceIds.map(id => ({
+      sql: `UPDATE purchase_invoices SET reimbursement_claim_id=?
+        WHERE id=? AND (reimbursement_claim_id IS NULL OR reimbursement_claim_id=0)`,
+      params: [claimId, id],
+    })));
+    if (updates.some(result => result.changes !== 1)) {
+      await execute("UPDATE purchase_invoices SET reimbursement_claim_id=NULL WHERE reimbursement_claim_id=?", claimId);
+      await execute("DELETE FROM supplier_reimbursement_claims WHERE id=?", claimId);
+      throw claimRouteError("سبق إدراج إحدى الفواتير في كشف آخر. لم يتم إنشاء الكشف.", 409);
+    }
+    const created = { id: claimId, claim_number: claimNumber, sequence_no: sequenceNo };
     res.status(201).json({ ok: true, ...created });
   } catch (error) {
     const routeError = error as ClaimRouteError;
@@ -2160,8 +2161,8 @@ router.post("/supplier-reimbursement-claims", (req, res) => {
   }
 });
 
-router.post("/supplier-reimbursement-claims/bulk", (req, res) => {
-  const actor = requireSupplierClaimActor(req, res, true);
+router.post("/supplier-reimbursement-claims/bulk", async (req, res) => {
+  const actor = await requireSupplierClaimActor(req, res, true);
   if (!actor) return;
   const body = req.body as { invoice_ids?: unknown };
   if (!Array.isArray(body.invoice_ids) || body.invoice_ids.length === 0) {
@@ -2179,19 +2180,18 @@ router.post("/supplier-reimbursement-claims/bulk", (req, res) => {
   }
 
   try {
-    const claims = db.transaction(() => {
-      const placeholders = invoiceIds.map(() => "?").join(",");
-      const invoices = db.prepare(`
+    const placeholders = invoiceIds.map(() => "?").join(",");
+    const invoices = await queryAll<Record<string, unknown>>(`
         SELECT * FROM purchase_invoices
         WHERE id IN (${placeholders})
         ORDER BY invoice_date, id
-      `).all(...invoiceIds) as Array<Record<string, unknown>>;
-      if (invoices.length !== invoiceIds.length) {
-        throw claimRouteError("بعض الفواتير لم تعد موجودة. حدّث القائمة وحاول مرة أخرى.", 409);
-      }
-      if (invoices.some(invoice => invoice.reimbursement_claim_id != null && Number(invoice.reimbursement_claim_id) !== 0)) {
-        throw claimRouteError("سبق إدراج إحدى الفواتير في كشف آخر. حدّث القائمة وحاول مرة أخرى.", 409);
-      }
+      `, ...invoiceIds);
+    if (invoices.length !== invoiceIds.length) {
+      throw claimRouteError("بعض الفواتير لم تعد موجودة. حدّث القائمة وحاول مرة أخرى.", 409);
+    }
+    if (invoices.some(invoice => invoice.reimbursement_claim_id != null && Number(invoice.reimbursement_claim_id) !== 0)) {
+      throw claimRouteError("سبق إدراج إحدى الفواتير في كشف آخر. حدّث القائمة وحاول مرة أخرى.", 409);
+    }
 
       const byBranch = new Map<string, Array<Record<string, unknown>>>();
       for (const invoice of invoices) {
@@ -2200,16 +2200,10 @@ router.post("/supplier-reimbursement-claims/bulk", (req, res) => {
       }
 
       const created: Array<Record<string, unknown>> = [];
-      const insertClaim = db.prepare(`
-        INSERT INTO supplier_reimbursement_claims
-          (claim_number, sequence_no, created_by, branch, total_before_vat, total_after_vat,
-           invoice_count, items_snapshot_json)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `);
-      const updateInvoice = db.prepare(`
-        UPDATE purchase_invoices SET reimbursement_claim_id=?
-        WHERE id=? AND (reimbursement_claim_id IS NULL OR reimbursement_claim_id=0)
-      `);
+      const next = await queryOne<{ next: number }>(
+        "SELECT COALESCE(MAX(sequence_no),0)+1 AS next FROM supplier_reimbursement_claims",
+      );
+      let sequenceNo = Number(next?.next || 1);
 
       for (const [branch, branchInvoices] of byBranch) {
         const totalBeforeVat = branchInvoices.reduce(
@@ -2220,37 +2214,42 @@ router.post("/supplier-reimbursement-claims/bulk", (req, res) => {
           (sum, invoice) => sum + (Number(invoice.quantity) || 0) * (Number(invoice.price_after_vat) || 0),
           0,
         );
-        const sequenceNo = Number((db.prepare(
-          "SELECT COALESCE(MAX(sequence_no),0)+1 AS next FROM supplier_reimbursement_claims"
-        ).get() as { next: number }).next);
-        const claimNumber = `RCLAIM-${String(sequenceNo).padStart(6, "0")}`;
-        const result = insertClaim.run(
-          claimNumber, sequenceNo, actor.name, branch, totalBeforeVat,
+        const currentSequence = sequenceNo++;
+        const claimNumber = `RCLAIM-${String(currentSequence).padStart(6, "0")}`;
+        const result = await execute(`
+          INSERT INTO supplier_reimbursement_claims
+            (claim_number, sequence_no, created_by, branch, total_before_vat, total_after_vat,
+             invoice_count, items_snapshot_json)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+          claimNumber, currentSequence, actor.name, branch, totalBeforeVat,
           totalAfterVat, branchInvoices.length, JSON.stringify(branchInvoices),
         );
         const claimId = Number(result.lastInsertRowid);
-        for (const invoice of branchInvoices) {
-          if (updateInvoice.run(claimId, invoice.id).changes !== 1) {
-            throw claimRouteError("سبق إدراج إحدى الفواتير في كشف آخر. لم يتم إنشاء الكشوف.", 409);
-          }
+        const updates = await executeBatch(branchInvoices.map(invoice => ({
+          sql: `UPDATE purchase_invoices SET reimbursement_claim_id=?
+            WHERE id=? AND (reimbursement_claim_id IS NULL OR reimbursement_claim_id=0)`,
+          params: [claimId, invoice.id],
+        })));
+        if (updates.some(update => update.changes !== 1)) {
+          await execute("UPDATE purchase_invoices SET reimbursement_claim_id=NULL WHERE reimbursement_claim_id=?", claimId);
+          await execute("DELETE FROM supplier_reimbursement_claims WHERE id=?", claimId);
+          throw claimRouteError("سبق إدراج إحدى الفواتير في كشف آخر. لم يتم إنشاء الكشوف.", 409);
         }
-        created.push(db.prepare(
-          "SELECT * FROM supplier_reimbursement_claims WHERE id=?"
-        ).get(claimId) as Record<string, unknown>);
+        const claim = await queryOne<Record<string, unknown>>("SELECT * FROM supplier_reimbursement_claims WHERE id=?", claimId);
+        if (claim) created.push(claim);
       }
-      return created;
-    })();
-    res.status(201).json({ ok: true, claims });
+    res.status(201).json({ ok: true, claims: created });
   } catch (error) {
     const routeError = error as ClaimRouteError;
     res.status(routeError.statusCode || 500).json({ error: routeError.message || "تعذر إنشاء الكشوف" });
   }
 });
 
-router.get("/supplier-reimbursement-claims/:id/invoices", (req, res) => {
-  const claim = db.prepare(
+router.get("/supplier-reimbursement-claims/:id/invoices", async (req, res) => {
+  const claim = await queryOne<{ items_snapshot_json: string | null }>(
     "SELECT items_snapshot_json FROM supplier_reimbursement_claims WHERE id=?"
-  ).get(req.params.id) as { items_snapshot_json: string | null } | undefined;
+  , req.params.id);
   if (!claim) return void res.status(404).json({ error: "الكشف غير موجود" });
   if (claim.items_snapshot_json) {
     try {
@@ -2260,31 +2259,29 @@ router.get("/supplier-reimbursement-claims/:id/invoices", (req, res) => {
       return void res.status(500).json({ error: "تعذر قراءة نسخة فواتير الكشف" });
     }
   }
-  const rows = db.prepare("SELECT * FROM purchase_invoices WHERE reimbursement_claim_id = ? ORDER BY invoice_date, id").all(req.params.id);
+  const rows = await queryAll("SELECT * FROM purchase_invoices WHERE reimbursement_claim_id = ? ORDER BY invoice_date, id", req.params.id);
   return void res.json(rows);
 });
 
-router.patch("/supplier-reimbursement-claims/:id/signature-settings", (req, res) => {
+router.patch("/supplier-reimbursement-claims/:id/signature-settings", async (req, res) => {
   const claimId = Number(req.params.id);
   const includeDriverSignatures = (req.body as { include_driver_signatures?: unknown }).include_driver_signatures;
   if (!Number.isSafeInteger(claimId) || claimId <= 0 || typeof includeDriverSignatures !== "boolean") {
     return void res.status(400).json({ error: "اختيار توقيعات السائقين غير صحيح" });
   }
   try {
-    db.transaction(() => {
-      const claim = db.prepare(
-        "SELECT is_printed, is_cancelled FROM supplier_reimbursement_claims WHERE id=?"
-      ).get(claimId) as { is_printed: number; is_cancelled: number } | undefined;
-      if (!claim) throw claimRouteError("الكشف غير موجود", 404);
-      if (Number(claim.is_printed) || Number(claim.is_cancelled)) {
-        throw claimRouteError("لا يمكن تغيير خيارات كشف مطبوع أو ملغي", 409);
-      }
-      const update = db.prepare(`
+    const claim = await queryOne<{ is_printed: number; is_cancelled: number }>(
+      "SELECT is_printed, is_cancelled FROM supplier_reimbursement_claims WHERE id=?", claimId,
+    );
+    if (!claim) throw claimRouteError("الكشف غير موجود", 404);
+    if (Number(claim.is_printed) || Number(claim.is_cancelled)) {
+      throw claimRouteError("لا يمكن تغيير خيارات كشف مطبوع أو ملغي", 409);
+    }
+    const update = await execute(`
         UPDATE supplier_reimbursement_claims SET include_driver_signatures=?
         WHERE id=? AND COALESCE(is_printed,0)=0 AND COALESCE(is_cancelled,0)=0
-      `).run(includeDriverSignatures ? 1 : 0, claimId);
-      if (update.changes !== 1) throw claimRouteError("تغيّرت حالة الكشف. حدّث القائمة وحاول مرة أخرى.", 409);
-    })();
+      `, includeDriverSignatures ? 1 : 0, claimId);
+    if (update.changes !== 1) throw claimRouteError("تغيّرت حالة الكشف. حدّث القائمة وحاول مرة أخرى.", 409);
     res.json({ ok: true, include_driver_signatures: includeDriverSignatures });
   } catch (error) {
     const routeError = error as ClaimRouteError;
@@ -2292,14 +2289,14 @@ router.patch("/supplier-reimbursement-claims/:id/signature-settings", (req, res)
   }
 });
 
-router.post("/supplier-reimbursement-claims/mark-printed", (req, res) => {
-  const actor = requireSupplierClaimActor(req, res);
+router.post("/supplier-reimbursement-claims/mark-printed", async (req, res) => {
+  const actor = await requireSupplierClaimActor(req, res);
   if (!actor) return;
   const body = req.body as { ids?: unknown };
   if (!Array.isArray(body.ids)) return void res.status(400).json({ error: "أرقام الكشوف مطلوبة" });
   const claimIds = body.ids.map(Number);
   try {
-    const claims = reserveClaimsForPrinting(claimIds, actor);
+    const claims = await reserveClaimsForPrinting(claimIds, actor);
     res.json({ ok: true, claims });
   } catch (error) {
     const routeError = error as ClaimRouteError;
@@ -2307,11 +2304,11 @@ router.post("/supplier-reimbursement-claims/mark-printed", (req, res) => {
   }
 });
 
-router.patch("/supplier-reimbursement-claims/:id/mark-printed", (req, res) => {
-  const actor = requireSupplierClaimActor(req, res);
+router.patch("/supplier-reimbursement-claims/:id/mark-printed", async (req, res) => {
+  const actor = await requireSupplierClaimActor(req, res);
   if (!actor) return;
   try {
-    const claim = reserveClaimsForPrinting([Number(req.params.id)], actor)[0];
+    const claim = (await reserveClaimsForPrinting([Number(req.params.id)], actor))[0];
     res.json({ ok: true, claim });
   } catch (error) {
     const routeError = error as ClaimRouteError;
@@ -2319,8 +2316,8 @@ router.patch("/supplier-reimbursement-claims/:id/mark-printed", (req, res) => {
   }
 });
 
-router.post("/supplier-reimbursement-claims/:id/reprint", (req, res) => {
-  const actor = requireSupplierClaimActor(req, res, true);
+router.post("/supplier-reimbursement-claims/:id/reprint", async (req, res) => {
+  const actor = await requireSupplierClaimActor(req, res, true);
   if (!actor) return;
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const claimId = Number(rawId);
@@ -2330,23 +2327,23 @@ router.post("/supplier-reimbursement-claims/:id/reprint", (req, res) => {
   }
 
   try {
-    const result = db.transaction(() => {
-      const claim = db.prepare(
-        "SELECT * FROM supplier_reimbursement_claims WHERE id=?"
-      ).get(claimId) as Record<string, unknown> | undefined;
-      if (!claim) throw claimRouteError("الكشف غير موجود", 404);
-      if (!Number(claim.is_printed)) {
-        throw claimRouteError("إعادة الطباعة متاحة للكشوف المطبوعة فقط", 409);
-      }
-      const eventId = Number(db.prepare(`
+    const claim = await queryOne<Record<string, unknown>>(
+      "SELECT * FROM supplier_reimbursement_claims WHERE id=?", claimId,
+    );
+    if (!claim) throw claimRouteError("الكشف غير موجود", 404);
+    if (!Number(claim.is_printed)) {
+      throw claimRouteError("إعادة الطباعة متاحة للكشوف المطبوعة فقط", 409);
+    }
+    const eventResult = await execute(`
         INSERT INTO supplier_reimbursement_claim_print_events
           (claim_id, event_type, actor_user_id, actor_name)
         VALUES (?, 'reprint', ?, ?)
-      `).run(claimId, actor.id, actor.name).lastInsertRowid);
-      const event = db.prepare(
+      `, claimId, actor.id, actor.name);
+    const eventId = Number(eventResult.lastInsertRowid);
+    const event = await queryOne(
         "SELECT id, claim_id, event_type, actor_user_id, actor_name, printed_at FROM supplier_reimbursement_claim_print_events WHERE id=?"
-      ).get(eventId);
-      const updatedClaim = db.prepare(`
+      , eventId);
+    const updatedClaim = await queryOne(`
         SELECT c.*,
           (SELECT actor_name FROM supplier_reimbursement_claim_print_events e
            WHERE e.claim_id=c.id AND e.event_type='original' ORDER BY e.id LIMIT 1) AS original_printed_by,
@@ -2355,9 +2352,8 @@ router.post("/supplier-reimbursement-claims/:id/reprint", (req, res) => {
           (SELECT printed_at FROM supplier_reimbursement_claim_print_events e
            WHERE e.claim_id=c.id AND e.event_type='reprint' ORDER BY e.id DESC LIMIT 1) AS last_reprinted_at
         FROM supplier_reimbursement_claims c WHERE c.id=?
-      `).get(claimId);
-      return { event, claim: updatedClaim };
-    })();
+      `, claimId);
+    const result = { event, claim: updatedClaim };
     res.json({ ok: true, ...result });
   } catch (error) {
     const routeError = error as ClaimRouteError;
@@ -2365,8 +2361,8 @@ router.post("/supplier-reimbursement-claims/:id/reprint", (req, res) => {
   }
 });
 
-router.patch("/supplier-reimbursement-claims/:id/cancel-print", (req, res) => {
-  const actor = requireSupplierClaimActor(req, res);
+router.patch("/supplier-reimbursement-claims/:id/cancel-print", async (req, res) => {
+  const actor = await requireSupplierClaimActor(req, res);
   if (!actor) return;
   const rawId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const claimId = Number(rawId);
@@ -2376,38 +2372,36 @@ router.patch("/supplier-reimbursement-claims/:id/cancel-print", (req, res) => {
   }
 
   try {
-    const claim = db.transaction(() => {
-      const current = db.prepare(`
+    const current = await queryOne<{
+      id: number;
+      created_by: string;
+      is_printed: number;
+      is_cancelled: number;
+      printed_at: string | null;
+    }>(`
         SELECT id, created_by, is_printed, is_cancelled, printed_at
         FROM supplier_reimbursement_claims WHERE id=?
-      `).get(claimId) as {
-        id: number;
-        created_by: string;
-        is_printed: number;
-        is_cancelled: number;
-        printed_at: string | null;
-      } | undefined;
-      if (!current) throw claimRouteError("الكشف غير موجود", 404);
-      if (actor.role !== "admin" && current.created_by !== actor.name) {
-        throw claimRouteError("لا تملك صلاحية إلغاء طباعة هذا الكشف", 403);
-      }
-      if (Number(current.is_cancelled)) {
-        throw claimRouteError("لا يمكن إلغاء طباعة كشف ملغي", 409);
-      }
-      if (!Number(current.is_printed)) {
-        throw claimRouteError("الكشف غير مطبوع بالفعل", 409);
-      }
+      `, claimId);
+    if (!current) throw claimRouteError("الكشف غير موجود", 404);
+    if (actor.role !== "admin" && current.created_by !== actor.name) {
+      throw claimRouteError("لا تملك صلاحية إلغاء طباعة هذا الكشف", 403);
+    }
+    if (Number(current.is_cancelled)) {
+      throw claimRouteError("لا يمكن إلغاء طباعة كشف ملغي", 409);
+    }
+    if (!Number(current.is_printed)) {
+      throw claimRouteError("الكشف غير مطبوع بالفعل", 409);
+    }
 
-      const update = db.prepare(`
+    const update = await execute(`
         UPDATE supplier_reimbursement_claims
         SET is_printed=0
         WHERE id=? AND COALESCE(is_printed,0)=1 AND COALESCE(is_cancelled,0)=0
-      `).run(claimId);
-      if (update.changes !== 1) {
-        throw claimRouteError("تغيّرت حالة الكشف. حدّث القائمة وحاول مرة أخرى.", 409);
-      }
-      return { id: current.id, is_printed: 0, printed_at: current.printed_at };
-    })();
+      `, claimId);
+    if (update.changes !== 1) {
+      throw claimRouteError("تغيّرت حالة الكشف. حدّث القائمة وحاول مرة أخرى.", 409);
+    }
+    const claim = { id: current.id, is_printed: 0, printed_at: current.printed_at };
     res.json({ ok: true, claim });
   } catch (error) {
     const routeError = error as ClaimRouteError;
@@ -2415,37 +2409,38 @@ router.patch("/supplier-reimbursement-claims/:id/cancel-print", (req, res) => {
   }
 });
 
-const cancelSupplierClaim = (req: Request, res: Response) => {
+const cancelSupplierClaim = async (req: Request, res: Response) => {
   const claimId = Number(req.params.id);
   if (!Number.isSafeInteger(claimId) || claimId <= 0) return void res.status(400).json({ error: "رقم الكشف غير صحيح" });
   const body = (req.body || {}) as { cancelled_by?: unknown };
   const cancelledBy = typeof body.cancelled_by === "string" ? body.cancelled_by.trim().slice(0, 120) : "";
   try {
-    const result = db.transaction(() => {
-      const claim = db.prepare(`
+    const claim = await queryOne<{ id: number; is_cancelled: number; items_snapshot_json: string | null }>(`
         SELECT id, is_cancelled, items_snapshot_json
         FROM supplier_reimbursement_claims WHERE id=?
-      `).get(claimId) as { id: number; is_cancelled: number; items_snapshot_json: string | null } | undefined;
-      if (!claim) throw claimRouteError("الكشف غير موجود", 404);
-      if (Number(claim.is_cancelled)) throw claimRouteError("الكشف ملغي بالفعل", 409);
+      `, claimId);
+    if (!claim) throw claimRouteError("الكشف غير موجود", 404);
+    if (Number(claim.is_cancelled)) throw claimRouteError("الكشف ملغي بالفعل", 409);
 
-      const linkedInvoices = db.prepare(`
+    const linkedInvoices = await queryAll<Record<string, unknown>>(`
         SELECT * FROM purchase_invoices
         WHERE reimbursement_claim_id=?
         ORDER BY invoice_date, id
-      `).all(claimId) as Array<Record<string, unknown>>;
-      const existingSnapshot = claim.items_snapshot_json?.trim();
-      const snapshotToSave = existingSnapshot || JSON.stringify(linkedInvoices);
-      db.prepare(`
+      `, claimId);
+    const existingSnapshot = claim.items_snapshot_json?.trim();
+    const snapshotToSave = existingSnapshot || JSON.stringify(linkedInvoices);
+    const results = await executeBatch([{
+      sql: `
         UPDATE supplier_reimbursement_claims
         SET is_cancelled=1, cancelled_at=datetime('now'), cancelled_by=?, items_snapshot_json=?
         WHERE id=?
-      `).run(cancelledBy || null, snapshotToSave, claimId);
-      const released = db.prepare(
-        "UPDATE purchase_invoices SET reimbursement_claim_id=NULL WHERE reimbursement_claim_id=?"
-      ).run(claimId);
-      return { released_count: released.changes };
-    })();
+      `,
+      params: [cancelledBy || null, snapshotToSave, claimId],
+    }, {
+      sql: "UPDATE purchase_invoices SET reimbursement_claim_id=NULL WHERE reimbursement_claim_id=?",
+      params: [claimId],
+    }]);
+    const result = { released_count: results[1]?.changes ?? 0 };
     res.json({ ok: true, ...result });
   } catch (error) {
     const routeError = error as ClaimRouteError;

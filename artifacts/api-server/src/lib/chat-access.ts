@@ -1,4 +1,4 @@
-import db from "./db.js";
+import { queryAll, queryOne } from "./erp-sql.js";
 
 export const CHAT_CUSTOMER_ROLES = ["customer", "rental_trip_customer"] as const;
 export const CHAT_CUSTOMER_CATEGORIES = [
@@ -35,30 +35,30 @@ export function isChatContactRole(role: string): boolean {
   return role === "rep" || role === "supervisor";
 }
 
-export function listChatStaffContacts(): ChatCustomerAccount[] {
-  return db.prepare(`
+export function listChatStaffContacts(): Promise<ChatCustomerAccount[]> {
+  return queryAll<ChatCustomerAccount>(`
     SELECT id, name, phone, role
     FROM users
     WHERE active=1 AND COALESCE(approval_status,'approved')='approved'
       AND role IN ('rep','supervisor')
     ORDER BY name COLLATE NOCASE
-  `).all() as ChatCustomerAccount[];
+  `);
 }
 
-export function listChatCustomerAccounts(): ChatCustomerAccount[] {
-  return db.prepare(`
+export function listChatCustomerAccounts(): Promise<ChatCustomerAccount[]> {
+  return queryAll<ChatCustomerAccount>(`
     SELECT id, name, phone, role
     FROM users
     WHERE active=1 AND COALESCE(approval_status,'approved')='approved'
       AND role IN ('customer','rental_trip_customer')
     ORDER BY name COLLATE NOCASE
-  `).all() as ChatCustomerAccount[];
+  `);
 }
 
-export function getChatCustomerCategory(
+export async function getChatCustomerCategory(
   customer: Pick<ChatCustomerAccount, "id" | "phone" | "role">,
-): ChatCustomerCategory | null {
-  const row = db.prepare(`
+): Promise<ChatCustomerCategory | null> {
+  const row = await queryOne<{ customer_type: string }>(`
     SELECT customer_type
     FROM rental_customers
     WHERE active=1 AND (
@@ -66,54 +66,54 @@ export function getChatCustomerCategory(
     )
     ORDER BY CASE WHEN portal_user_id=? THEN 0 ELSE 1 END, id DESC
     LIMIT 1
-  `).get(customer.id, customer.phone, customer.id) as { customer_type: string } | undefined;
+  `, customer.id, customer.phone, customer.id);
   if (row?.customer_type === "company" || row?.customer_type === "rental") {
     return row.customer_type;
   }
   return customer.role === "rental_trip_customer" ? "rental" : null;
 }
 
-export function getDefaultCustomerChatContactIds(customerPhone: string): number[] {
-  const order = db.prepare(`
+export async function getDefaultCustomerChatContactIds(customerPhone: string): Promise<number[]> {
+  const order = await queryOne<{ rep_id: number | null; supervisor_id: number | null }>(`
     SELECT rep_id, supervisor_id
     FROM workflow_orders
     WHERE customer_phone=? AND COALESCE(stage,'')<>'cancelled'
     ORDER BY COALESCE(created_at,'') DESC, id DESC
     LIMIT 1
-  `).get(customerPhone) as { rep_id: number | null; supervisor_id: number | null } | undefined;
+  `, customerPhone);
   if (!order) return [];
   return getActiveChatContactIds([order.rep_id, order.supervisor_id]);
 }
 
-function getActiveChatContactIds(ids: Array<number | null | undefined>): number[] {
+async function getActiveChatContactIds(ids: Array<number | null | undefined>): Promise<number[]> {
   const uniqueIds = [...new Set(ids.filter((id): id is number => Number.isInteger(id) && Number(id) > 0))];
   if (uniqueIds.length === 0) return [];
   const placeholders = uniqueIds.map(() => "?").join(",");
-  const rows = db.prepare(`
+  const rows = await queryAll<{ id: number }>(`
     SELECT id FROM users
     WHERE id IN (${placeholders})
       AND role IN ('rep','supervisor')
       AND active=1 AND COALESCE(approval_status,'approved')='approved'
-  `).all(...uniqueIds) as Array<{ id: number }>;
+  `, ...uniqueIds);
   return rows.map(row => row.id);
 }
 
-function getRulesForCustomer(customerUserId: number): ChatAccessRule[] {
-  return db.prepare(`
+function getRulesForCustomer(customerUserId: number): Promise<ChatAccessRule[]> {
+  return queryAll<ChatAccessRule>(`
     SELECT contact_user_id, effect
     FROM chat_customer_direct_rules
     WHERE customer_user_id=?
     ORDER BY contact_user_id
-  `).all(customerUserId) as ChatAccessRule[];
+  `, customerUserId);
 }
 
-function getRulesForCategory(category: ChatCustomerCategory): ChatAccessRule[] {
-  return db.prepare(`
+function getRulesForCategory(category: ChatCustomerCategory): Promise<ChatAccessRule[]> {
+  return queryAll<ChatAccessRule>(`
     SELECT contact_user_id, effect
     FROM chat_customer_category_rules
     WHERE category=?
     ORDER BY contact_user_id
-  `).all(category) as ChatAccessRule[];
+  `, category);
 }
 
 export interface CustomerChatPolicy {
@@ -124,19 +124,21 @@ export interface CustomerChatPolicy {
   allowed_contact_ids: number[];
 }
 
-export function getCustomerChatPolicy(customerUserId: number): CustomerChatPolicy | null {
-  const customer = db.prepare(`
+export async function getCustomerChatPolicy(customerUserId: number): Promise<CustomerChatPolicy | null> {
+  const customer = await queryOne<ChatAccountRow>(`
     SELECT id, name, phone, role, active, approval_status
     FROM users
     WHERE id=? AND role IN ('customer','rental_trip_customer')
       AND active=1 AND COALESCE(approval_status,'approved')='approved'
-  `).get(customerUserId) as ChatAccountRow | undefined;
+  `, customerUserId);
   if (!customer) return null;
 
-  const category = getChatCustomerCategory(customer);
-  const defaultContactIds = getDefaultCustomerChatContactIds(customer.phone);
-  const categoryRules = category ? getRulesForCategory(category) : [];
-  const customerRules = getRulesForCustomer(customer.id);
+  const category = await getChatCustomerCategory(customer);
+  const defaultContactIds = await getDefaultCustomerChatContactIds(customer.phone);
+  const [categoryRules, customerRules] = await Promise.all([
+    category ? getRulesForCategory(category) : Promise.resolve([]),
+    getRulesForCustomer(customer.id),
+  ]);
   const allowed = new Set(defaultContactIds);
 
   for (const rule of categoryRules) {
@@ -153,24 +155,24 @@ export function getCustomerChatPolicy(customerUserId: number): CustomerChatPolic
     default_contact_ids: defaultContactIds,
     category_rules: categoryRules,
     customer_rules: customerRules,
-    allowed_contact_ids: getActiveChatContactIds([...allowed]),
+    allowed_contact_ids: await getActiveChatContactIds([...allowed]),
   };
 }
 
-export function areChatUsersAllowed(userId: number, otherUserId: number): boolean {
+export async function areChatUsersAllowed(userId: number, otherUserId: number): Promise<boolean> {
   if (!Number.isInteger(userId) || !Number.isInteger(otherUserId) ||
       userId <= 0 || otherUserId <= 0 || userId === otherUserId) return false;
-  const users = db.prepare(`
-    SELECT id, phone, role, active, approval_status
-    FROM users
-    WHERE id IN (?,?)
-  `).all(userId, otherUserId) as Array<{
+  const users = await queryAll<{
     id: number;
     phone: string;
     role: string;
     active: number;
     approval_status: string | null;
-  }>;
+  }>(`
+    SELECT id, phone, role, active, approval_status
+    FROM users
+    WHERE id IN (?,?)
+  `, userId, otherUserId);
   if (users.length !== 2) return false;
 
   const first = users.find(user => user.id === userId)!;
@@ -186,32 +188,32 @@ export function areChatUsersAllowed(userId: number, otherUserId: number): boolea
     const customer = firstIsCustomer ? first : second;
     const staff = firstIsCustomer ? second : first;
     if (!isChatContactRole(staff.role)) return false;
-    const policy = getCustomerChatPolicy(customer.id);
+    const policy = await getCustomerChatPolicy(customer.id);
     return Boolean(policy?.allowed_contact_ids.includes(staff.id));
   }
 
   return true;
 }
 
-export function isChatConversationAllowed(conversationId: number, userId: number): boolean {
-  const conversation = db.prepare(`
+export async function isChatConversationAllowed(conversationId: number, userId: number): Promise<boolean> {
+  const conversation = await queryOne<{
+    user_low_id: number;
+    user_high_id: number;
+  }>(`
     SELECT user_low_id, user_high_id
     FROM chat_conversations
     WHERE id=? AND (user_low_id=? OR user_high_id=?)
-  `).get(conversationId, userId, userId) as {
-    user_low_id: number;
-    user_high_id: number;
-  } | undefined;
-  return Boolean(conversation && areChatUsersAllowed(
+  `, conversationId, userId, userId);
+  return Boolean(conversation && await areChatUsersAllowed(
     conversation.user_low_id,
     conversation.user_high_id,
   ));
 }
 
-export function getChatCategoryRules(category: ChatCustomerCategory): ChatAccessRule[] {
+export function getChatCategoryRules(category: ChatCustomerCategory): Promise<ChatAccessRule[]> {
   return getRulesForCategory(category);
 }
 
-export function getChatCustomerRules(customerUserId: number): ChatAccessRule[] {
+export function getChatCustomerRules(customerUserId: number): Promise<ChatAccessRule[]> {
   return getRulesForCustomer(customerUserId);
 }
