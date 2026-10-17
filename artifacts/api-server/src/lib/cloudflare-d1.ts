@@ -27,6 +27,24 @@ type CloudflareEnvelope<T> = {
   result?: D1QueryResult<T>[];
 };
 
+type WorkerD1Result<T> = {
+  results?: T[];
+  success: boolean;
+  meta?: D1QueryResult<T>["meta"];
+};
+
+type WorkerD1PreparedStatement = {
+  bind(...values: unknown[]): WorkerD1PreparedStatement;
+  all<T = Record<string, unknown>>(): Promise<WorkerD1Result<T>>;
+};
+
+type WorkerD1Database = {
+  prepare(sql: string): WorkerD1PreparedStatement;
+  batch<T = Record<string, unknown>>(
+    statements: WorkerD1PreparedStatement[],
+  ): Promise<WorkerD1Result<T>[]>;
+};
+
 export type ProductionD1Statement = {
   sql: string;
   params?: unknown[];
@@ -67,6 +85,34 @@ async function executeD1Request<T>(
   body: { sql: string; params: unknown[] } | { batch: Array<{ sql: string; params: unknown[] }> },
   description: string,
 ): Promise<D1QueryResult<T>[]> {
+  const workerEnv = (globalThis as typeof globalThis & {
+    __ERP_WORKER_ENV?: { ERP_DB?: WorkerD1Database; ERP_DB_REPLICA?: WorkerD1Database };
+  }).__ERP_WORKER_ENV;
+  if (workerEnv) {
+    const requestedId = validateDatabaseId(databaseId);
+    const boundDatabase = requestedId === getProductionD1DatabaseId()
+      ? workerEnv.ERP_DB
+      : requestedId === getD1ReplicaDatabaseId()
+        ? workerEnv.ERP_DB_REPLICA
+        : undefined;
+    if (!boundDatabase) {
+      throw new Error(`[cloudflare-d1] No Worker D1 binding is configured for ${description}`);
+    }
+
+    const result = "batch" in body
+      ? await boundDatabase.batch<T>(body.batch.map(statement =>
+          boundDatabase.prepare(statement.sql).bind(...statement.params)))
+      : [await boundDatabase.prepare(body.sql).bind(...body.params).all<T>()];
+    if (!result.length || result.some(item => !item.success)) {
+      throw new Error(`[cloudflare-d1] Worker D1 binding returned an unsuccessful ${description} result`);
+    }
+    return result.map(item => ({
+      results: item.results ?? [],
+      success: item.success,
+      meta: item.meta,
+    }));
+  }
+
   const connectors = new ReplitConnectors();
   const response = await connectors.proxy(
     "cloudflare",

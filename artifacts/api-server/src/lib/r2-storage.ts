@@ -50,6 +50,36 @@ export function isWorkerR2BindingConfigured(): boolean {
   return Boolean(workerR2Bucket());
 }
 
+export async function handleWorkerR2Upload(request: Request): Promise<Response | null> {
+  const url = new URL(request.url);
+  const match = url.pathname.match(
+    /^\/api\/storage\/r2-upload\/(uploads|branch-documents)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+  );
+  if (!match) return null;
+  if (request.method !== "PUT") return new Response("Method not allowed", { status: 405, headers: { Allow: "PUT" } });
+  const bucket = workerR2Bucket();
+  if (!bucket) return new Response("R2 binding is unavailable", { status: 503 });
+  if (!request.body) return new Response("Upload body is required", { status: 400 });
+
+  const metadata: NonNullable<WorkerR2Object["httpMetadata"]> = {};
+  const contentType = request.headers.get("content-type");
+  const cacheControl = request.headers.get("cache-control");
+  const contentDisposition = request.headers.get("content-disposition");
+  const contentEncoding = request.headers.get("content-encoding");
+  const contentLanguage = request.headers.get("content-language");
+  if (contentType) metadata.contentType = contentType;
+  if (cacheControl) metadata.cacheControl = cacheControl;
+  if (contentDisposition) metadata.contentDisposition = contentDisposition;
+  if (contentEncoding) metadata.contentEncoding = contentEncoding;
+  if (contentLanguage) metadata.contentLanguage = contentLanguage;
+
+  const stored = await bucket.put(`app-objects/${match[1]}/${match[2]}`, request.body, {
+    ...(Object.keys(metadata).length ? { httpMetadata: metadata } : {}),
+  });
+  if (!stored) return new Response("R2 upload failed", { status: 500 });
+  return new Response(null, { status: 200 });
+}
+
 function workerBodyAsNodeStream(body: ReadableStream<Uint8Array>): NonNullable<GetObjectCommandOutput["Body"]> {
   const stream = Readable.fromWeb(body);
   const transformToByteArray = async (): Promise<Uint8Array> => {
