@@ -1,4 +1,4 @@
-import { Storage, File } from "@google-cloud/storage";
+import type { File, Storage as GoogleStorage } from "@google-cloud/storage";
 import { Readable } from "stream";
 import { randomUUID } from "crypto";
 import {
@@ -14,7 +14,7 @@ import {
   issueHostingerUpload,
   resolveHostingerUploadPath,
 } from "./hostinger-filesystem-storage.js";
-import { isFilesystemStorageMode } from "./db-sync.js";
+import { isFilesystemStorageMode } from "./runtime-mode.js";
 import {
   createR2UploadUrl,
   deleteR2Object,
@@ -78,23 +78,30 @@ class R2StoredObject {
   }
 }
 
-export const objectStorageClient = new Storage({
-  credentials: {
-    audience: "replit",
-    subject_token_type: "access_token",
-    token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
-    type: "external_account",
-    credential_source: {
-      url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
-      format: {
-        type: "json",
-        subject_token_field_name: "access_token",
+let objectStorageClient: GoogleStorage | undefined;
+async function getObjectStorageClient(): Promise<GoogleStorage> {
+  if (!objectStorageClient) {
+    const { Storage } = await import("@google-cloud/storage");
+    objectStorageClient = new Storage({
+      credentials: {
+        audience: "replit",
+        subject_token_type: "access_token",
+        token_url: `${REPLIT_SIDECAR_ENDPOINT}/token`,
+        type: "external_account",
+        credential_source: {
+          url: `${REPLIT_SIDECAR_ENDPOINT}/credential`,
+          format: {
+            type: "json",
+            subject_token_field_name: "access_token",
+          },
+        },
+        universe_domain: "googleapis.com",
       },
-    },
-    universe_domain: "googleapis.com",
-  },
-  projectId: "",
-});
+      projectId: "",
+    });
+  }
+  return objectStorageClient;
+}
 
 export class ObjectNotFoundError extends Error {
   constructor() {
@@ -154,7 +161,7 @@ export class ObjectStorageService {
         if (exists) return localFile as unknown as File;
         continue;
       }
-      const bucket = objectStorageClient.bucket(bucketName);
+      const bucket = (await getObjectStorageClient()).bucket(bucketName);
       const file = bucket.file(objectName);
 
       const [exists] = await file.exists();
@@ -292,7 +299,7 @@ export class ObjectStorageService {
     }
     const objectEntityPath = `${entityDir}${entityId}`;
     const { bucketName, objectName } = parseObjectPath(objectEntityPath);
-    const bucket = objectStorageClient.bucket(bucketName);
+    const bucket = (await getObjectStorageClient()).bucket(bucketName);
     const objectFile = bucket.file(objectName);
     const [exists] = await objectFile.exists();
     if (!exists) {

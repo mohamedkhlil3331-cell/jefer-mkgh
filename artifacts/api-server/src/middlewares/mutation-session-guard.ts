@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { queryOne } from "../lib/erp-sql.js";
-import { isBackupWriterFenced, isFilesystemStorageMode } from "../lib/db-sync.js";
+import { isFilesystemStorageMode } from "../lib/runtime-mode.js";
+import { isBackupWriterFenced } from "../lib/backup-writer-state.js";
 import { acquireActorLock } from "../lib/session-control.js";
 import { isSpecialSessionValid } from "../lib/special-sessions.js";
 

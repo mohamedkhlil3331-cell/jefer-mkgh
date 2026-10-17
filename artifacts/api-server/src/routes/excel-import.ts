@@ -3,7 +3,6 @@ import multer from "multer";
 import * as XLSX from "xlsx";
 import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
 import { isD1DatabaseMode } from "../lib/database-mode.js";
-import { uploadDbBackup, getDefaultDbPath } from "../lib/db-sync.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -341,6 +340,7 @@ router.post("/admin/excel-import", upload.single("file"), async (req, res) => {
   // 30-second periodic tick).
   if (inserted > 0 && !isD1DatabaseMode()) {
     const { checkpointWAL } = await import("../lib/db.js");
+    const { uploadDbBackup, getDefaultDbPath } = await import("../lib/db-sync.js");
     uploadDbBackup(getDefaultDbPath(), checkpointWAL).catch(() => {});
   }
 

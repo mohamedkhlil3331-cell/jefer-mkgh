@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { queryAll } from "./erp-sql.js";
 import { UPLOADS_PATH } from "./upload-paths.js";
-import { makeStorage } from "./db-sync.js";
 import { ObjectNotFoundError, ObjectStorageService } from "./objectStorage.js";
 
 const objectStorage = new ObjectStorageService();
@@ -156,6 +155,7 @@ export async function deleteVehicleAttachmentBytes(identity: VehicleAttachmentId
 
     const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
     if (bucketId) {
+      const { makeStorage } = await import("./db-sync.js");
       await makeStorage()
         .bucket(bucketId)
         .file(`legacy-uploads/${identity.fileName}`)

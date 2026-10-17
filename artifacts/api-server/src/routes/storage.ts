@@ -5,8 +5,7 @@ import { queryOne } from "../lib/erp-sql.js";
 import { isSpecialSessionValid } from "../lib/special-sessions.js";
 import { isSysAdminToken } from "./auth.js";
 import { isRentalAccessTokenValid } from "./rental-accounts.js";
-import { saveHostingerUpload } from "../lib/hostinger-filesystem-storage.js";
-import { isFilesystemStorageMode } from "../lib/db-sync.js";
+import { isFilesystemStorageMode } from "../lib/runtime-mode.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -23,6 +22,7 @@ router.put("/storage/local-upload/:token", async (req: Request, res: Response): 
     return;
   }
   try {
+    const { saveHostingerUpload } = await import("../lib/hostinger-filesystem-storage.js");
     const result = await saveHostingerUpload(
       token,
       req,

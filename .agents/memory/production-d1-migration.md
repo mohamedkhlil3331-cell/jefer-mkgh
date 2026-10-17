@@ -57,6 +57,12 @@ Keep the production D1 startup gate closed until every route and schema check pa
 
 **How to apply:** Keep D1 IDs and feature flags test-only until all API routes pass against migrated test data and exact parity checks; never flip the published backend as an automatic consequence of a successful synthetic integration test.
 
+The Cloudflare Worker import graph must not statically load `db-sync`; keep runtime-mode checks and backup-writer status in SQLite-free modules, and load legacy database/storage services only inside their Replit/SQLite-only paths.
+
+**Why:** Importing the Express app can transitively evaluate `better-sqlite3` and Replit storage clients before any route is called, even when D1 and R2 are selected.
+
+**How to apply:** Before Worker runtime tests, inspect static imports from the Worker entry and defer SQLite, local-filesystem, and Replit sidecar modules to branches that are unreachable in Worker mode.
+
 New D1 databases may contain a Cloudflare-managed `_cf_KV` table before application tables are created.
 
 **Why:** Live tests against newly created empty D1 databases showed `_cf_KV` even though no user or application data had been added.

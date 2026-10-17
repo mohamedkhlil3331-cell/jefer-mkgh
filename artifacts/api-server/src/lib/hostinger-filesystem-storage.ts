@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { getAppDataDir } from "./db-sync.js";
+import { getAppDataDir } from "./runtime-mode.js";
 
 export interface HostingerObjectMetadata {
   size?: number;

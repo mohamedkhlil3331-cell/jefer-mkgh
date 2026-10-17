@@ -1,6 +1,6 @@
 import { Storage } from "@google-cloud/storage";
 import Database from "better-sqlite3";
-import { hostname, homedir } from "node:os";
+import { hostname } from "node:os";
 import { randomUUID } from "node:crypto";
 import fs from "fs";
 import path from "path";
@@ -9,7 +9,15 @@ import { pipeline } from "node:stream/promises";
 import { getR2Client, getR2Object, headR2Object, isR2Configured, r2BucketName } from "./r2-storage.js";
 import { PutObjectCommand } from "@aws-sdk/client-s3";
 import { isD1DatabaseMode } from "./database-mode.js";
+import {
+  getAppDataDir,
+  isFilesystemDatabaseMode,
+  isFilesystemStorageMode,
+} from "./runtime-mode.js";
+import { fenceBackupWriter, isBackupWriterFenced } from "./backup-writer-state.js";
 export { isD1DatabaseMode } from "./database-mode.js";
+export { getAppDataDir, isFilesystemDatabaseMode, isFilesystemStorageMode } from "./runtime-mode.js";
+export { isBackupWriterFenced } from "./backup-writer-state.js";
 
 const BUCKET_ID = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
 // Use separate backup keys for production vs development so they never
@@ -22,7 +30,6 @@ const PROCESS_STARTED_AT = Date.now();
 const WRITER_ID = `${hostname()}:${process.pid}:${PROCESS_STARTED_AT}:${randomUUID()}`;
 let backupQueue: Promise<void> = Promise.resolve();
 let shuttingDown = false;
-let writerFenced = false;
 let backupPauseDepth = 0;
 let staleWriterShutdown: (() => Promise<void>) | undefined;
 
@@ -40,22 +47,17 @@ export async function waitForDbBackupIdle(): Promise<void> {
   await backupQueue;
 }
 
-export function isBackupWriterFenced(): boolean {
-  return writerFenced;
-}
-
 /**
  * A newer server process owns the backup object. The old process must stop
  * accepting writes instead of acknowledging writes it can no longer persist.
  */
 export function registerStaleWriterShutdown(handler: () => Promise<void>): void {
   staleWriterShutdown = handler;
-  if (writerFenced) void handler();
+  if (isBackupWriterFenced()) void handler();
 }
 
 function fenceStaleWriter(): void {
-  if (writerFenced) return;
-  writerFenced = true;
+  if (!fenceBackupWriter()) return;
   shuttingDown = true;
   console.error("[db-sync] This server process is stale; rejecting mutations and shutting down");
   void staleWriterShutdown?.().catch(err => {
@@ -78,27 +80,6 @@ export function makeStorage(): Storage {
     } as never,
     projectId: "",
   });
-}
-
-export function isFilesystemStorageMode(): boolean {
-  const backend = process.env.ERP_STORAGE_BACKEND;
-  if (backend && backend !== "filesystem" && backend !== "r2") {
-    throw new Error(`[db-sync] Unsupported ERP_STORAGE_BACKEND: ${backend}`);
-  }
-  return backend === "filesystem";
-}
-
-/**
- * D1 is a production-only SQL backend. Development must keep using its
- * independently backed-up SQLite database.
- */
-/**
- * Database persistence can be local even when uploaded objects are stored in R2.
- * ERP_STORAGE_BACKEND=filesystem remains the legacy combined mode.
- */
-export function isFilesystemDatabaseMode(): boolean {
-  return !isD1DatabaseMode()
-    && (process.env.ERP_DATABASE_BACKEND === "filesystem" || isFilesystemStorageMode());
 }
 
 function assertDevelopmentWriterLock(operation: string): void {
@@ -448,32 +429,6 @@ export function registerShutdownBackup(
 
 export function getDefaultDbPath(): string {
   return path.join(getAppDataDir(), "erp.db");
-}
-
-export function getAppDataDir(): string {
-  const cwd = process.cwd();
-  const apiServerRoot = path.basename(cwd) === "api-server"
-    ? cwd
-    : path.join(cwd, "artifacts", "api-server");
-  if (isD1DatabaseMode()) {
-    throw new Error("[db-sync] The SQLite data directory is unavailable while the production D1 backend is selected");
-  }
-  if (!isFilesystemDatabaseMode()) return path.join(apiServerRoot, "data");
-
-  const configuredDir = process.env.ERP_DATA_DIR?.trim();
-  if (!configuredDir) {
-    throw new Error("[db-sync] ERP_DATA_DIR is required when the SQLite database uses filesystem persistence");
-  }
-  const expandedDir = configuredDir === "~"
-    ? homedir()
-    : configuredDir.startsWith("~/")
-      ? path.join(homedir(), configuredDir.slice(2))
-      : configuredDir;
-  const dataDir = path.resolve(expandedDir);
-  if (dataDir.split(path.sep).some(part => part === "hbuilds" || part === "public_html")) {
-    throw new Error("[db-sync] ERP_DATA_DIR must be outside Hostinger's managed hbuilds and public_html directories");
-  }
-  return dataDir;
 }
 
 export function getBackupWriterId(): string {

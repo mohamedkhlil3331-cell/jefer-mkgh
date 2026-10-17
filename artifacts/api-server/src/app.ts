@@ -9,12 +9,11 @@ import router from "./routes/index.js";
 import { logger } from "./lib/logger.js";
 import { execute, queryOne } from "./lib/erp-sql.js";
 import {
-  getAppDataDir,
-  isBackupWriterFenced,
   isFilesystemDatabaseMode,
   isFilesystemStorageMode,
-  makeStorage,
-} from "./lib/db-sync.js";
+  getAppDataDir,
+} from "./lib/runtime-mode.js";
+import { isBackupWriterFenced } from "./lib/backup-writer-state.js";
 import { mutationSessionGuard } from "./middlewares/mutation-session-guard.js";
 import { getR2Object, isR2ObjectStorageBackend } from "./lib/r2-storage.js";
 
@@ -140,6 +139,10 @@ app.get("/api/uploads/:file", async (req, res, next) => {
   const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
   if (!bucketId) return res.status(503).json({ error: "تعذر الوصول إلى الملفات المحفوظة" });
   try {
+    if (isCloudflareWorker) {
+      return res.status(503).json({ error: "Legacy object storage is unavailable in the Cloudflare Worker runtime" });
+    }
+    const { makeStorage } = await import("./lib/db-sync.js");
     const object = makeStorage().bucket(bucketId).file(`legacy-uploads/${name}`);
     const [exists] = await object.exists();
     if (!exists) return res.status(404).json({ error: "الملف غير موجود؛ قد يلزم إعادة رفع النسخة الأصلية" });
