@@ -33,6 +33,12 @@ Cloudflare D1 HTTP API writes require the API token's `D1:Edit` permission; `D1:
 
 **How to apply:** Ensure the existing Cloudflare connection has D1 write permission before migrating. Preserve a failed source snapshot, compare all existing source-backed D1 rows, reject count decreases or non-append differences, and never replay from an old manifest count without verification.
 
+D1 query batches can hit a lower SQL bind-variable ceiling than SQLite, especially when verification statements bind long lists of preserved row IDs.
+
+**Why:** A read-only comparison failed with “too many SQL variables” before any database writes when the preserved-row exclusion list was bound as parameters.
+
+**How to apply:** Keep D1 verification batches small. For exclusion lists, embed only IDs validated as safe integers into SQL literals; keep other values parameterized and verify before any write.
+
 Cloudflare D1 Time Travel provides automatic bookmarks for backups, but restoring to a bookmark cancels in-flight queries and transactions. SQL export/import also makes the target D1 unavailable to serve queries. The app-side Cloudflare connector rejected D1 export POSTs even though Time Travel bookmark/restore calls worked. The user does not accept interruption on the active primary.
 
 **Why:** Cloudflare documents query cancellation during Time Travel restore; live tests succeeded when restore targeted only a separate writable shadow and the R2-backed mutation journal caught it up.
