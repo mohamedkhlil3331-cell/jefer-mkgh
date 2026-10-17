@@ -27,7 +27,7 @@ const loginAccounts = [
   { role: "عميل",                       user: "0555555555",  perms: "بوابة العميل — الطلبات" },
 ];
 
-const QR_URL = `https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=https%3A%2F%2Fjefer-mkgh.com&format=png`;
+const QR_URL = `https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=https%3A%2F%2Fjefer-mkgh1.com&format=png`;
 
 export default function Slide11ApprovalDoc() {
   const today = new Date().toLocaleDateString("ar-SA", {
@@ -120,7 +120,7 @@ export default function Slide11ApprovalDoc() {
               style={{ height: "62px", objectFit: "contain" }}
             />
             <div style={{ fontSize: "11px", color: "#0eb5cb", fontWeight: 700, letterSpacing: "0.3px" }}>
-              🌐 jefer-mkgh.com
+              🌐 jefer-mkgh1.com
             </div>
           </div>
 
@@ -128,11 +128,11 @@ export default function Slide11ApprovalDoc() {
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "4px" }}>
             <img
               src={QR_URL}
-              alt="QR jefer-mkgh.com"
+              alt="QR jefer-mkgh1.com"
               style={{ width: "80px", height: "80px", imageRendering: "pixelated" }}
             />
             <div style={{ fontSize: "9px", color: "#64748b", textAlign: "center", direction: "ltr" }}>
-              jefer-mkgh.com
+              jefer-mkgh1.com
             </div>
           </div>
 

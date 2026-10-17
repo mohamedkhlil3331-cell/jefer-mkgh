@@ -533,7 +533,7 @@ export default function SystemGuidePage() {
         </div>
         <div className="text-xs text-gray-400 text-left">
           <div>تاريخ الطباعة: {new Date().toLocaleDateString("ar-SA")}</div>
-          <div>jefer-mkgh.com</div>
+          <div>jefer-mkgh1.com</div>
         </div>
       </div>
 
@@ -551,7 +551,7 @@ export default function SystemGuidePage() {
             الإصدار <strong className="text-[#103c68]">{VERSION}</strong> — آخر تحديث: <strong>{LAST_UPDATED}</strong>
           </p>
           <div className="flex flex-wrap justify-center gap-3 text-sm">
-            <span className="bg-[#103c68]/10 text-[#103c68] px-3 py-1 rounded-full font-bold">jefer-mkgh.com</span>
+            <span className="bg-[#103c68]/10 text-[#103c68] px-3 py-1 rounded-full font-bold">jefer-mkgh1.com</span>
             <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full">Express 5 + SQLite + Supabase</span>
             <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full">React + Vite + TailwindCSS</span>
             <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full">PWA — يعمل بدون إنترنت</span>
@@ -964,7 +964,7 @@ export default function SystemGuidePage() {
         {/* ── 7. API ── */}
         <Section id="api" title="نقاط API الرئيسية" icon={FileText} color="border-orange-500 text-orange-700">
           <div className="flex flex-wrap gap-3 mb-4 text-sm text-gray-600">
-            <span>Base URL: <Tag text="https://jefer-mkgh.com/api/" /></span>
+            <span>Base URL: <Tag text="https://jefer-mkgh1.com/api/" /></span>
             <span>المصادقة: <Tag text="Authorization: Bearer <token>" /></span>
           </div>
           <div className="overflow-x-auto rounded-xl border border-gray-100 shadow-sm">

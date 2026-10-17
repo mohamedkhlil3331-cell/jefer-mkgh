@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://jefer-mkgh.com/sitemap.xml
+Sitemap: https://jefer-mkgh1.com/sitemap.xml
