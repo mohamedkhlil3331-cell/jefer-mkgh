@@ -15,7 +15,7 @@ import {
 } from "./lib/runtime-mode.js";
 import { isBackupWriterFenced } from "./lib/backup-writer-state.js";
 import { mutationSessionGuard } from "./middlewares/mutation-session-guard.js";
-import { getR2Object, isR2ObjectStorageBackend } from "./lib/r2-storage.js";
+import { createR2DownloadUrl, getR2Object, isR2ObjectStorageBackend, isWorkerR2BindingConfigured } from "./lib/r2-storage.js";
 
 const isCloudflareWorker = Boolean(
   (globalThis as typeof globalThis & { __ERP_WORKER_ENV?: unknown }).__ERP_WORKER_ENV,
@@ -114,22 +114,41 @@ app.get("/api/uploads/:file", async (req, res, next) => {
   const name = req.params.file;
   if (typeof name !== "string" || !/^[A-Za-z0-9._-]+$/.test(name)) return next();
   if (isR2ObjectStorageBackend()) {
+    const abortController = new AbortController();
+    res.once("close", () => {
+      if (!res.writableEnded) abortController.abort();
+    });
     try {
-      const object = await getR2Object(`app-uploads/${name}`);
+      if (!isWorkerR2BindingConfigured()) {
+        res.redirect(302, await createR2DownloadUrl(`app-uploads/${name}`));
+        return;
+      }
+      const object = await getR2Object(`app-uploads/${name}`, abortController.signal);
       if (object?.Body) {
         res.setHeader("Content-Type", object.ContentType || "application/octet-stream");
         res.setHeader("X-Content-Type-Options", "nosniff");
         res.setHeader("Cache-Control", object.CacheControl || "private, max-age=300");
         if (object.ContentLength != null) res.setHeader("Content-Length", object.ContentLength);
         const body = object.Body as ReadableStream<Uint8Array> | import("node:stream").Readable;
+        const nodeStream = typeof (body as ReadableStream<Uint8Array>).getReader === "function"
+          ? Readable.fromWeb(body as ReadableStream<Uint8Array>)
+          : body as import("node:stream").Readable;
+        nodeStream.once("error", error => {
+          if (res.headersSent) res.destroy(error);
+          else next(error);
+        });
+        res.once("close", () => {
+          if (!res.writableEnded) nodeStream.destroy();
+        });
         if (typeof (body as ReadableStream<Uint8Array>).getReader === "function") {
-          Readable.fromWeb(body as ReadableStream<Uint8Array>).pipe(res);
+          nodeStream.pipe(res);
         } else {
-          (body as import("node:stream").Readable).pipe(res);
+          nodeStream.pipe(res);
         }
         return;
       }
     } catch (error) {
+      if (res.destroyed || abortController.signal.aborted) return;
       return next(error);
     }
   }

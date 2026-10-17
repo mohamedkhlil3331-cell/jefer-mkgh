@@ -23,6 +23,7 @@
 - [Legacy uploads at publish](legacy-uploads-publish.md) — preserving the SQLite backup alone does not preserve files stored on a published server's local disk.
 - [Published storage target validation](published-storage-target.md) — a successful app upload may still land in GCS; verify the provider and exact bucket before claiming R2 is active.
 - [R2 signed URL normalization](r2-signed-url-normalization.md) — R2 presigned URLs can use virtual-hosted bucket names; normalize both URL styles without retaining signed query strings.
+- [R2 attachment downloads](r2-attachment-downloads.md) — Node R2-backed file routes should redirect to short-lived signed GET URLs to avoid saturating the server's S3 stream pool.
 - [Routing bonus continuity](routing-bonus-continuity.md) — preserve the existing tariff bonus calculation; show its saved value on new trip logs without creating a second payout.
 - [Routing cargo quantities](routing-cargo-quantities.md) — a multi-car dispatch is a shortcut for individual trips; each vehicle's receipt, inventory posting, and release are independent.
 - [Bulker tariff accounting](bulker-tariff-accounting.md) — treat the selected tariff and completed trip as accounting snapshots; do not recalculate past trips from later order edits.

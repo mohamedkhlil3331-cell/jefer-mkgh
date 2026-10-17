@@ -146,6 +146,10 @@ router.get("/storage/public-objects/*filePath", async (req: Request, res: Respon
 });
 
 router.get("/storage/objects/*path", async (req: Request, res: Response) => {
+  const abortController = new AbortController();
+  res.once("close", () => {
+    if (!res.writableEnded) abortController.abort();
+  });
   try {
     const raw = req.params.path;
     const wildcardPath = Array.isArray(raw) ? raw.join("/") : raw;
@@ -164,14 +168,27 @@ router.get("/storage/objects/*path", async (req: Request, res: Response) => {
       return;
     }
     const objectFile = await objectStorageService.getObjectEntityFile(objectPath);
-    const response = await objectStorageService.downloadObject(objectFile);
+    const downloadUrl = await objectStorageService.getR2DownloadUrl(objectFile);
+    if (downloadUrl) {
+      res.redirect(302, downloadUrl);
+      return;
+    }
+    const response = await objectStorageService.downloadObject(objectFile, 3600, abortController.signal);
     res.status(response.status);
     response.headers.forEach((value, key) => res.setHeader(key, value));
     if (response.body) {
       const nodeStream = Readable.fromWeb(response.body as ReadableStream<Uint8Array>);
+      nodeStream.once("error", error => {
+        if (res.headersSent) res.destroy(error);
+        else res.status(502).json({ error: "تعذر تنزيل الملف من التخزين" });
+      });
+      res.once("close", () => {
+        if (!res.writableEnded) nodeStream.destroy();
+      });
       nodeStream.pipe(res);
     } else { res.end(); }
   } catch (error) {
+    if (res.destroyed || abortController.signal.aborted) return;
     if (error instanceof ObjectNotFoundError) {
       res.status(404).json({ error: "Object not found" });
       return;

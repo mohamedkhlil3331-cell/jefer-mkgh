@@ -178,6 +178,9 @@ importers:
       '@replit/connectors-sdk':
         specifier: ^0.4.3
         version: 0.4.3
+      '@smithy/node-http-handler':
+        specifier: ^4.12.1
+        version: 4.12.1
       '@workspace/api-zod':
         specifier: workspace:*
         version: link:../../lib/api-zod

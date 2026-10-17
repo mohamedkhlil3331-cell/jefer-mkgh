@@ -8,6 +8,8 @@ import type { StorageEngine } from "multer";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { Readable } from "node:stream";
+import { Agent } from "node:https";
+import { NodeHttpHandler } from "@smithy/node-http-handler";
 
 const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID?.trim();
 const bucket = process.env.CLOUDFLARE_R2_BUCKET_NAME?.trim();
@@ -148,6 +150,7 @@ export function isR2ObjectStorageBackend(): boolean {
 }
 
 let client: S3Client | null = null;
+const r2HttpsAgent = new Agent({ keepAlive: true, maxSockets: 128 });
 export function getR2Client(): S3Client {
   if (!isR2Configured || !accountId || !accessKeyId || !secretAccessKey) {
     throw new Error("Cloudflare R2 credentials are not configured");
@@ -157,6 +160,7 @@ export function getR2Client(): S3Client {
     endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
     credentials: { accessKeyId, secretAccessKey },
     requestChecksumCalculation: "WHEN_REQUIRED",
+    requestHandler: new NodeHttpHandler({ httpsAgent: r2HttpsAgent }),
   });
 }
 
@@ -271,6 +275,13 @@ export async function createR2UploadUrl(key: string, expiresIn = 900): Promise<s
   return getSignedUrl(getR2Client(), new PutObjectCommand({ Bucket: r2BucketName(), Key: key }), { expiresIn });
 }
 
+export async function createR2DownloadUrl(key: string, expiresIn = 300): Promise<string> {
+  if (workerR2Bucket()) {
+    throw new Error("Worker R2 downloads must use the bound object route, not a signed S3 URL");
+  }
+  return getSignedUrl(getR2Client(), new GetObjectCommand({ Bucket: r2BucketName(), Key: key }), { expiresIn });
+}
+
 export async function uploadR2Object(key: string, body: Buffer, contentType: string, cacheControl?: string): Promise<void> {
   const boundBucket = workerR2Bucket();
   if (boundBucket) {
@@ -287,7 +298,7 @@ export async function uploadR2Object(key: string, body: Buffer, contentType: str
   }));
 }
 
-export async function getR2Object(key: string) {
+export async function getR2Object(key: string, abortSignal?: AbortSignal) {
   const boundBucket = workerR2Bucket();
   if (boundBucket) {
     const object = await boundBucket.get(key);
@@ -295,7 +306,10 @@ export async function getR2Object(key: string) {
   }
 
   try {
-    return await getR2Client().send(new GetObjectCommand({ Bucket: r2BucketName(), Key: key }));
+    return await getR2Client().send(
+      new GetObjectCommand({ Bucket: r2BucketName(), Key: key }),
+      abortSignal ? { abortSignal } : undefined,
+    );
   } catch (error) {
     if ((error as { $metadata?: { httpStatusCode?: number } }).$metadata?.httpStatusCode === 404) return null;
     throw error;

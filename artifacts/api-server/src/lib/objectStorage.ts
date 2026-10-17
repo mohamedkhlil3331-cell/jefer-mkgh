@@ -17,6 +17,7 @@ import {
 import { isFilesystemStorageMode } from "./runtime-mode.js";
 import {
   createR2UploadUrl,
+  createR2DownloadUrl,
   deleteR2Object,
   getR2Object,
   headR2Object,
@@ -173,9 +174,9 @@ export class ObjectStorageService {
     return null;
   }
 
-  async downloadObject(file: File, cacheTtlSec: number = 3600): Promise<Response> {
+  async downloadObject(file: File, cacheTtlSec: number = 3600, abortSignal?: AbortSignal): Promise<Response> {
     if (file instanceof R2StoredObject) {
-      const object = await getR2Object(file.key);
+      const object = await getR2Object(file.key, abortSignal);
       if (!object?.Body) throw new ObjectNotFoundError();
       const body = object.Body as ReadableStream<Uint8Array> | NodeJS.ReadableStream;
       const webStream = typeof (body as ReadableStream<Uint8Array>).getReader === "function"
@@ -284,8 +285,9 @@ export class ObjectStorageService {
 
     const entityId = parts.slice(1).join("/");
     if (isR2ObjectStorageBackend()) {
-      const r2Object = await headR2Object(`${R2_OBJECT_PREFIX}${entityId}`);
-      if (r2Object) return new R2StoredObject(`${R2_OBJECT_PREFIX}${entityId}`) as unknown as File;
+      // Let the GET verify existence; an extra HEAD doubles R2 requests for every
+      // opened attachment and can saturate the shared connection pool under load.
+      return new R2StoredObject(`${R2_OBJECT_PREFIX}${entityId}`) as unknown as File;
     }
     if (isFilesystemStorageMode()) {
       const objectFile = new HostingerObjectFile(`private/${entityId}`);
@@ -306,6 +308,11 @@ export class ObjectStorageService {
       throw new ObjectNotFoundError();
     }
     return objectFile;
+  }
+
+  async getR2DownloadUrl(file: File, expiresIn = 300): Promise<string | null> {
+    if (!(file instanceof R2StoredObject) || isWorkerR2BindingConfigured()) return null;
+    return createR2DownloadUrl(file.key, expiresIn);
   }
 
   normalizeObjectEntityPath(rawPath: string): string {
