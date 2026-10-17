@@ -30,7 +30,7 @@ const loginAccounts = [
 const QR_URL = `https://api.qrserver.com/v1/create-qr-code/?size=110x110&data=https%3A%2F%2Fjefer-mkgh1.com&format=png`;
 
 export default function Slide11ApprovalDoc() {
-  const today = new Date().toLocaleDateString("ar-SA", {
+  const today = new Date().toLocaleDateString("ar-SA-u-ca-gregory", {
     year: "numeric",
     month: "long",
     day: "numeric",
@@ -153,7 +153,7 @@ export default function Slide11ApprovalDoc() {
               التاريخ
             </div>
             <div style={{ fontSize: "13px", fontWeight: 600, color: "#103c68" }}>
-              {today}
+              {today}م
             </div>
           </div>
         </div>
@@ -205,7 +205,7 @@ export default function Slide11ApprovalDoc() {
             borderRadius: "20px",
             letterSpacing: "0.3px",
           }}>
-            تاريخ بدء التشغيل: 5 / 8 / 2026م
+            تاريخ بدء التشغيل: {today}م
           </span>
         </div>
 
@@ -227,9 +227,10 @@ export default function Slide11ApprovalDoc() {
           </p>
           <p style={{ margin: 0 }}>
             نرجو من سيادتكم اعتماد تشغيل{" "}
-            <strong>نظام JEFER-MKGH-ERP الخاص بالورشة والنقليات</strong>، بعد أن
-            اكتملت برمجتها وتجهيزها للتشغيل الفعلي اعتباراً من تاريخ{" "}
-            <strong>5/8/2026م</strong>، على أن يتم العمل عليها من هذا التاريخ.
+            <strong>نظام JEFER-MKGH-ERP الخاص بالورشة والنقليات</strong> في
+            <strong> جميع الفروع المفعّلة والعاملة فعلياً على النظام، وليس فرعاً واحداً فقط</strong>،
+            بعد أن اكتملت برمجته وتجهيزه للتشغيل الفعلي اعتباراً من تاريخ{" "}
+            <strong>{today}م</strong>، على أن يبدأ العمل عليه من هذا التاريخ.
           </p>
           <p style={{ margin: "8px 0 0 0" }}>
             وبالنسبة للمصاريف والتكاليف فسيتم إرسالها للشركة بعد نهاية الشهر،
