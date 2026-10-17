@@ -10,6 +10,11 @@ type WorkerContext = {
   waitUntil(promise: Promise<unknown>): void;
 };
 
+type ScheduledController = {
+  cron: string;
+  scheduledTime: number;
+};
+
 const EXPRESS_PORT = 8787;
 let serverPromise: Promise<ReturnType<typeof httpServerHandler>> | undefined;
 
@@ -54,5 +59,55 @@ export default {
       }));
     }
     return response;
+  },
+
+  async scheduled(controller: ScheduledController, env: WorkerBindings): Promise<void> {
+    installWorkerEnvironment(env);
+    if (process.env.NODE_ENV !== "production" || process.env.ERP_DATABASE_BACKEND !== "d1") {
+      console.info("[worker-cron] Ignoring scheduled event outside production D1 mode");
+      return;
+    }
+
+    const time = new Date(controller.scheduledTime);
+    const minute = time.getUTCMinutes();
+    const hour = time.getUTCHours();
+    const jobs: Promise<unknown>[] = [];
+
+    const { drainD1Replication } = await import("./lib/cloudflare-d1.js");
+    jobs.push(drainD1Replication(100));
+    if (minute % 5 === 0) {
+      const { runSlaMonitorOnce } = await import("./lib/sla-monitor.js");
+      jobs.push(runSlaMonitorOnce());
+    }
+    if (minute % 10 === 0) {
+      const { runVehicleStopMonitorOnce } = await import("./lib/vehicle-stop-monitor.js");
+      jobs.push(runVehicleStopMonitorOnce());
+    }
+    if (minute % 15 === 0) {
+      const [{ runChatMaintenance }, { processPendingNotifications }] = await Promise.all([
+        import("./lib/chat-maintenance.js"),
+        import("./lib/chat-push.js"),
+      ]);
+      jobs.push(runChatMaintenance(), processPendingNotifications());
+    } else {
+      const { processPendingNotifications } = await import("./lib/chat-push.js");
+      jobs.push(processPendingNotifications());
+    }
+    if (minute === 0) {
+      const { runMkghSchedulerOnce } = await import("./lib/mkgh-scheduler.js");
+      jobs.push(runMkghSchedulerOnce());
+    }
+    if (minute === 0 && hour === 0) {
+      const { runNightlyStopSchedulerOnce } = await import("./lib/vehicle-stop-scheduler.js");
+      jobs.push(runNightlyStopSchedulerOnce());
+    }
+
+    await Promise.all(jobs.map(async job => {
+      try {
+        await job;
+      } catch (error) {
+        console.error("[worker-cron] Scheduled job failed", error);
+      }
+    }));
   },
 };

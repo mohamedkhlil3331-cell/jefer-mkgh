@@ -98,21 +98,22 @@ async function checkSla(): Promise<void> {
   }
 }
 
+export async function runSlaMonitorOnce(): Promise<void> {
+  try {
+    await checkSla();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "sla-monitor: check skipped because order data could not be read"
+    );
+  }
+}
+
 export function startSlaMonitor(): void {
   logger.info("sla-monitor: started (interval=5min)");
-  const runCheckSafely = async () => {
-    try {
-      await checkSla();
-    } catch (err) {
-      logger.warn(
-        { err },
-        "sla-monitor: check skipped because order data could not be read"
-      );
-    }
-  };
   // Initial check after 1 minute (let the server settle)
   setTimeout(() => {
-    void runCheckSafely();
-    setInterval(runCheckSafely, CHECK_INTERVAL_MS);
+    void runSlaMonitorOnce();
+    setInterval(() => { void runSlaMonitorOnce(); }, CHECK_INTERVAL_MS);
   }, 60_000);
 }

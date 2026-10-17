@@ -10,7 +10,7 @@ async function isEnabled(): Promise<boolean> {
   }
 }
 
-async function recordNightlyStops() {
+export async function runNightlyStopSchedulerOnce(): Promise<void> {
   if (!await isEnabled()) return;
 
   // Run at midnight → evaluate the day that just ENDED (yesterday in local wall-clock).
@@ -77,7 +77,7 @@ export function startNightlyStopScheduler() {
   logger.info({ delayHrs: (delay / 3_600_000).toFixed(2) }, "[stop-scheduler] First run at midnight");
 
   setTimeout(() => {
-    void recordNightlyStops();
-    setInterval(() => { void recordNightlyStops(); }, 24 * 60 * 60 * 1_000);
+    void runNightlyStopSchedulerOnce();
+    setInterval(() => { void runNightlyStopSchedulerOnce(); }, 24 * 60 * 60 * 1_000);
   }, delay);
 }

@@ -245,38 +245,35 @@ export async function sendMkghReport(triggeredBy = "scheduler"): Promise<{ ok: b
 }
 
 // ── Scheduler loop (runs every hour) ─────────────────────────────────────────
-export function startMkghScheduler(): void {
-  const CHECK_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+export async function runMkghSchedulerOnce(): Promise<void> {
+  try {
+    if (await cfg("enabled") !== "1") return;
 
-  async function check() {
-    try {
-      if (await cfg("enabled") !== "1") return;
+    const sendDay  = parseInt(await cfg("send_day") || "1", 10);
+    const lastSent = await cfg("last_sent"); // "YYYY-MM"
+    const now      = new Date();
+    const today    = now.getDate();
+    const thisPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
 
-      const sendDay  = parseInt(await cfg("send_day") || "1", 10);
-      const lastSent = await cfg("last_sent"); // "YYYY-MM"
-      const now      = new Date();
-      const today    = now.getDate();
-      const thisPeriod = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    if (today !== sendDay) return;
+    if (lastSent === thisPeriod) return; // already sent this month
 
-      if (today !== sendDay) return;
-      if (lastSent === thisPeriod) return; // already sent this month
-
-      // Check if there is data to report
-      const rowCount = (await queryOne<{ c: number }>("SELECT COUNT(*) AS c FROM mkgh_transactions"))?.c || 0;
-      if (rowCount === 0) {
-        logger.info("[mkgh-scheduler] No data — skipping monthly send");
-        return;
-      }
-
-      logger.info({ thisPeriod, sendDay }, "[mkgh-scheduler] Sending monthly report");
-      await sendMkghReport("scheduler");
-    } catch (err) {
-      logger.warn({ err }, "[mkgh-scheduler] check() error — non-fatal");
+    const rowCount = (await queryOne<{ c: number }>("SELECT COUNT(*) AS c FROM mkgh_transactions"))?.c || 0;
+    if (rowCount === 0) {
+      logger.info("[mkgh-scheduler] No data — skipping monthly send");
+      return;
     }
-  }
 
-  // Run immediately on startup (in case server was restarted on the send day)
-  check();
-  setInterval(check, CHECK_INTERVAL_MS);
+    logger.info({ thisPeriod, sendDay }, "[mkgh-scheduler] Sending monthly report");
+    await sendMkghReport("scheduler");
+  } catch (err) {
+    logger.warn({ err }, "[mkgh-scheduler] check() error — non-fatal");
+  }
+}
+
+export function startMkghScheduler(): void {
+  const CHECK_INTERVAL_MS = 60 * 60 * 1000;
+  void runMkghSchedulerOnce();
+  setInterval(() => { void runMkghSchedulerOnce(); }, CHECK_INTERVAL_MS);
   logger.info("[mkgh-scheduler] Started (hourly check)");
 }

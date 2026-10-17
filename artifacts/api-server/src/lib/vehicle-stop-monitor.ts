@@ -174,16 +174,19 @@ async function checkVehicleStops(): Promise<void> {
   }
 }
 
+export async function runVehicleStopMonitorOnce(): Promise<void> {
+  try {
+    await checkVehicleStops();
+  } catch (err) {
+    logger.warn(
+      { err },
+      "vehicle-stop-monitor: check skipped because order data could not be read"
+    );
+  }
+}
+
 export function startVehicleStopMonitor(): void {
   logger.info("vehicle-stop-monitor: started (interval=10min)");
-  const runCheckSafely = () => {
-    void checkVehicleStops().catch((err) => {
-      logger.warn(
-        { err },
-        "vehicle-stop-monitor: check skipped because order data could not be read"
-      );
-    });
-  };
-  runCheckSafely();
-  setInterval(runCheckSafely, CHECK_INTERVAL_MS);
+  void runVehicleStopMonitorOnce();
+  setInterval(() => { void runVehicleStopMonitorOnce(); }, CHECK_INTERVAL_MS);
 }

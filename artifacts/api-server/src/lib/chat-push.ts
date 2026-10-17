@@ -180,58 +180,56 @@ export async function savePushSubscription(
   `, userId, endpoint, p256dh, auth);
 }
 
-function processPendingNotifications(): void {
+export async function processPendingNotifications(): Promise<void> {
   if (queueWorkerRunning) return;
   queueWorkerRunning = true;
 
-  void (async () => {
-    try {
-      const pending = await queryAll<PendingNotification>(`
-        SELECT q.id AS queue_id, q.notification_id,
-               n.user_phone, n.title, n.body
-        FROM chat_push_queue q
-        LEFT JOIN notifications n ON n.id=q.notification_id
-        WHERE q.processed_at IS NULL AND q.attempts < 5
-        ORDER BY q.id
-        LIMIT 50
-      `);
+  try {
+    const pending = await queryAll<PendingNotification>(`
+      SELECT q.id AS queue_id, q.notification_id,
+             n.user_phone, n.title, n.body
+      FROM chat_push_queue q
+      LEFT JOIN notifications n ON n.id=q.notification_id
+      WHERE q.processed_at IS NULL AND q.attempts < 5
+      ORDER BY q.id
+      LIMIT 50
+    `);
 
-      for (const notification of pending) {
-        await execute("UPDATE chat_push_queue SET attempts=attempts+1 WHERE id=?", notification.queue_id);
-        if (!notification.user_phone) {
-          await execute("UPDATE chat_push_queue SET processed_at=datetime('now') WHERE id=?", notification.queue_id);
-          continue;
-        }
-
-        const user = await queryOne<{ id: number }>(`
-          SELECT id FROM users
-          WHERE phone=? AND active=1 AND COALESCE(approval_status,'approved')='approved'
-        `, notification.user_phone);
-        if (user) {
-          await sendBrowserPush(user.id, "order", {
-            title: notification.title || "تحديث على طلبك",
-            body: notification.body || "",
-            url: "/notifications",
-            tag: `order-${notification.notification_id}`,
-          });
-        }
+    for (const notification of pending) {
+      await execute("UPDATE chat_push_queue SET attempts=attempts+1 WHERE id=?", notification.queue_id);
+      if (!notification.user_phone) {
         await execute("UPDATE chat_push_queue SET processed_at=datetime('now') WHERE id=?", notification.queue_id);
+        continue;
       }
 
-      await execute(`
-        UPDATE chat_push_queue SET processed_at=datetime('now')
-        WHERE processed_at IS NULL AND attempts >= 5
-      `);
-    } catch (error) {
-      logger.error({ err: error }, "Browser push queue processing failed");
-    } finally {
-      queueWorkerRunning = false;
+      const user = await queryOne<{ id: number }>(`
+        SELECT id FROM users
+        WHERE phone=? AND active=1 AND COALESCE(approval_status,'approved')='approved'
+      `, notification.user_phone);
+      if (user) {
+        await sendBrowserPush(user.id, "order", {
+          title: notification.title || "تحديث على طلبك",
+          body: notification.body || "",
+          url: "/notifications",
+          tag: `order-${notification.notification_id}`,
+        });
+      }
+      await execute("UPDATE chat_push_queue SET processed_at=datetime('now') WHERE id=?", notification.queue_id);
     }
-  })();
+
+    await execute(`
+      UPDATE chat_push_queue SET processed_at=datetime('now')
+      WHERE processed_at IS NULL AND attempts >= 5
+    `);
+  } catch (error) {
+    logger.error({ err: error }, "Browser push queue processing failed");
+  } finally {
+    queueWorkerRunning = false;
+  }
 }
 
 export function startBrowserPushQueueWorker(): void {
-  processPendingNotifications();
-  const timer = setInterval(processPendingNotifications, 5000);
+  void processPendingNotifications();
+  const timer = setInterval(() => { void processPendingNotifications(); }, 5000);
   timer.unref();
 }
