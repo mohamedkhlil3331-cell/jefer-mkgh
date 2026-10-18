@@ -1,4 +1,4 @@
-import { useState, type ClipboardEvent } from "react";
+import { useEffect, useState, type ClipboardEvent } from "react";
 import { AlertCircle, Check, ClipboardPaste, FileSpreadsheet, LockKeyhole, Plus, RefreshCw, Trash2, X } from "lucide-react";
 
 export interface InvoicePasteRow {
@@ -16,10 +16,17 @@ export interface InvoicePasteRow {
   price_before_vat: string;
   price_after_vat: string;
   discount_amount: string;
+  total_before_vat: string;
+  tax_status: string;
+  tax_amount: string;
+  total_after_vat: string;
+  assignment_mode: "branch" | "vehicle" | "new" | "workshop";
+  fleet_vehicle_id: string;
   notes: string;
 }
 
 interface FleetVehicleOption {
+  id?: number;
   plate_number: string;
   branch?: string | null;
   linked_trailer_number?: string | null;
@@ -36,6 +43,7 @@ interface PasteColumn {
 
 interface Props {
   importedBy: string;
+  draftKey?: string;
   requestKey: string;
   vehicles: FleetVehicleOption[];
   trailerNumbers: string[];
@@ -50,6 +58,7 @@ const COLUMNS: PasteColumn[] = [
   { key: "invoice_date", label: "التاريخ" },
   { key: "branch", label: "الفرع" },
   { key: "vehicle_plate", label: "السيارة" },
+  { key: "assignment_mode", label: "جهة الفاتورة" },
   { key: "work_on", label: "الشغل على" },
   { key: "invoice_number", label: "رقم الفاتورة" },
   { key: "claim_status", label: "حالة الكشف", readOnly: true },
@@ -62,8 +71,10 @@ const COLUMNS: PasteColumn[] = [
   { key: "price_before_vat", label: "قبل الضريبة" },
   { key: "price_after_vat", label: "بعد الضريبة" },
   { key: "discount_amount", label: "الخصم" },
-  { key: "total_before", label: "الإجمالي قبل الضريبة", readOnly: true },
-  { key: "total_after", label: "الإجمالي بعد الضريبة", readOnly: true },
+  { key: "total_before_vat", label: "الإجمالي قبل الضريبة" },
+  { key: "tax_status", label: "حالة الضريبة" },
+  { key: "tax_amount", label: "مبلغ الضريبة" },
+  { key: "total_after_vat", label: "الإجمالي بعد الضريبة" },
   { key: "notes", label: "ملاحظة" },
 ];
 
@@ -82,6 +93,12 @@ const newRow = (): InvoicePasteRow => ({
   price_before_vat: "",
   price_after_vat: "",
   discount_amount: "",
+  total_before_vat: "",
+  tax_status: "خاضعة",
+  tax_amount: "",
+  total_after_vat: "",
+  assignment_mode: "vehicle",
+  fleet_vehicle_id: "",
   notes: "",
 });
 
@@ -112,6 +129,9 @@ function rowHasContent(row: InvoicePasteRow): boolean {
     row.price_before_vat,
     row.price_after_vat,
     row.discount_amount,
+    row.total_before_vat,
+    row.tax_amount,
+    row.total_after_vat,
     row.notes,
   ].some(value => value.trim() !== "");
 }
@@ -164,8 +184,8 @@ function readClipboardMatrix(text: string): string[][] {
 function mapHeader(value: string): PasteField | null {
   const header = value.trim().toLocaleLowerCase("ar-SA").replace(/[\s_-]+/g, "");
   if (!header) return null;
-  if (/الإجماليقبلالضريبة|اجماليقبلالضريبة|totalbefore/.test(header)) return "total_before";
-  if (/الإجمالي.*بعدالضريبة|اجمالي.*بعدالضريبة|totalafter/.test(header)) return "total_after";
+  if (/الإجماليقبلالضريبة|اجماليقبلالضريبة|totalbefore/.test(header)) return "total_before_vat";
+  if (/الإجمالي.*بعدالضريبة|اجمالي.*بعدالضريبة|totalafter/.test(header)) return "total_after_vat";
   if (/رقم.*تيدر|trailer.?number/.test(header)) return "trailer_number";
   if (/حالةالكشف|claimstatus/.test(header)) return "claim_status";
   if (/رقمالكشف|claimnumber/.test(header)) return "claim_number";
@@ -174,6 +194,8 @@ function mapHeader(value: string): PasteField | null {
   if (/^م$|مسلسل|تسلسل|serial/.test(header)) return "serial_no";
   if (/تاريخ|date/.test(header)) return "invoice_date";
   if (/فرع|branch/.test(header)) return "branch";
+  if (/حالةالضريبة|taxstatus/.test(header)) return "tax_status";
+  if (/مبلغالضريبة|قيمةالضريبة|taxamount|vatamount/.test(header)) return "tax_amount";
   if (/سيار|مركبة|لوحة|vehicle|plate/.test(header)) return "vehicle_plate";
   if (/الشغلالى|الشغلعلى|workon|رأسالسيارة/.test(header)) return "work_on";
   if (/رقمالفاتورة|invoice/.test(header)) return "invoice_number";
@@ -207,6 +229,14 @@ function applyCell(row: InvoicePasteRow, key: PasteField, rawValue: string): Inv
   if (key === "trailer_number") {
     return { ...row, trailer_number: value, ...(value ? { work_on: "trailer" as const } : {}) };
   }
+  if (key === "vehicle_plate") {
+    return {
+      ...row,
+      vehicle_plate: rawValue,
+      assignment_mode: value === "مستودع الورشة" ? "workshop"
+        : value ? (row.assignment_mode === "new" ? "new" : "vehicle") : row.assignment_mode,
+    };
+  }
   if (
     key === "claim_status" || key === "claim_number" || key === "imported_by" ||
     key === "print_log" || key === "total_before" || key === "total_after"
@@ -216,6 +246,7 @@ function applyCell(row: InvoicePasteRow, key: PasteField, rawValue: string): Inv
 
 export function InvoicePasteModal({
   importedBy,
+  draftKey,
   requestKey,
   vehicles,
   trailerNumbers,
@@ -224,16 +255,39 @@ export function InvoicePasteModal({
   onClose,
   onSave,
 }: Props) {
-  const [rows, setRows] = useState<InvoicePasteRow[]>([newRow()]);
+  const storageKey = `supplier-invoice-paste-draft:v1:${draftKey || importedBy}`;
+  const savedDraft = (() => {
+    try {
+      const raw = localStorage.getItem(storageKey);
+      return raw ? JSON.parse(raw) as { rows?: InvoicePasteRow[]; requestKey?: string; mode?: "automatic" | "fixed" } : null;
+    } catch { return null; }
+  })();
+  const [rows, setRows] = useState<InvoicePasteRow[]>(() => Array.isArray(savedDraft?.rows) ? savedDraft.rows : [newRow()]);
+  const [pasteMode, setPasteMode] = useState<"automatic" | "fixed">(savedDraft?.mode === "fixed" ? "fixed" : "automatic");
+  const [batchRequestKey] = useState(savedDraft?.requestKey || requestKey);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [uncertain, setUncertain] = useState(false);
   const [batchAlreadySaved, setBatchAlreadySaved] = useState(false);
 
+  useEffect(() => {
+    try { localStorage.setItem(storageKey, JSON.stringify({ rows, mode: pasteMode, requestKey: batchRequestKey })); } catch {}
+  }, [storageKey, rows, pasteMode, batchRequestKey]);
+
   const updateCell = (rowIndex: number, key: PasteField, value: string) => {
     if (uncertain || batchAlreadySaved) return;
     setError("");
-    setRows(previous => previous.map((row, index) => index === rowIndex ? applyCell(row, key, value) : row));
+    setRows(previous => previous.map((row, index) => {
+      if (index !== rowIndex) return row;
+      const next = applyCell(row, key, value);
+      if (key === "vehicle_plate") {
+        const normalized = value.replace(/\s/g, "");
+        const matches = vehicles.filter(vehicle => vehicle.plate_number.replace(/\s/g, "") === normalized);
+        return { ...next, fleet_vehicle_id: matches.length === 1 ? String(matches[0].id || "") : "" };
+      }
+      if (key === "assignment_mode" && value !== "vehicle") return { ...next, fleet_vehicle_id: "" };
+      return next;
+    }));
   };
 
   const handlePaste = (
@@ -254,7 +308,14 @@ export function InvoicePasteModal({
       ? headerRowMapping(matrix[0])
       : null;
     const dataRows = headers ? matrix.slice(1) : matrix;
-    const mapping = headers ?? (
+    const fixedMapping: Array<PasteField | null> = [
+      null, null, "branch", "vehicle_plate", "invoice_date", "invoice_number",
+      "supplier_name", "item_name", "quantity", "price_before_vat", "total_before_vat",
+      "tax_status", "tax_amount", "total_after_vat",
+    ];
+    const mapping = pasteMode === "fixed" && !headers
+      ? fixedMapping
+      : headers ?? (
       singleCellKey && !hasTableCells
         ? [singleCellKey]
         : COLUMNS.slice(columnIndex).map(column => column.key)
@@ -272,6 +333,16 @@ export function InvoicePasteModal({
           const key = mapping[cellOffset];
           if (key) target = applyCell(target, key, value);
         });
+        if (pasteMode === "fixed") {
+          const plate = target.vehicle_plate.trim();
+          target = {
+            ...target,
+            assignment_mode: plate === "مستودع الورشة" ? "workshop" : plate ? "vehicle" : "branch",
+            price_after_vat: (numericValue(target.quantity) || 0) > 0
+              ? String((numericValue(target.total_after_vat) || 0) / (numericValue(target.quantity) || 1))
+              : "",
+          };
+        }
         next[targetIndex] = target;
       });
       return next;
@@ -280,17 +351,23 @@ export function InvoicePasteModal({
 
   const submittedRows = rows.filter(rowHasContent);
   const totalBefore = (row: InvoicePasteRow) =>
-    (numericValue(row.quantity) ?? 0) * (numericValue(row.price_before_vat) ?? 0);
+    row.total_before_vat.trim() ? numericValue(row.total_before_vat) ?? 0
+      : (numericValue(row.quantity) ?? 0) * (numericValue(row.price_before_vat) ?? 0);
   const totalAfter = (row: InvoicePasteRow) =>
-    (numericValue(row.quantity) ?? 0) * (numericValue(row.price_after_vat) ?? 0);
+    row.total_after_vat.trim() ? numericValue(row.total_after_vat) ?? 0
+      : (numericValue(row.quantity) ?? 0) * (numericValue(row.price_after_vat) ?? 0);
 
   const validateRows = (): string | null => {
     if (!submittedRows.length) return "الصق صفًا أو أدخل بيانات فاتورة واحدة على الأقل";
     for (const [index, row] of submittedRows.entries()) {
       const rowNumber = index + 1;
       if (!row.item_name.trim()) return `الصف ${rowNumber}: اسم قطعة الغيار مطلوب`;
-      if (row.work_on === "vehicle" && !row.vehicle_plate.trim())
+      if ((row.assignment_mode === "vehicle" || row.assignment_mode === "new") && row.work_on === "vehicle" && !row.vehicle_plate.trim())
         return `الصف ${rowNumber}: اختر سيارة أو اكتب رقم السيارة`;
+      if ((row.assignment_mode === "branch" || row.assignment_mode === "new") && !row.branch.trim())
+        return `الصف ${rowNumber}: اختر الفرع`;
+      if (row.assignment_mode === "workshop" && (numericValue(row.quantity) ?? 0) <= 0)
+        return `الصف ${rowNumber}: أدخل كمية أكبر من صفر لفاتورة مستودع الورشة`;
       if (row.work_on === "trailer" && !row.trailer_number.trim())
         return `الصف ${rowNumber}: أدخل رقم التيدر`;
       for (const [label, value] of [
@@ -298,6 +375,9 @@ export function InvoicePasteModal({
         ["السعر قبل الضريبة", row.price_before_vat],
         ["السعر بعد الضريبة", row.price_after_vat],
         ["الخصم", row.discount_amount],
+        ["الإجمالي قبل الضريبة", row.total_before_vat],
+        ["مبلغ الضريبة", row.tax_amount],
+        ["الإجمالي بعد الضريبة", row.total_after_vat],
       ]) {
         const parsed = numericValue(value);
         if (parsed === null || parsed < 0) return `الصف ${rowNumber}: قيمة ${label} غير صحيحة`;
@@ -316,8 +396,9 @@ export function InvoicePasteModal({
     setSaving(true);
     setError("");
     try {
-      await onSave(submittedRows, requestKey);
-      onClose();
+      await onSave(submittedRows, batchRequestKey);
+      localStorage.removeItem(storageKey);
+      onClose(true);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "فشل حفظ الفواتير؛ بقيت البيانات في الجدول");
       if (saveError && typeof saveError === "object" && "uncertain" in saveError && saveError.uncertain === true) {
@@ -344,6 +425,23 @@ export function InvoicePasteModal({
       if (column.key === "total_before") value = totalBefore(row).toLocaleString("ar-SA", { maximumFractionDigits: 2 });
       if (column.key === "total_after") value = totalAfter(row).toLocaleString("ar-SA", { maximumFractionDigits: 2 });
       return <td key={column.key} className="min-w-[130px] border-b border-[#e6ebe7] bg-[#f1f4f1] px-2 py-1.5 text-center text-[11px] font-medium tabular-nums text-[#72817b]"><span className="inline-flex min-h-8 items-center justify-center rounded-md bg-[#e8eeea] px-2">{value}</span></td>;
+    }
+
+    if (column.key === "assignment_mode") {
+      return (
+        <td key={column.key} className="min-w-[160px] border-b border-[#e6ebe7] px-2 py-1.5">
+          <select value={row.assignment_mode}
+            onChange={event => updateCell(rowIndex, "assignment_mode", event.target.value)}
+            onPaste={paste("assignment_mode")}
+            disabled={saving || uncertain || batchAlreadySaved}
+            className={commonClass} aria-label={`جهة الفاتورة، الصف ${rowIndex + 1}`}>
+            <option value="branch">الفرع فقط</option>
+            <option value="vehicle">سيارة موجودة</option>
+            <option value="new">إضافة سيارة للأسطول</option>
+            <option value="workshop">مستودع الورشة</option>
+          </select>
+        </td>
+      );
     }
 
     if (column.key === "work_on") {
@@ -388,8 +486,11 @@ export function InvoicePasteModal({
         : key === "supplier_name"
           ? "supplier-invoice-paste-suppliers"
           : undefined;
-    const isNumber = key === "quantity" || key === "price_before_vat" || key === "price_after_vat" || key === "discount_amount";
+    const isNumber = ["quantity", "price_before_vat", "price_after_vat", "discount_amount", "total_before_vat", "tax_amount", "total_after_vat"].includes(key);
 
+    const vehicleMatches = key === "vehicle_plate"
+      ? vehicles.filter(vehicle => vehicle.plate_number.replace(/\s/g, "") === row.vehicle_plate.replace(/\s/g, ""))
+      : [];
     return (
       <td key={column.key} className="min-w-[140px] border-b border-[#e6ebe7] px-2 py-1.5">
         <input
@@ -404,6 +505,17 @@ export function InvoicePasteModal({
           className={commonClass}
           aria-label={`${column.label}، الصف ${rowIndex + 1}`}
         />
+        {key === "vehicle_plate" && vehicleMatches.length > 1 && (
+          <select value={row.fleet_vehicle_id} onChange={event => {
+            const selected = vehicles.find(vehicle => String(vehicle.id) === event.target.value);
+            setRows(previous => previous.map((value, index) => index === rowIndex
+              ? { ...value, fleet_vehicle_id: event.target.value, vehicle_plate: selected?.plate_number || value.vehicle_plate }
+              : value));
+          }} className={`${commonClass} mt-1`} aria-label={`حدد السيارة المطابقة، الصف ${rowIndex + 1}`}>
+            <option value="">اختر السجل المطابق</option>
+            {vehicleMatches.map(vehicle => <option key={vehicle.id || vehicle.plate_number} value={vehicle.id}>{vehicle.plate_number}{vehicle.branch ? ` — ${vehicle.branch}` : ""}</option>)}
+          </select>
+        )}
       </td>
     );
   };
@@ -424,7 +536,7 @@ export function InvoicePasteModal({
           </div>
           <button
             type="button"
-            onClick={() => onClose(batchAlreadySaved)}
+            onClick={() => { if (batchAlreadySaved) localStorage.removeItem(storageKey); onClose(batchAlreadySaved); }}
             disabled={saving || uncertain}
             aria-label="إغلاق جدول اللصق"
             data-testid="button-close-invoice-paste"
@@ -437,11 +549,17 @@ export function InvoicePasteModal({
         <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[#dce4df] bg-[#eef2ed] px-4 py-2.5 sm:px-6">
           <div className="flex flex-wrap items-center gap-2.5 text-xs text-[#657873]">
             <span className="inline-flex items-center gap-1.5 rounded-md border border-[#c6ddd2] bg-[#e1eee7] px-2.5 py-1.5 font-black text-[#245d50]" data-testid="text-invoice-paste-row-count"><Check size={13} />{submittedRows.length} صف جاهز</span>
-            <span className="text-[11px]">السيارة تقبل اختيارًا من الأسطول أو كتابة رقم خارجي.</span>
+            <span className="text-[11px]">يمكنك إدخال البيانات يدويًا أو لصقها من Excel، وتبقى المسودة عند الإغلاق.</span>
             <span className="hidden h-4 w-px bg-[#d3ddd7] sm:block" />
             <span className="hidden items-center gap-1 text-[10px] text-[#71807b] sm:inline-flex"><LockKeyhole size={12} /> الحقول الرمادية للعرض فقط</span>
           </div>
           <div className="flex items-center gap-2">
+            <select aria-label="نمط لصق الأعمدة" value={pasteMode}
+              onChange={event => setPasteMode(event.target.value as "automatic" | "fixed")}
+              className="rounded-lg border border-[#c6d8cf] bg-white px-3 py-2 text-xs font-semibold">
+              <option value="automatic">تخطيط تلقائي</option>
+              <option value="fixed">تخطيط ثابت (14 عمودًا)</option>
+            </select>
             <button
               type="button"
               onClick={() => { if (!uncertain && !batchAlreadySaved) { setRows(previous => [...previous, newRow()]); setError(""); } }}
@@ -529,7 +647,7 @@ export function InvoicePasteModal({
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center">
           <button
             type="button"
-            onClick={() => onClose(batchAlreadySaved)}
+            onClick={() => { localStorage.removeItem(storageKey); onClose(true); }}
             disabled={saving || uncertain}
             data-testid="button-cancel-invoice-paste"
             className="rounded-lg border border-[#d6dfd9] bg-white px-5 py-2.5 text-sm font-semibold text-[#64736f] transition-colors hover:bg-[#f1f4f0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#687e77]/25 disabled:opacity-50"
@@ -553,7 +671,7 @@ export function InvoicePasteModal({
           {batchAlreadySaved && (
             <button
               type="button"
-              onClick={() => onClose(true)}
+              onClick={() => { localStorage.removeItem(storageKey); onClose(true); }}
               data-testid="button-invoice-paste-review-saved"
               className="rounded-lg bg-[#f5e8c6] px-4 py-2.5 text-xs font-bold text-[#735a1f] transition-colors hover:bg-[#edddaf] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#b08c42]/30"
             >

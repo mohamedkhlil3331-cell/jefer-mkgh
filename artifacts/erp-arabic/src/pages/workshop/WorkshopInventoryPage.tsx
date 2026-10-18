@@ -20,6 +20,14 @@ type Transaction = {
   quantity: number; cost_per_unit: number;
   reason?: string; reference_no?: string; created_by?: string; vehicle_no?: string; created_at: string;
 };
+type WorkshopInvoiceReceipt = {
+  id: number; invoice_id: number; serial_no: string | null; invoice_date: string | null;
+  branch: string | null; invoice_number: string | null; supplier_name: string | null;
+  item_name: string; quantity: number; unit_cost: number; total_before_vat: number | null;
+  tax_status: string | null; tax_amount: number; total_after_vat: number | null; notes: string | null;
+  status: "pending" | "received"; inventory_item_id: number | null; inventory_item_name: string | null;
+  inventory_item_code: string | null; received_by: string | null; received_at: string | null; created_at: string;
+};
 
 const CATEGORIES = ["عام", "زيوت وفلاتر", "إطارات", "كهرباء", "هيكل وميكانيكا", "أدوات", "قطع غيار أخرى"];
 const UNITS      = ["قطعة", "لتر", "كيلو", "متر", "صندوق", "زوج", "طقم"];
@@ -665,8 +673,8 @@ function TxEditModal({ tx, onClose, onSave }: { tx: Transaction; onClose: () => 
 }
 
 export default function WorkshopInventoryPage() {
-  const { user } = useAuth();
-  const [tab, setTab]         = useRememberedState<"available" | "in" | "out">("workshop-inventory-tab", "available");
+  const { user, token } = useAuth();
+  const [tab, setTab]         = useRememberedState<"available" | "in" | "out" | "receipts">("workshop-inventory-tab", "available");
   const [items, setItems]     = useState<InventoryItem[]>([]);
   const [txs, setTxs]         = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -692,6 +700,16 @@ export default function WorkshopInventoryPage() {
   const [selectedTxIds, setSelectedTxIds]   = useState<Set<number>>(new Set());
   const [bulkDeletingTx, setBulkDeletingTx] = useState(false);
   const [txCounts, setTxCounts] = useState<{ in: number; out: number }>({ in: 0, out: 0 });
+  const [invoiceReceipts, setInvoiceReceipts] = useState<WorkshopInvoiceReceipt[]>([]);
+  const [receiptLoading, setReceiptLoading] = useState(false);
+  const [receiptError, setReceiptError] = useState("");
+  const [receivingReceipt, setReceivingReceipt] = useState<WorkshopInvoiceReceipt | null>(null);
+  const [receiptItemId, setReceiptItemId] = useState("");
+  const [receiptNewItem, setReceiptNewItem] = useState(false);
+  const [receiptNewName, setReceiptNewName] = useState("");
+  const [receiptNewCode, setReceiptNewCode] = useState("");
+  const [receiptUnit, setReceiptUnit] = useState("قطعة");
+  const [receiptSaving, setReceiptSaving] = useState(false);
 
   const loadTxCounts = useCallback(() => {
     fetch("/api/workshop-inventory/transactions/counts")
@@ -717,6 +735,21 @@ export default function WorkshopInventoryPage() {
     }).catch(() => { if (!silent) setTxLoading(false); });
   }, []);
 
+  const loadInvoiceReceipts = useCallback(async () => {
+    setReceiptLoading(true);
+    setReceiptError("");
+    try {
+      const response = await fetch("/api/workshop-inventory/purchase-invoice-receipts", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: "no-store",
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "تعذر تحميل طلبات الاستلام");
+      setInvoiceReceipts(Array.isArray(data) ? data : []);
+    } catch (error) {
+      setReceiptError(error instanceof Error ? error.message : "تعذر تحميل طلبات الاستلام");
+    } finally { setReceiptLoading(false); }
+  }, [token]);
+
   useEffect(() => { loadItems(); loadTxCounts(); }, [loadItems, loadTxCounts]);
 
   useEffect(() => {
@@ -724,6 +757,38 @@ export default function WorkshopInventoryPage() {
     if (tab === "out") loadTxs("out");
     setSelectedTxIds(new Set()); // reset on tab switch
   }, [tab, loadTxs]);
+
+  useEffect(() => { if (tab === "receipts") void loadInvoiceReceipts(); }, [tab, loadInvoiceReceipts]);
+
+  const confirmInvoiceReceipt = async () => {
+    if (!receivingReceipt || receiptSaving) return;
+    if (receiptNewItem ? (!receiptNewName.trim() || !receiptNewCode.trim()) : !receiptItemId) {
+      setReceiptError(receiptNewItem ? "أدخل اسم الصنف ورمزه الفريد" : "اختر صنفًا من المخزون أو أنشئ صنفًا جديدًا");
+      return;
+    }
+    setReceiptSaving(true);
+    setReceiptError("");
+    try {
+      const response = await fetch(`/api/workshop-inventory/purchase-invoice-receipts/${receivingReceipt.id}/receive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(receiptNewItem
+          ? { new_item_name: receiptNewName.trim(), new_item_code: receiptNewCode.trim(), unit: receiptUnit }
+          : { inventory_item_id: Number(receiptItemId) }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "تعذر تأكيد الاستلام");
+      setReceivingReceipt(null);
+      setReceiptNewItem(false);
+      setReceiptNewName("");
+      setReceiptNewCode("");
+      setReceiptItemId("");
+      await Promise.all([loadInvoiceReceipts(), loadItems(true), loadTxs("in", true)]);
+      loadTxCounts();
+    } catch (error) {
+      setReceiptError(error instanceof Error ? error.message : "تعذر تأكيد الاستلام");
+    } finally { setReceiptSaving(false); }
+  };
 
   const doBulkDelete = async () => {
     if (selectedIds.size === 0) return;
@@ -967,6 +1032,7 @@ export default function WorkshopInventoryPage() {
             { id: "available", label: "المتوفر",  icon: Boxes },
             { id: "in",  label: "الوارد",  icon: ArrowDownCircle, count: txCounts.in,  color: "bg-emerald-100 text-emerald-700" },
             { id: "out", label: "المنصرف", icon: ArrowUpCircle,   count: txCounts.out, color: "bg-red-100 text-red-700" },
+            { id: "receipts", label: "استلام فواتير الورشة", icon: FileSpreadsheet, count: invoiceReceipts.length, color: "bg-cyan-100 text-cyan-700" },
           ].map(t => (
             <button key={t.id} onClick={() => setTab(t.id as typeof tab)}
               className={`flex-1 flex items-center justify-center gap-2 py-2 px-3 rounded-xl text-sm font-semibold transition-all ${tab === t.id ? "bg-white text-[#103c68] shadow-sm" : "text-gray-500 hover:text-gray-700"}`}>
@@ -977,6 +1043,47 @@ export default function WorkshopInventoryPage() {
             </button>
           ))}
         </div>
+
+        {tab === "receipts" && (
+          <div className="p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h3 className="font-bold text-gray-800">فواتير بانتظار استلامها في مخزون الورشة</h3>
+                <p className="text-xs text-gray-500 mt-1">لا تتغير الكمية أو التكلفة قبل تأكيد الاستلام.</p>
+              </div>
+              <button onClick={() => void loadInvoiceReceipts()} className="p-2 rounded-lg border hover:bg-gray-50" aria-label="تحديث الطلبات"><RefreshCw size={15}/></button>
+            </div>
+            {receiptError && <div role="alert" className="rounded-xl bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{receiptError}</div>}
+            {receiptLoading ? <div className="py-12 text-center text-gray-400">جاري تحميل الطلبات...</div>
+              : invoiceReceipts.length === 0 ? <div className="py-12 text-center text-gray-400">لا توجد فواتير بانتظار الاستلام</div>
+              : invoiceReceipts.map(receipt => (
+                <div key={receipt.id} className="rounded-2xl border border-cyan-100 bg-white p-4 shadow-sm">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <div className="font-bold text-gray-900">{receipt.item_name}</div>
+                      <div className="mt-1 text-xs text-gray-500">
+                        فاتورة {receipt.invoice_number || receipt.invoice_id} · {receipt.supplier_name || "مورد غير محدد"}
+                      </div>
+                    </div>
+                    <button onClick={() => {
+                      setReceivingReceipt(receipt);
+                      setReceiptItemId("");
+                      setReceiptNewItem(false);
+                      setReceiptError("");
+                    }} className="rounded-xl bg-cyan-700 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-800">
+                      ربط الصنف وتأكيد الاستلام
+                    </button>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+                    <div><span className="block text-xs text-gray-400">الكمية</span><b>{fmtNum(receipt.quantity)}</b></div>
+                    <div><span className="block text-xs text-gray-400">تكلفة الوحدة قبل الضريبة</span><b>{fmtNum(receipt.unit_cost)} ر.س</b></div>
+                    <div><span className="block text-xs text-gray-400">الضريبة</span><b>{receipt.tax_status || "—"} · {fmtNum(receipt.tax_amount)} ر.س</b></div>
+                    <div><span className="block text-xs text-gray-400">الفرع</span><b>{receipt.branch || "—"}</b></div>
+                  </div>
+                </div>
+              ))}
+          </div>
+        )}
 
         {/* ── Tab: المتوفر ── */}
         {tab === "available" && (
@@ -1304,6 +1411,45 @@ export default function WorkshopInventoryPage() {
           onClose={() => setEditTx(null)}
           onSave={() => { setEditTx(null); loadItems(); if (tab === "in" || tab === "out") loadTxs(tab as "in" | "out"); }}
         />
+      )}
+      {receivingReceipt && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-4" dir="rtl">
+          <section role="dialog" aria-modal="true" className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-black text-gray-900">استلام فاتورة الورشة</h3>
+                <p className="mt-1 text-sm text-gray-500">{receivingReceipt.item_name} · كمية الفاتورة: {fmtNum(receivingReceipt.quantity)}</p>
+              </div>
+              <button onClick={() => setReceivingReceipt(null)} className="rounded-lg p-2 text-gray-400 hover:bg-gray-100" aria-label="إغلاق"><X size={18}/></button>
+            </div>
+            <div className="mt-4 flex gap-2">
+              <button onClick={() => setReceiptNewItem(false)} className={`rounded-lg px-3 py-2 text-sm ${!receiptNewItem ? "bg-cyan-700 text-white" : "bg-gray-100 text-gray-600"}`}>ربط بصنف موجود</button>
+              <button onClick={() => setReceiptNewItem(true)} className={`rounded-lg px-3 py-2 text-sm ${receiptNewItem ? "bg-cyan-700 text-white" : "bg-gray-100 text-gray-600"}`}>إنشاء صنف جديد</button>
+            </div>
+            {receiptNewItem ? (
+              <div className="mt-3 grid gap-3">
+                <input value={receiptNewName} onChange={e => setReceiptNewName(e.target.value)} placeholder="اسم الصنف" className="rounded-xl border px-3 py-2.5 text-sm"/>
+                <input value={receiptNewCode} onChange={e => setReceiptNewCode(e.target.value)} placeholder="رمز صنف فريد" className="rounded-xl border px-3 py-2.5 text-sm"/>
+                <select value={receiptUnit} onChange={e => setReceiptUnit(e.target.value)} className="rounded-xl border px-3 py-2.5 text-sm">
+                  {UNITS.map(unit => <option key={unit} value={unit}>{unit}</option>)}
+                </select>
+              </div>
+            ) : (
+              <select value={receiptItemId} onChange={e => setReceiptItemId(e.target.value)} className="mt-3 w-full rounded-xl border px-3 py-2.5 text-sm">
+                <option value="">اختر الصنف الموجود</option>
+                {items.map(item => <option key={item.id} value={item.id}>{item.item_name}{item.item_code ? ` (${item.item_code})` : ""}</option>)}
+              </select>
+            )}
+            {receiptError && <p role="alert" className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{receiptError}</p>}
+            <p className="mt-3 text-xs text-gray-500">سيُحدّث هذا الإجراء الكمية والتكلفة ويسجل حركة وارد مرة واحدة.</p>
+            <div className="mt-5 flex gap-2">
+              <button onClick={() => setReceivingReceipt(null)} disabled={receiptSaving} className="flex-1 rounded-xl border px-4 py-2.5 text-sm">إلغاء</button>
+              <button onClick={() => void confirmInvoiceReceipt()} disabled={receiptSaving} className="flex-1 rounded-xl bg-cyan-700 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60">
+                {receiptSaving ? "جارٍ التأكيد..." : "تأكيد الاستلام"}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
 
       {/* ── Delete item confirm ── */}

@@ -875,15 +875,21 @@ async function createPurchaseInvoiceRecord(body: Record<string, unknown>): Promi
   const {
     serial_no, invoice_date, branch, vehicle_plate, invoice_number,
     supplier_name, supplier_id, item_name, price_before_vat, quantity, price_after_vat, discount_amount,
-    notes, imported_by, work_on, trailer_number,
+    notes, imported_by, work_on, trailer_number, invoice_target, fleet_vehicle_id, create_vehicle, vehicle_type,
+    total_before_vat, tax_status, tax_amount, total_after_vat,
   } = body;
 
   if (!item_name || String(item_name).trim() === "")
     throw purchaseInvoiceCreateFailure("اسم قطعة الغيار مطلوب");
 
-  const vehiclePlate = String(vehicle_plate || "").trim();
-  const isWorkshop = vehiclePlate === "مستودع الورشة";
-  const workOn = isWorkshop
+  let vehiclePlate = String(vehicle_plate || "").trim();
+  const target = invoice_target === "branch" || invoice_target === "vehicle" || invoice_target === "workshop"
+    ? invoice_target
+    : vehiclePlate === "مستودع الورشة" ? "workshop" : vehiclePlate ? "vehicle" : "branch";
+  const isWorkshop = target === "workshop";
+  if (isWorkshop) vehiclePlate = "مستودع الورشة";
+  if (target === "branch") vehiclePlate = "";
+  const workOn = isWorkshop || target === "branch"
     ? null
     : work_on === "trailer" ? "trailer" : work_on === "vehicle" ? "vehicle" : null;
   const trailerNumber = isWorkshop ? "" : String(trailer_number || "").trim();
@@ -899,9 +905,41 @@ async function createPurchaseInvoiceRecord(body: Record<string, unknown>): Promi
       throw purchaseInvoiceCreateFailure("رقم التيدر غير موجود في إدارة التيدارات");
   }
 
-  const fleetVehicle = vehiclePlate
-    ? await queryOne<{ branch?: string | null }>("SELECT branch FROM fleet_vehicles WHERE LOWER(TRIM(plate_number))=LOWER(?)", vehiclePlate)
-    : undefined;
+  const normalizePlate = (value: string) => value.replace(/\s/g, "");
+  let fleetVehicle: { id: number; plate_number: string; branch?: string | null } | undefined;
+  if (target === "vehicle" && vehiclePlate) {
+    if (fleet_vehicle_id != null) {
+      fleetVehicle = await queryOne<{ id: number; plate_number: string; branch?: string | null }>(
+        "SELECT id, plate_number, branch FROM fleet_vehicles WHERE id=?", Number(fleet_vehicle_id),
+      );
+      if (!fleetVehicle || normalizePlate(fleetVehicle.plate_number) !== normalizePlate(vehiclePlate))
+        throw purchaseInvoiceCreateFailure("السيارة المحددة لا تطابق رقم اللوحة");
+    } else {
+      const candidates = (await queryAll<{ id: number; plate_number: string; branch?: string | null }>(
+        "SELECT id, plate_number, branch FROM fleet_vehicles",
+      )).filter(vehicle => normalizePlate(vehicle.plate_number) === normalizePlate(vehiclePlate));
+      if (candidates.length > 1)
+        throw purchaseInvoiceCreateFailure("توجد أكثر من سيارة بهذا الرقم بعد تجاهل المسافات؛ اختر السيارة من القائمة");
+      if (candidates.length === 1) fleetVehicle = candidates[0];
+    }
+    if (!fleetVehicle && create_vehicle === true) {
+      if (!String(branch || "").trim()) throw purchaseInvoiceCreateFailure("اختر فرع السيارة الجديدة");
+      const activeBranch = await queryOne(
+        "SELECT id FROM company_settings WHERE active=1 AND LOWER(TRIM(entity_name))=LOWER(?)",
+        String(branch).trim(),
+      );
+      if (!activeBranch) throw purchaseInvoiceCreateFailure("الفرع المحدد غير موجود ضمن فروع الشركة");
+      const createdVehicle = await execute(
+        "INSERT INTO fleet_vehicles (plate_number, vehicle_type, status, branch) VALUES (?, ?, 'available', ?)",
+        vehiclePlate, String(vehicle_type || "شاحنة").trim(), String(branch).trim(),
+      );
+      fleetVehicle = { id: Number(createdVehicle.lastInsertRowid), plate_number: vehiclePlate, branch: String(branch).trim() };
+    }
+  }
+  if (target === "vehicle" && !vehiclePlate && work_on === "vehicle")
+    throw purchaseInvoiceCreateFailure("اختر السيارة التي تخصها الفاتورة");
+  if (target === "vehicle" && invoice_target === "vehicle" && vehiclePlate && !fleetVehicle && create_vehicle !== true)
+    throw purchaseInvoiceCreateFailure("السيارة غير مسجلة في الأسطول؛ اختر سيارة مسجلة أو أضفها للأسطول");
   const trailerFleetVehicle = trailerNumber
     ? await queryOne<{ branch?: string | null }>("SELECT branch FROM fleet_vehicles WHERE linked_trailer_number=? LIMIT 1", trailerNumber)
     : undefined;
@@ -911,22 +949,24 @@ async function createPurchaseInvoiceRecord(body: Record<string, unknown>): Promi
       ? String(trailerFleetVehicle.branch).trim()
     : String(branch || "").trim();
 
-  if (!resolvedBranch)
+  if (!resolvedBranch && target !== "workshop")
     throw purchaseInvoiceCreateFailure(fleetVehicle
       ? "هذه السيارة غير مرتبطة بفرع. حدّد فرعها أولًا من إدارة الأسطول"
       : "اختيار الفرع مطلوب");
 
-  if (fleetVehicle || trailerFleetVehicle) {
+  if (resolvedBranch) {
     const activeBranch = await queryOne(
       "SELECT id FROM company_settings WHERE active=1 AND LOWER(TRIM(entity_name))=LOWER(?)"
     , resolvedBranch);
     if (!activeBranch)
-      throw purchaseInvoiceCreateFailure("فرع السيارة غير موجود ضمن فروع الشركة؛ حدّث السيارة من إدارة الأسطول");
+      throw purchaseInvoiceCreateFailure("الفرع غير موجود ضمن فروع الشركة");
   }
 
   const inQty = Number(quantity) || 0;
   const inCost = Number(price_before_vat) || 0;
-  const costUnit = inQty > 0 && inCost > 0 ? inCost / inQty : 0;
+  const costUnit = inCost;
+  if (isWorkshop && inQty <= 0)
+    throw purchaseInvoiceCreateFailure("كمية فاتورة مستودع الورشة يجب أن تكون أكبر من صفر");
   let resolvedSupplierName = String(supplier_name || "").trim();
   let resolvedSupplierId = supplier_id ? Number(supplier_id) : null;
 
@@ -957,43 +997,30 @@ async function createPurchaseInvoiceRecord(body: Record<string, unknown>): Promi
     INSERT INTO purchase_invoices
       (serial_no, invoice_date, branch, vehicle_plate, invoice_number,
         supplier_name, supplier_id, item_name, price_before_vat, quantity, price_after_vat, discount_amount,
-        notes, imported_by, work_on, trailer_number)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        notes, imported_by, work_on, trailer_number, invoice_target, total_before_vat, tax_status, tax_amount, total_after_vat)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `,
-    serial_no ?? null, invoice_date ?? null, resolvedBranch, vehicle_plate ?? null,
+    serial_no ?? null, invoice_date ?? null, resolvedBranch || null, vehiclePlate || null,
     invoice_number ?? null, resolvedSupplierName || null, resolvedSupplierId,
     String(item_name), Number(price_before_vat) || 0, inQty, Number(price_after_vat) || 0,
     Math.max(0, Number(discount_amount) || 0),
-    notes ?? null, imported_by ?? null, workOn, trailerNumber || null,
+    notes ?? null, imported_by ?? null, workOn, trailerNumber || null, target,
+    total_before_vat == null ? inQty * (Number(price_before_vat) || 0) : Number(total_before_vat),
+    tax_status == null ? null : String(tax_status).trim(),
+    Math.max(0, Number(tax_amount) || 0),
+    total_after_vat == null ? inQty * (Number(price_after_vat) || 0) : Number(total_after_vat),
   );
   const id = Number(inserted.lastInsertRowid);
 
   let workshopAdded = false;
   let workshopItemName = "";
-  if (isWorkshop && inQty > 0) {
-    const name = String(item_name).trim();
-    workshopItemName = name;
-    const existing = await queryOne<{ id: number; item_name: string; quantity: number; cost_per_unit: number }>(
-      "SELECT * FROM workshop_inventory WHERE LOWER(item_name)=LOWER(?)"
-    , name);
-
-    if (existing) {
-      await execute(
-        "UPDATE workshop_inventory SET quantity=quantity+?, last_updated=datetime('now'), updated_by=? WHERE id=?"
-      , inQty, String(imported_by || "") || null, existing.id);
-      if (costUnit > 0) await updateWeightedCost(existing.id, inQty, costUnit, String(imported_by || "") || null);
-      await logInventoryTransaction(existing.id, name, "in", inQty, "فاتورة_مشتريات",
-        String(invoice_number || id), String(imported_by || ""), costUnit);
-    } else {
-      const newR = await execute(`
-        INSERT INTO workshop_inventory
-          (item_name, category, quantity, unit, min_stock, cost_per_unit, supplier, updated_by)
-        VALUES (?, 'عام', ?, 'قطعة', 0, ?, ?, ?)
-      `, name, inQty, costUnit, resolvedSupplierName || null, String(imported_by || "") || null);
-      await logInventoryTransaction(Number(newR.lastInsertRowid), name, "in", inQty, "فاتورة_مشتريات",
-        String(invoice_number || id), String(imported_by || ""), costUnit);
-    }
+  if (isWorkshop) {
+    workshopItemName = String(item_name).trim();
     workshopAdded = true;
+    await execute(
+      "INSERT INTO purchase_invoice_workshop_receipts (invoice_id) VALUES (?)",
+      id,
+    );
   }
 
   return {
@@ -1121,6 +1148,130 @@ router.post("/purchase-invoices/paste", async (req, res) => {
         ? failure.message
         : "فشل حفظ مجموعة فواتير الموردين",
     });
+  }
+});
+
+router.get("/workshop-inventory/purchase-invoice-receipts", async (req, res) => {
+  const actor = await getSupplierClaimActor(req);
+  if (!actor) return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
+  if (!canManageWorkshopInventory(actor)) return void res.status(403).json({ error: "لا تملك صلاحية استلام مخزون الورشة" });
+  const receipts = await queryAll(`
+    SELECT r.id, i.id AS invoice_id, i.serial_no, i.invoice_date, i.branch, i.invoice_number,
+      i.supplier_name, i.item_name, i.quantity, i.price_before_vat AS unit_cost,
+      i.total_before_vat, i.tax_status, COALESCE(i.tax_amount,0) AS tax_amount,
+      i.total_after_vat, i.notes, r.status, r.inventory_item_id,
+      wi.item_name AS inventory_item_name, wi.item_code AS inventory_item_code,
+      r.received_by, r.received_at, r.created_at
+    FROM purchase_invoice_workshop_receipts r
+    JOIN purchase_invoices i ON i.id=r.invoice_id
+    LEFT JOIN workshop_inventory wi ON wi.id=r.inventory_item_id
+    WHERE r.status='pending'
+    ORDER BY r.created_at ASC, r.id ASC
+  `);
+  res.json(receipts);
+});
+
+router.post("/workshop-inventory/purchase-invoice-receipts/:id/receive", async (req, res) => {
+  const actor = await getSupplierClaimActor(req);
+  if (!actor) return void res.status(401).json({ error: "تسجيل الدخول مطلوب" });
+  if (!canManageWorkshopInventory(actor)) return void res.status(403).json({ error: "لا تملك صلاحية استلام مخزون الورشة" });
+  const receiptId = Number(req.params.id);
+  if (!Number.isSafeInteger(receiptId) || receiptId < 1)
+    return void res.status(400).json({ error: "رقم طلب الاستلام غير صحيح" });
+
+  const receipt = await queryOne<{
+    id: number; invoice_id: number; status: string; item_name: string; quantity: number;
+    unit_cost: number; supplier_name: string | null; invoice_number: string | null;
+  }>(`
+    SELECT r.id, r.invoice_id, r.status, i.item_name, i.quantity,
+      i.price_before_vat AS unit_cost, i.supplier_name, i.invoice_number
+    FROM purchase_invoice_workshop_receipts r JOIN purchase_invoices i ON i.id=r.invoice_id
+    WHERE r.id=?
+  `, receiptId);
+  if (!receipt) return void res.status(404).json({ error: "طلب الاستلام غير موجود" });
+  if (receipt.status === "received") {
+    const saved = await queryOne("SELECT * FROM purchase_invoice_workshop_receipts WHERE id=?", receiptId);
+    return void res.json({ ...saved, ok: true, replayed: true });
+  }
+
+  const inventoryItemId = req.body?.inventory_item_id == null ? null : Number(req.body.inventory_item_id);
+  const newItemName = String(req.body?.new_item_name || "").trim();
+  const newItemCode = String(req.body?.new_item_code || "").trim();
+  const unit = String(req.body?.unit || "قطعة").trim() || "قطعة";
+  const creating = Boolean(newItemName || newItemCode);
+  if ((creating && (!newItemName || !newItemCode || inventoryItemId != null)) ||
+      (!creating && (!Number.isSafeInteger(inventoryItemId) || Number(inventoryItemId) < 1))) {
+    return void res.status(400).json({ error: "اختر صنفاً موجوداً أو أدخل اسم الصنف ورمزه الجديد" });
+  }
+  if (!(Number(receipt.quantity) > 0))
+    return void res.status(400).json({ error: "كمية الفاتورة يجب أن تكون أكبر من صفر" });
+
+  let itemWhere: string;
+  let itemParams: unknown[];
+  if (creating) {
+    const duplicate = await queryOne("SELECT id FROM workshop_inventory WHERE item_code=?", newItemCode);
+    if (duplicate) return void res.status(409).json({ error: "رمز الصنف مستخدم بالفعل" });
+    itemWhere = "item_code=?";
+    itemParams = [newItemCode];
+  } else {
+    const item = await queryOne("SELECT id FROM workshop_inventory WHERE id=?", inventoryItemId);
+    if (!item) return void res.status(404).json({ error: "الصنف المحدد غير موجود" });
+    itemWhere = "id=?";
+    itemParams = [inventoryItemId];
+  }
+
+  const pendingGuard = "EXISTS (SELECT 1 FROM purchase_invoice_workshop_receipts WHERE id=? AND status='pending')";
+  const statements: Array<{ sql: string; params: unknown[] }> = [];
+  if (creating) {
+    statements.push({
+      sql: `INSERT INTO workshop_inventory (item_name,item_code,category,quantity,unit,min_stock,cost_per_unit,supplier,updated_by)
+            SELECT ?,?,'عام',0,?,0,0,?,? WHERE ${pendingGuard}`,
+      params: [newItemName, newItemCode, unit, receipt.supplier_name, actor.name, receiptId],
+    });
+  }
+  const qty = Number(receipt.quantity);
+  const cost = Math.max(0, Number(receipt.unit_cost) || 0);
+  statements.push({
+    sql: `UPDATE workshop_inventory SET
+            cost_per_unit=CASE WHEN quantity+?>0 THEN ((quantity*COALESCE(cost_per_unit,0))+(?*?))/(quantity+?) ELSE COALESCE(cost_per_unit,0) END,
+            quantity=quantity+?, last_updated=datetime('now'), updated_by=?
+          WHERE ${itemWhere} AND ${pendingGuard}`,
+    params: [qty, qty, cost, qty, qty, actor.name, ...itemParams, receiptId],
+  });
+  statements.push({
+    sql: `INSERT INTO workshop_inventory_transactions
+            (item_id,item_name,type,quantity,cost_per_unit,reason,reference_no,created_by)
+          SELECT id,item_name,'in',?,?,'استلام_فاتورة_ورشة',?,?
+          FROM workshop_inventory WHERE ${itemWhere} AND ${pendingGuard}`,
+    params: [qty, cost, String(receipt.invoice_number || receipt.invoice_id), actor.name, ...itemParams, receiptId],
+  });
+  statements.push({
+    sql: `UPDATE purchase_invoice_workshop_receipts SET status='received',
+            inventory_item_id=(SELECT id FROM workshop_inventory WHERE ${itemWhere} LIMIT 1),
+            received_by=?, received_at=datetime('now')
+          WHERE id=? AND status='pending'
+            AND EXISTS (SELECT 1 FROM workshop_inventory WHERE ${itemWhere})`,
+    params: [...itemParams, actor.name, receiptId, ...itemParams],
+  });
+  try {
+    await executeBatch(statements);
+    const saved = await queryOne<{ status: string }>(
+      "SELECT * FROM purchase_invoice_workshop_receipts WHERE id=?", receiptId,
+    );
+    if (!saved || saved.status !== "received")
+      return void res.status(409).json({ error: "تعذر تأكيد الاستلام؛ راجع حالة الطلب والصنف" });
+    const result = await queryOne(`
+      SELECT r.*, wi.item_name AS inventory_item_name, wi.item_code AS inventory_item_code
+      FROM purchase_invoice_workshop_receipts r
+      LEFT JOIN workshop_inventory wi ON wi.id=r.inventory_item_id WHERE r.id=?
+    `, receiptId);
+    res.json({ ...result, ok: true, replayed: false });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (/unique|constraint/i.test(message))
+      return void res.status(409).json({ error: "رمز الصنف مستخدم بالفعل" });
+    req.log.error({ err: error, receiptId }, "Failed to receive workshop purchase invoice");
+    res.status(500).json({ error: "فشل تسجيل استلام الفاتورة" });
   }
 });
 

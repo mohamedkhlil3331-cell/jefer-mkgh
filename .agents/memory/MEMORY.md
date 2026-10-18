@@ -40,7 +40,7 @@
 - [Customer chat access policy](customer-chat-access.md) — eligibility stays scoped; searchable contacts and job-title labels apply to all chat users.
 - [Driver diesel attribution](driver-diesel-attribution.md) — vehicle links on driver expenses are metadata; the diesel register is read-only and must not alter driver balances or vehicle net.
 - [Supplier claim print history](supplier-claim-print-history.md) — use the existing claim workflow, append reprint events, and never infer a legacy printer from the claim creator.
-- [Supplier invoice paste grid](supplier-invoice-paste.md) — keep file import; add an editable, auto-expanding clipboard grid with all invoice columns and fleet-or-external vehicle entry.
+- [Supplier invoice paste grid](supplier-invoice-paste.md) — keep file import; persist editable paste/manual drafts, and defer workshop stock changes until authorized receipt confirmation.
 - [GitHub CLI authentication](github-cli-auth.md) — Replit's GitHub API connection does not authenticate shell `git push`; configure Git transport credentials separately without exposing or persisting the token in Git config.
 - [Automatic GitHub push preference](git-push-preference.md) — after requested work is verified, push assistant-made changes for this project to the configured GitHub branch.
 - [Hostinger destination](hostinger-direction.md) — the user plans to move this project's hosting, storage, and traffic data to Hostinger later.

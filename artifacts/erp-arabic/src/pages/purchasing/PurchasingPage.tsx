@@ -594,8 +594,10 @@ export default function PurchasingPage() {
         serial_no: row.serial_no.trim() || null,
         invoice_date: row.invoice_date.trim() || null,
         branch: row.branch.trim() || null,
-        vehicle_plate: row.vehicle_plate.trim() || null,
-        work_on: row.vehicle_plate.trim() === "مستودع الورشة" ? null : row.work_on,
+        vehicle_plate: row.assignment_mode === "branch" ? null
+          : row.assignment_mode === "workshop" ? "مستودع الورشة"
+            : row.vehicle_plate.trim() || null,
+        work_on: row.assignment_mode === "branch" || row.assignment_mode === "workshop" ? null : row.work_on,
         trailer_number: row.trailer_number.trim() || null,
         invoice_number: row.invoice_number.trim() || null,
         supplier_name: row.supplier_name.trim() || null,
@@ -604,6 +606,14 @@ export default function PurchasingPage() {
         price_before_vat: parseInvoicePasteAmount(row.price_before_vat),
         price_after_vat: parseInvoicePasteAmount(row.price_after_vat),
         discount_amount: parseInvoicePasteAmount(row.discount_amount),
+        total_before_vat: row.total_before_vat.trim() ? parseInvoicePasteAmount(row.total_before_vat) : null,
+        tax_status: row.tax_status.trim() || null,
+        tax_amount: parseInvoicePasteAmount(row.tax_amount),
+        total_after_vat: row.total_after_vat.trim() ? parseInvoicePasteAmount(row.total_after_vat) : null,
+        invoice_target: row.assignment_mode === "new" ? "vehicle" : row.assignment_mode,
+        fleet_vehicle_id: row.fleet_vehicle_id ? Number(row.fleet_vehicle_id) : null,
+        create_vehicle: row.assignment_mode === "new",
+        vehicle_type: null,
         notes: row.notes.trim() || null,
       })),
     };
@@ -666,7 +676,7 @@ export default function PurchasingPage() {
     if (saved.workshop_added_count > 0) void loadInventory();
     alert(
       `تم حفظ ${saved.inserted} سجل بنجاح` +
-      (saved.workshop_added_count ? `، وإضافة ${saved.workshop_added_count} بند إلى مخزون الورشة` : ""),
+      (saved.workshop_added_count ? `، وحفظ ${saved.workshop_added_count} بند كطلبات بانتظار استلام الورشة` : ""),
     );
   };
 
@@ -1681,7 +1691,7 @@ tfoot td{background:#e0f2fe;font-weight:900;border-top:2px solid #0e7490;font-si
               ${invResult.workshopAdded ? "bg-emerald-50 border-emerald-200 text-emerald-800" : "bg-blue-50 border-blue-200 text-blue-800"}`}>
               <CheckCircle size={16} className="flex-shrink-0" />
               {invResult.workshopAdded
-                ? `✅ تمت الإضافة — "${invResult.workshopItemName}" أُضيف تلقائياً لمستودع الورشة`
+                ? `✅ حُفظت فاتورة "${invResult.workshopItemName}" كطلب بانتظار الاستلام في مستودع الورشة`
                 : "✅ تمت إضافة الفاتورة بنجاح"}
               <button onClick={() => setInvResult(null)} className="mr-auto text-current opacity-60 hover:opacity-100">✕</button>
             </div>
@@ -2347,6 +2357,7 @@ tfoot td{background:#e0f2fe;font-weight:900;border-top:2px solid #0e7490;font-si
       {pasteInvoicesOpen && (
         <InvoicePasteModal
           importedBy={user?.name || user?.phone || ""}
+          draftKey={String(user?.id ?? user?.phone ?? user?.name ?? "")}
           requestKey={pasteInvoiceRequestKey}
           vehicles={fleetVehicles}
           trailerNumbers={[...new Set(teidarat.map(item => item.teidara_number?.trim()).filter((number): number is string => Boolean(number)))]}
