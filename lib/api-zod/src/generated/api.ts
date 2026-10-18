@@ -636,6 +636,16 @@ export const pasteSupplierPurchaseInvoicesBodyRowsItemPriceAfterVatMin = 0;
 
 export const pasteSupplierPurchaseInvoicesBodyRowsItemDiscountAmountMin = 0;
 
+export const pasteSupplierPurchaseInvoicesBodyRowsItemVehicleTypeMax = 100;
+
+export const pasteSupplierPurchaseInvoicesBodyRowsItemTotalBeforeVatMin = 0;
+
+export const pasteSupplierPurchaseInvoicesBodyRowsItemTaxStatusMax = 100;
+
+export const pasteSupplierPurchaseInvoicesBodyRowsItemTaxAmountMin = 0;
+
+export const pasteSupplierPurchaseInvoicesBodyRowsItemTotalAfterVatMin = 0;
+
 export const pasteSupplierPurchaseInvoicesBodyRowsMax = 500;
 
 export const PasteSupplierPurchaseInvoicesBody = zod.object({
@@ -674,10 +684,116 @@ export const PasteSupplierPurchaseInvoicesBody = zod.object({
           .number()
           .min(pasteSupplierPurchaseInvoicesBodyRowsItemDiscountAmountMin),
         notes: zod.string().nullable(),
+        invoice_target: zod.enum(["branch", "vehicle", "workshop"]).optional(),
+        fleet_vehicle_id: zod.number().min(1).nullish(),
+        create_vehicle: zod.boolean().optional(),
+        vehicle_type: zod
+          .string()
+          .max(pasteSupplierPurchaseInvoicesBodyRowsItemVehicleTypeMax)
+          .nullish(),
+        total_before_vat: zod
+          .number()
+          .min(pasteSupplierPurchaseInvoicesBodyRowsItemTotalBeforeVatMin)
+          .nullish(),
+        tax_status: zod
+          .string()
+          .max(pasteSupplierPurchaseInvoicesBodyRowsItemTaxStatusMax)
+          .nullish(),
+        tax_amount: zod
+          .number()
+          .min(pasteSupplierPurchaseInvoicesBodyRowsItemTaxAmountMin)
+          .optional(),
+        total_after_vat: zod
+          .number()
+          .min(pasteSupplierPurchaseInvoicesBodyRowsItemTotalAfterVatMin)
+          .nullish(),
       }),
     )
     .min(1)
     .max(pasteSupplierPurchaseInvoicesBodyRowsMax),
+});
+
+/**
+ * @summary List workshop purchase invoices awaiting stock receipt
+ */
+export const ListWorkshopPurchaseInvoiceReceiptsResponseItem = zod.object({
+  id: zod.number(),
+  invoice_id: zod.number(),
+  serial_no: zod.string().nullable(),
+  invoice_date: zod.string().nullable(),
+  branch: zod.string().nullable(),
+  invoice_number: zod.string().nullable(),
+  supplier_name: zod.string().nullable(),
+  item_name: zod.string(),
+  quantity: zod.number(),
+  unit_cost: zod.number(),
+  total_before_vat: zod.number().nullable(),
+  tax_status: zod.string().nullable(),
+  tax_amount: zod.number(),
+  total_after_vat: zod.number().nullable(),
+  notes: zod.string().nullable(),
+  status: zod.enum(["pending", "received"]),
+  inventory_item_id: zod.number().nullable(),
+  inventory_item_name: zod.string().nullable(),
+  inventory_item_code: zod.string().nullable(),
+  received_by: zod.string().nullable(),
+  received_at: zod.string().nullable(),
+  created_at: zod.string(),
+});
+export const ListWorkshopPurchaseInvoiceReceiptsResponse = zod.array(
+  ListWorkshopPurchaseInvoiceReceiptsResponseItem,
+);
+
+/**
+ * @summary Confirm receipt of a workshop purchase invoice into inventory
+ */
+
+export const ReceiveWorkshopPurchaseInvoiceParams = zod.object({
+  id: zod.coerce.number().min(1),
+});
+
+export const receiveWorkshopPurchaseInvoiceBodyNewItemNameMax = 200;
+
+export const receiveWorkshopPurchaseInvoiceBodyNewItemCodeMax = 100;
+
+export const receiveWorkshopPurchaseInvoiceBodyUnitMax = 50;
+
+export const ReceiveWorkshopPurchaseInvoiceBody = zod.object({
+  inventory_item_id: zod.number().min(1).nullish(),
+  new_item_name: zod
+    .string()
+    .max(receiveWorkshopPurchaseInvoiceBodyNewItemNameMax)
+    .optional(),
+  new_item_code: zod
+    .string()
+    .max(receiveWorkshopPurchaseInvoiceBodyNewItemCodeMax)
+    .optional(),
+  unit: zod.string().max(receiveWorkshopPurchaseInvoiceBodyUnitMax).optional(),
+});
+
+export const ReceiveWorkshopPurchaseInvoiceResponse = zod.object({
+  id: zod.number(),
+  invoice_id: zod.number(),
+  serial_no: zod.string().nullable(),
+  invoice_date: zod.string().nullable(),
+  branch: zod.string().nullable(),
+  invoice_number: zod.string().nullable(),
+  supplier_name: zod.string().nullable(),
+  item_name: zod.string(),
+  quantity: zod.number(),
+  unit_cost: zod.number(),
+  total_before_vat: zod.number().nullable(),
+  tax_status: zod.string().nullable(),
+  tax_amount: zod.number(),
+  total_after_vat: zod.number().nullable(),
+  notes: zod.string().nullable(),
+  status: zod.enum(["pending", "received"]),
+  inventory_item_id: zod.number().nullable(),
+  inventory_item_name: zod.string().nullable(),
+  inventory_item_code: zod.string().nullable(),
+  received_by: zod.string().nullable(),
+  received_at: zod.string().nullable(),
+  created_at: zod.string(),
 });
 
 /**

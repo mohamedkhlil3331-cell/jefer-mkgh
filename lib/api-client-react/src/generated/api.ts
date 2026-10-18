@@ -54,6 +54,8 @@ import type {
   SupplierPurchaseInvoicePasteInput,
   SupplierPurchaseInvoicePasteResult,
   VehicleAttachmentDeleteResult,
+  WorkshopPurchaseInvoiceReceipt,
+  WorkshopPurchaseInvoiceReceiptInput,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -2716,6 +2718,178 @@ export const usePasteSupplierPurchaseInvoices = <
   TContext
 > => {
   return useMutation(getPasteSupplierPurchaseInvoicesMutationOptions(options));
+};
+
+/**
+ * @summary List workshop purchase invoices awaiting stock receipt
+ */
+export const getListWorkshopPurchaseInvoiceReceiptsUrl = () => {
+  return `/api/workshop-inventory/purchase-invoice-receipts`;
+};
+
+export const listWorkshopPurchaseInvoiceReceipts = async (
+  options?: RequestInit,
+): Promise<WorkshopPurchaseInvoiceReceipt[]> => {
+  return customFetch<WorkshopPurchaseInvoiceReceipt[]>(
+    getListWorkshopPurchaseInvoiceReceiptsUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getListWorkshopPurchaseInvoiceReceiptsQueryKey = () => {
+  return [`/api/workshop-inventory/purchase-invoice-receipts`] as const;
+};
+
+export const getListWorkshopPurchaseInvoiceReceiptsQueryOptions = <
+  TData = Awaited<ReturnType<typeof listWorkshopPurchaseInvoiceReceipts>>,
+  TError = ErrorType<ApiError>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listWorkshopPurchaseInvoiceReceipts>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getListWorkshopPurchaseInvoiceReceiptsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof listWorkshopPurchaseInvoiceReceipts>>
+  > = ({ signal }) =>
+    listWorkshopPurchaseInvoiceReceipts({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof listWorkshopPurchaseInvoiceReceipts>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type ListWorkshopPurchaseInvoiceReceiptsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof listWorkshopPurchaseInvoiceReceipts>>
+>;
+export type ListWorkshopPurchaseInvoiceReceiptsQueryError = ErrorType<ApiError>;
+
+/**
+ * @summary List workshop purchase invoices awaiting stock receipt
+ */
+
+export function useListWorkshopPurchaseInvoiceReceipts<
+  TData = Awaited<ReturnType<typeof listWorkshopPurchaseInvoiceReceipts>>,
+  TError = ErrorType<ApiError>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof listWorkshopPurchaseInvoiceReceipts>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions =
+    getListWorkshopPurchaseInvoiceReceiptsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Confirm receipt of a workshop purchase invoice into inventory
+ */
+export const getReceiveWorkshopPurchaseInvoiceUrl = (id: number) => {
+  return `/api/workshop-inventory/purchase-invoice-receipts/${id}/receive`;
+};
+
+export const receiveWorkshopPurchaseInvoice = async (
+  id: number,
+  workshopPurchaseInvoiceReceiptInput: WorkshopPurchaseInvoiceReceiptInput,
+  options?: RequestInit,
+): Promise<WorkshopPurchaseInvoiceReceipt> => {
+  return customFetch<WorkshopPurchaseInvoiceReceipt>(
+    getReceiveWorkshopPurchaseInvoiceUrl(id),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(workshopPurchaseInvoiceReceiptInput),
+    },
+  );
+};
+
+export const getReceiveWorkshopPurchaseInvoiceMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof receiveWorkshopPurchaseInvoice>>,
+    TError,
+    { id: number; data: BodyType<WorkshopPurchaseInvoiceReceiptInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof receiveWorkshopPurchaseInvoice>>,
+  TError,
+  { id: number; data: BodyType<WorkshopPurchaseInvoiceReceiptInput> },
+  TContext
+> => {
+  const mutationKey = ["receiveWorkshopPurchaseInvoice"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof receiveWorkshopPurchaseInvoice>>,
+    { id: number; data: BodyType<WorkshopPurchaseInvoiceReceiptInput> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return receiveWorkshopPurchaseInvoice(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ReceiveWorkshopPurchaseInvoiceMutationResult = NonNullable<
+  Awaited<ReturnType<typeof receiveWorkshopPurchaseInvoice>>
+>;
+export type ReceiveWorkshopPurchaseInvoiceMutationBody =
+  BodyType<WorkshopPurchaseInvoiceReceiptInput>;
+export type ReceiveWorkshopPurchaseInvoiceMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Confirm receipt of a workshop purchase invoice into inventory
+ */
+export const useReceiveWorkshopPurchaseInvoice = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof receiveWorkshopPurchaseInvoice>>,
+    TError,
+    { id: number; data: BodyType<WorkshopPurchaseInvoiceReceiptInput> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof receiveWorkshopPurchaseInvoice>>,
+  TError,
+  { id: number; data: BodyType<WorkshopPurchaseInvoiceReceiptInput> },
+  TContext
+> => {
+  return useMutation(getReceiveWorkshopPurchaseInvoiceMutationOptions(options));
 };
 
 /**

@@ -2122,6 +2122,12 @@ try { db.exec("ALTER TABLE purchase_invoices ADD COLUMN trailer_number TEXT"); }
 try { db.exec("ALTER TABLE purchase_invoices ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id)"); } catch {}
 // Optional proportional share of an invoice-entry discount. Additive migration preserves all existing invoices.
 try { db.exec("ALTER TABLE purchase_invoices ADD COLUMN discount_amount REAL DEFAULT 0"); } catch {}
+// New invoice-entry fields are nullable so existing invoice history remains unchanged.
+try { db.exec("ALTER TABLE purchase_invoices ADD COLUMN invoice_target TEXT"); } catch {}
+try { db.exec("ALTER TABLE purchase_invoices ADD COLUMN total_before_vat REAL"); } catch {}
+try { db.exec("ALTER TABLE purchase_invoices ADD COLUMN tax_status TEXT"); } catch {}
+try { db.exec("ALTER TABLE purchase_invoices ADD COLUMN tax_amount REAL DEFAULT 0"); } catch {}
+try { db.exec("ALTER TABLE purchase_invoices ADD COLUMN total_after_vat REAL"); } catch {}
 db.exec(`
   CREATE TABLE IF NOT EXISTS purchase_invoice_paste_batches (
     request_key TEXT PRIMARY KEY,
@@ -2131,6 +2137,19 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   )
 `);
+db.exec(`
+  CREATE TABLE IF NOT EXISTS purchase_invoice_workshop_receipts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL UNIQUE REFERENCES purchase_invoices(id),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','received')),
+    inventory_item_id INTEGER REFERENCES workshop_inventory(id),
+    received_by TEXT,
+    received_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_purchase_invoice_workshop_receipts_status
+  ON purchase_invoice_workshop_receipts(status, created_at)`);
 // #138 — supplier rating after receive
 try { db.exec("ALTER TABLE purchase_requests ADD COLUMN rating INTEGER"); } catch {}
 try { db.exec("ALTER TABLE purchase_requests ADD COLUMN quality_notes TEXT"); } catch {}

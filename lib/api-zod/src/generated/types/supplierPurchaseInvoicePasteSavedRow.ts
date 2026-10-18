@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SupplierPurchaseInvoicePasteSavedRowInvoiceTarget } from "./supplierPurchaseInvoicePasteSavedRowInvoiceTarget";
 import type { SupplierPurchaseInvoicePasteSavedRowWorkOn } from "./supplierPurchaseInvoicePasteSavedRowWorkOn";
 
 export interface SupplierPurchaseInvoicePasteSavedRow {
@@ -33,6 +34,15 @@ export interface SupplierPurchaseInvoicePasteSavedRow {
   price_before_vat: number;
   quantity: number;
   price_after_vat: number;
+  /** @nullable */
+  total_before_vat: number | null;
+  /** @nullable */
+  tax_status: string | null;
+  tax_amount: number;
+  /** @nullable */
+  total_after_vat: number | null;
+  /** @nullable */
+  invoice_target: SupplierPurchaseInvoicePasteSavedRowInvoiceTarget;
   discount_amount: number;
   /** @nullable */
   notes: string | null;

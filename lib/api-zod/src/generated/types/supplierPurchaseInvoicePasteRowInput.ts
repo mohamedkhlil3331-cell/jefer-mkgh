@@ -5,6 +5,7 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { SupplierPurchaseInvoicePasteRowInputInvoiceTarget } from "./supplierPurchaseInvoicePasteRowInputInvoiceTarget";
 import type { SupplierPurchaseInvoicePasteRowInputWorkOn } from "./supplierPurchaseInvoicePasteRowInputWorkOn";
 
 export interface SupplierPurchaseInvoicePasteRowInput {
@@ -36,4 +37,33 @@ export interface SupplierPurchaseInvoicePasteRowInput {
   discount_amount: number;
   /** @nullable */
   notes: string | null;
+  invoice_target?: SupplierPurchaseInvoicePasteRowInputInvoiceTarget;
+  /**
+   * @minimum 1
+   * @nullable
+   */
+  fleet_vehicle_id?: number | null;
+  create_vehicle?: boolean;
+  /**
+   * @maxLength 100
+   * @nullable
+   */
+  vehicle_type?: string | null;
+  /**
+   * @minimum 0
+   * @nullable
+   */
+  total_before_vat?: number | null;
+  /**
+   * @maxLength 100
+   * @nullable
+   */
+  tax_status?: string | null;
+  /** @minimum 0 */
+  tax_amount?: number;
+  /**
+   * @minimum 0
+   * @nullable
+   */
+  total_after_vat?: number | null;
 }

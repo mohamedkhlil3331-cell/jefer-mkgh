@@ -412,6 +412,15 @@ export const SupplierPurchaseInvoicePasteRowInputWorkOn = {
   trailer: "trailer",
 } as const;
 
+export type SupplierPurchaseInvoicePasteRowInputInvoiceTarget =
+  (typeof SupplierPurchaseInvoicePasteRowInputInvoiceTarget)[keyof typeof SupplierPurchaseInvoicePasteRowInputInvoiceTarget];
+
+export const SupplierPurchaseInvoicePasteRowInputInvoiceTarget = {
+  branch: "branch",
+  vehicle: "vehicle",
+  workshop: "workshop",
+} as const;
+
 export interface SupplierPurchaseInvoicePasteRowInput {
   /** @nullable */
   serial_no: string | null;
@@ -441,6 +450,35 @@ export interface SupplierPurchaseInvoicePasteRowInput {
   discount_amount: number;
   /** @nullable */
   notes: string | null;
+  invoice_target?: SupplierPurchaseInvoicePasteRowInputInvoiceTarget;
+  /**
+   * @minimum 1
+   * @nullable
+   */
+  fleet_vehicle_id?: number | null;
+  create_vehicle?: boolean;
+  /**
+   * @maxLength 100
+   * @nullable
+   */
+  vehicle_type?: string | null;
+  /**
+   * @minimum 0
+   * @nullable
+   */
+  total_before_vat?: number | null;
+  /**
+   * @maxLength 100
+   * @nullable
+   */
+  tax_status?: string | null;
+  /** @minimum 0 */
+  tax_amount?: number;
+  /**
+   * @minimum 0
+   * @nullable
+   */
+  total_after_vat?: number | null;
 }
 
 export interface SupplierPurchaseInvoicePasteInput {
@@ -466,6 +504,19 @@ export type SupplierPurchaseInvoicePasteSavedRowWorkOn =
 export const SupplierPurchaseInvoicePasteSavedRowWorkOn = {
   vehicle: "vehicle",
   trailer: "trailer",
+} as const;
+
+/**
+ * @nullable
+ */
+export type SupplierPurchaseInvoicePasteSavedRowInvoiceTarget =
+  | (typeof SupplierPurchaseInvoicePasteSavedRowInvoiceTarget)[keyof typeof SupplierPurchaseInvoicePasteSavedRowInvoiceTarget]
+  | null;
+
+export const SupplierPurchaseInvoicePasteSavedRowInvoiceTarget = {
+  branch: "branch",
+  vehicle: "vehicle",
+  workshop: "workshop",
 } as const;
 
 export interface SupplierPurchaseInvoicePasteSavedRow {
@@ -494,6 +545,15 @@ export interface SupplierPurchaseInvoicePasteSavedRow {
   price_before_vat: number;
   quantity: number;
   price_after_vat: number;
+  /** @nullable */
+  total_before_vat: number | null;
+  /** @nullable */
+  tax_status: string | null;
+  tax_amount: number;
+  /** @nullable */
+  total_after_vat: number | null;
+  /** @nullable */
+  invoice_target: SupplierPurchaseInvoicePasteSavedRowInvoiceTarget;
   discount_amount: number;
   /** @nullable */
   notes: string | null;
@@ -510,6 +570,67 @@ export interface SupplierPurchaseInvoicePasteResult {
   workshop_added_count: number;
   workshop_item_names: string[];
   replayed: boolean;
+}
+
+export interface WorkshopPurchaseInvoiceReceiptInput {
+  /**
+   * @minimum 1
+   * @nullable
+   */
+  inventory_item_id?: number | null;
+  /** @maxLength 200 */
+  new_item_name?: string;
+  /** @maxLength 100 */
+  new_item_code?: string;
+  /** @maxLength 50 */
+  unit?: string;
+}
+
+export type WorkshopPurchaseInvoiceReceiptStatus =
+  (typeof WorkshopPurchaseInvoiceReceiptStatus)[keyof typeof WorkshopPurchaseInvoiceReceiptStatus];
+
+export const WorkshopPurchaseInvoiceReceiptStatus = {
+  pending: "pending",
+  received: "received",
+} as const;
+
+export interface WorkshopPurchaseInvoiceReceipt {
+  id: number;
+  invoice_id: number;
+  /** @nullable */
+  serial_no: string | null;
+  /** @nullable */
+  invoice_date: string | null;
+  /** @nullable */
+  branch: string | null;
+  /** @nullable */
+  invoice_number: string | null;
+  /** @nullable */
+  supplier_name: string | null;
+  item_name: string;
+  quantity: number;
+  unit_cost: number;
+  /** @nullable */
+  total_before_vat: number | null;
+  /** @nullable */
+  tax_status: string | null;
+  tax_amount: number;
+  /** @nullable */
+  total_after_vat: number | null;
+  /** @nullable */
+  notes: string | null;
+  status: WorkshopPurchaseInvoiceReceiptStatus;
+  /** @nullable */
+  inventory_item_id: number | null;
+  /** @nullable */
+  inventory_item_name: string | null;
+  /** @nullable */
+  inventory_item_code: string | null;
+  /** @nullable */
+  received_by: string | null;
+  /** @nullable */
+  received_at: string | null;
+  created_at: string;
 }
 
 export interface SiteAnalyticsPageviewInput {

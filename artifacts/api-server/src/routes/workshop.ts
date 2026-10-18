@@ -24,14 +24,14 @@ const diskUpload = multer({
 
 const router = Router();
 
-type SupplierClaimActor = { id: number; role: string; name: string };
+type SupplierClaimActor = { id: number; role: string; name: string; permissions?: string[] | null };
 
 async function getSupplierClaimActor(req: Request): Promise<SupplierClaimActor | null> {
   const token = req.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
   if (!token || token === "guest") return null;
   if (await isSysAdminToken(token)) return { id: 0, role: "admin", name: "مدير النظام" };
-  const actor = await queryOne<SupplierClaimActor>(`
-    SELECT u.id, u.role, u.name
+  const actor = await queryOne<SupplierClaimActor & { permissions: string | null }>(`
+    SELECT u.id, u.role, u.name, u.permissions
     FROM sessions s
     JOIN users u ON u.id=s.user_id
     WHERE s.token=?
@@ -40,7 +40,23 @@ async function getSupplierClaimActor(req: Request): Promise<SupplierClaimActor |
       AND u.active=1
     LIMIT 1
   `, token);
-  return actor || null;
+  if (!actor) return null;
+  let permissions: string[] | null = null;
+  if (typeof actor.permissions === "string" && actor.permissions.trim()) {
+    try {
+      const parsed: unknown = JSON.parse(actor.permissions);
+      if (Array.isArray(parsed)) permissions = parsed.filter((value): value is string => typeof value === "string");
+    } catch { permissions = null; }
+  }
+  return { id: actor.id, role: actor.role, name: actor.name, permissions };
+}
+
+function canManageWorkshopInventory(actor: SupplierClaimActor): boolean {
+  if (actor.role === "admin") return true;
+  // Match the existing page guard: legacy users without a custom permission list
+  // retain their established access; custom roles need the workshop inventory permission.
+  if (!actor.permissions?.length) return true;
+  return actor.permissions.includes("fleet_workshop_inventory") || actor.permissions.includes("fleet_workshop");
 }
 
 async function requireSupplierClaimActor(
