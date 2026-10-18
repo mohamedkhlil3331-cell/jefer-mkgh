@@ -931,6 +931,38 @@ async function ensureFinalSourceManifestColumns() {
   }
 }
 
+async function createMissingSourceSchemaObjects(indexes, triggers, differences) {
+  const indexesByName = new Map(indexes.map(item => [String(item.name), item]));
+  const triggersByName = new Map(triggers.map(item => [String(item.name), item]));
+  for (const name of differences.missingIndexes) {
+    const item = indexesByName.get(name);
+    if (!item?.sql) throw new Error(`Cannot restore missing source index ${name}: source SQL is unavailable`);
+    await queryProductionD1(item.sql);
+  }
+  for (const name of differences.missingTriggers) {
+    const item = triggersByName.get(name);
+    if (!item?.sql) throw new Error(`Cannot restore missing source trigger ${name}: source SQL is unavailable`);
+    await queryProductionD1(item.sql);
+  }
+  const actualObjects = (await queryProductionD1(
+    `SELECT name, type FROM sqlite_master WHERE type IN ('index','trigger') ORDER BY type, name`,
+  )).results;
+  const actualIndexNames = actualObjects
+    .filter(row => row.type === "index" && !String(row.name).startsWith("sqlite_autoindex"))
+    .map(row => String(row.name))
+    .sort();
+  const actualTriggerNames = actualObjects
+    .filter(row => row.type === "trigger")
+    .map(row => String(row.name))
+    .sort();
+  if (
+    JSON.stringify(actualIndexNames) !== JSON.stringify(indexes.map(item => String(item.name)).sort())
+    || JSON.stringify(actualTriggerNames) !== JSON.stringify(triggers.map(item => String(item.name)).sort())
+  ) {
+    throw new Error("D1 schema objects still differ from the fixed source snapshot after restoring missing objects");
+  }
+}
+
 async function readD1MaxRowId(tableName, pseudoColumn) {
   const result = await queryProductionD1(
     `SELECT MAX(${quoteIdentifier(pseudoColumn)}) AS max_rowid FROM ${quoteIdentifier(tableName)}`,
@@ -1407,7 +1439,11 @@ async function run() {
         unexpectedTriggers: currentTriggerNames.filter(name => !expectedTriggerNames.includes(name)),
       };
       const hasSchemaObjectDifferences = Object.values(schemaObjectDifferences).some(names => names.length > 0);
-      if (hasSchemaObjectDifferences && !preflightResume) {
+      if (
+        schemaObjectDifferences.unexpectedIndexes.length
+        || schemaObjectDifferences.unexpectedTriggers.length
+        || (hasSchemaObjectDifferences && !preflightResume && !recoverVerifiedProgress)
+      ) {
         throw new Error("Cannot resume: D1 indexes or triggers differ from the production snapshot");
       }
 
@@ -1533,6 +1569,9 @@ async function run() {
         return;
       }
 
+      if (hasSchemaObjectDifferences) {
+        await createMissingSourceSchemaObjects(indexes, triggers, schemaObjectDifferences);
+      }
       if (recoverVerifiedProgress) {
         for (const { table, d1 } of baselineMismatches) {
           manifestProgress[table] = d1;
