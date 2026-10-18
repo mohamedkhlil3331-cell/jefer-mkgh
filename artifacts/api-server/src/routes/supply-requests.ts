@@ -128,20 +128,41 @@ type WarehouseFinalizationResult = {
   undelivered: boolean;
 };
 
-async function updateRoutingRequestAggregateStatus(requestId: number): Promise<void> {
+async function updateRoutingRequestAggregateStatus(
+  requestId: number,
+  allowReopenTerminalParent = false,
+): Promise<void> {
   const trips = await queryAll<{ status: string }>(
     "SELECT status FROM supply_request_trips WHERE supply_request_id=?", requestId,
   );
   if (!trips.length) return;
+  const parent = await queryOne<{ status: string; route_type: string | null }>(`
+    SELECT sr.status, rd.route_type
+    FROM supply_requests sr
+    LEFT JOIN routing_dispatches rd ON rd.id=sr.routing_dispatch_id
+    WHERE sr.id=?
+  `, requestId);
+  if (!parent) return;
+  const terminalParent = ["cancelled", "rejected", "completed", "delivered_to_warehouse"].includes(parent.status);
+  if (parent.status === "cancelled" && !allowReopenTerminalParent) return;
 
   const resolved = trips.every(t => ["completed", "cancelled", "rejected"].includes(t.status));
   const allArrived = trips.every(t =>
     ["delivered_to_warehouse", "pending_warehouse_approval", "completed", "cancelled", "rejected"].includes(t.status)
   );
   if (resolved) {
-    await execute("UPDATE supply_requests SET status='completed', updated_at=datetime('now') WHERE id=? AND status NOT IN ('cancelled','rejected')", requestId);
+    await execute(`
+      UPDATE supply_requests SET status='completed', updated_at=datetime('now')
+      WHERE id=? AND (status NOT IN ('cancelled','rejected') OR ?=1)
+    `, requestId, allowReopenTerminalParent ? 1 : 0);
   } else if (allArrived) {
-    await execute("UPDATE supply_requests SET status='delivered_to_warehouse', updated_at=datetime('now') WHERE id=? AND status NOT IN ('cancelled','rejected')", requestId);
+    await execute(`
+      UPDATE supply_requests SET status='delivered_to_warehouse', updated_at=datetime('now')
+      WHERE id=? AND (status NOT IN ('cancelled','rejected') OR ?=1)
+    `, requestId, allowReopenTerminalParent ? 1 : 0);
+  } else if (allowReopenTerminalParent && terminalParent) {
+    const initialStatus = parent.route_type === "via_fusahat" ? "assigned" : "in_transit";
+    await execute("UPDATE supply_requests SET status=?, updated_at=datetime('now') WHERE id=?", initialStatus, requestId);
   }
 }
 
@@ -158,7 +179,7 @@ async function finalizeRoutingTrip(tripId: number, acceptedStatuses: string[]): 
     WHERE t.id=?
   `, tripId);
   if (!trip) return { success: false, missing: true };
-  if (!trip.routing_dispatch_id || !trip.warehouse_id) return { success: false, notRouting: true };
+  if (!trip.routing_dispatch_id) return { success: false, notRouting: true };
   if (!acceptedStatuses.includes(trip.status)) return { success: false, conflict: true };
 
   const claimed = await execute(`
@@ -167,66 +188,68 @@ async function finalizeRoutingTrip(tripId: number, acceptedStatuses: string[]): 
   `, trip.id, ...acceptedStatuses);
   if (claimed.changes !== 1) return { success: false, conflict: true };
 
-  const cargoItems = readRoutingCargoItems(trip.cargo_items_json);
-  const products = new Map<number, { name: string; unit: string; quantity: number }>();
-  for (const cargo of cargoItems) {
-    let productId = cargo.product_id || null;
-    let product = productId
-      ? await queryOne<{ id: number; name: string; unit: string | null }>(
-          "SELECT id, name, unit FROM products WHERE id=?", productId,
-        )
-      : undefined;
-    if (!product) {
-      product = await queryOne<{ id: number; name: string; unit: string | null }>(
-        "SELECT id, name, unit FROM products WHERE lower(trim(name))=lower(trim(?)) LIMIT 1"
-      , cargo.cargo_type);
-      productId = product?.id ?? null;
-    }
-    if (!productId || !product || !cargo.quantity) continue;
-    const current = products.get(productId);
-    products.set(productId, {
-      name: product.name,
-      unit: product.unit || cargo.unit || "حبة",
-      quantity: (current?.quantity || 0) + cargo.quantity,
-    });
-  }
-
-  if (products.size) {
-    for (const [productId, product] of products) {
-      const existing = await queryOne<{ id: number }>(
-        "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_id=?"
-      , trip.warehouse_id, productId);
-      if (existing) {
-        await execute("UPDATE warehouse_items SET quantity=quantity+?, unit=?, last_updated=datetime('now') WHERE id=?",
-          product.quantity, product.unit, existing.id);
-      } else {
-        const unlinked = await queryOne<{ id: number }>(
-          "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=? AND product_id IS NULL LIMIT 1"
-        , trip.warehouse_id, product.name);
-        if (unlinked) {
-          await execute("UPDATE warehouse_items SET product_id=?, quantity=quantity+?, unit=?, last_updated=datetime('now') WHERE id=?",
-            productId, product.quantity, product.unit, unlinked.id);
-        } else {
-          await execute(
-            "INSERT INTO warehouse_items (warehouse_id, product_name, product_id, quantity, unit, min_stock) VALUES (?,?,?,?,?,0)"
-          , trip.warehouse_id, product.name, productId, product.quantity, product.unit);
-        }
+  if (trip.warehouse_id) {
+    const cargoItems = readRoutingCargoItems(trip.cargo_items_json);
+    const products = new Map<number, { name: string; unit: string; quantity: number }>();
+    for (const cargo of cargoItems) {
+      let productId = cargo.product_id || null;
+      let product = productId
+        ? await queryOne<{ id: number; name: string; unit: string | null }>(
+            "SELECT id, name, unit FROM products WHERE id=?", productId,
+          )
+        : undefined;
+      if (!product) {
+        product = await queryOne<{ id: number; name: string; unit: string | null }>(
+          "SELECT id, name, unit FROM products WHERE lower(trim(name))=lower(trim(?)) LIMIT 1"
+        , cargo.cargo_type);
+        productId = product?.id ?? null;
       }
-      const stock = await queryOne<{ total: number }>(
-        "SELECT COALESCE(SUM(quantity),0) AS total FROM warehouse_items WHERE product_id=?"
-      , productId);
-      await execute("UPDATE products SET stock=? WHERE id=?", stock?.total ?? 0, productId);
+      if (!productId || !product || !cargo.quantity) continue;
+      const current = products.get(productId);
+      products.set(productId, {
+        name: product.name,
+        unit: product.unit || cargo.unit || "حبة",
+        quantity: (current?.quantity || 0) + cargo.quantity,
+      });
     }
-  } else if (trip.product_name) {
-    const existing = await queryOne<{ id: number }>(
-      "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=?"
-    , trip.warehouse_id, trip.product_name);
-    if (existing) {
-      await execute("UPDATE warehouse_items SET quantity=quantity+1, last_updated=datetime('now') WHERE id=?", existing.id);
-    } else {
-      await execute(
-        "INSERT INTO warehouse_items (warehouse_id, product_name, quantity, unit, min_stock, max_stock) VALUES (?,?,1,?,0,0)"
-      , trip.warehouse_id, trip.product_name, trip.unit || "وحدة");
+
+    if (products.size) {
+      for (const [productId, product] of products) {
+        const existing = await queryOne<{ id: number }>(
+          "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_id=?"
+        , trip.warehouse_id, productId);
+        if (existing) {
+          await execute("UPDATE warehouse_items SET quantity=quantity+?, unit=?, last_updated=datetime('now') WHERE id=?",
+            product.quantity, product.unit, existing.id);
+        } else {
+          const unlinked = await queryOne<{ id: number }>(
+            "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=? AND product_id IS NULL LIMIT 1"
+          , trip.warehouse_id, product.name);
+          if (unlinked) {
+            await execute("UPDATE warehouse_items SET product_id=?, quantity=quantity+?, unit=?, last_updated=datetime('now') WHERE id=?",
+              productId, product.quantity, product.unit, unlinked.id);
+          } else {
+            await execute(
+              "INSERT INTO warehouse_items (warehouse_id, product_name, product_id, quantity, unit, min_stock) VALUES (?,?,?,?,?,0)"
+            , trip.warehouse_id, product.name, productId, product.quantity, product.unit);
+          }
+        }
+        const stock = await queryOne<{ total: number }>(
+          "SELECT COALESCE(SUM(quantity),0) AS total FROM warehouse_items WHERE product_id=?"
+        , productId);
+        await execute("UPDATE products SET stock=? WHERE id=?", stock?.total ?? 0, productId);
+      }
+    } else if (trip.product_name) {
+      const existing = await queryOne<{ id: number }>(
+        "SELECT id FROM warehouse_items WHERE warehouse_id=? AND product_name=?"
+      , trip.warehouse_id, trip.product_name);
+      if (existing) {
+        await execute("UPDATE warehouse_items SET quantity=quantity+1, last_updated=datetime('now') WHERE id=?", existing.id);
+      } else {
+        await execute(
+          "INSERT INTO warehouse_items (warehouse_id, product_name, quantity, unit, min_stock, max_stock) VALUES (?,?,1,?,0,0)"
+        , trip.warehouse_id, trip.product_name, trip.unit || "وحدة");
+      }
     }
   }
 
@@ -238,7 +261,53 @@ async function finalizeRoutingTrip(tripId: number, acceptedStatuses: string[]): 
     createIfMissing: true,
     fallbackDate: new Date().toISOString().slice(0, 10),
   });
-  await updateRoutingRequestAggregateStatus(trip.supply_request_id);
+  await updateRoutingRequestAggregateStatus(trip.supply_request_id, acceptedStatuses.includes("cancelled"));
+  return { success: true };
+}
+
+/**
+ * Supervisor-only recovery for a cancelled routing trip. The existing
+ * finalization claim keeps its stock and release effects idempotent.
+ */
+export async function completeCancelledRoutingDispatchTrip(tripId: number) {
+  return finalizeRoutingTrip(tripId, ["cancelled"]);
+}
+
+/**
+ * Restore one cancelled routing trip without changing its sibling assignments.
+ */
+export async function restoreCancelledRoutingDispatchTrip(tripId: number): Promise<
+  { success: true } | { success: false; missing?: boolean; conflict?: boolean; notRouting?: boolean }
+> {
+  const trip = await queryOne<{
+    id: number; supply_request_id: number; status: string; vehicle_plate: string | null;
+    routing_dispatch_id: number | null; route_type: string | null;
+  }>(`
+    SELECT t.id, t.supply_request_id, t.status, t.vehicle_plate,
+           sr.routing_dispatch_id, rd.route_type
+    FROM supply_request_trips t
+    JOIN supply_requests sr ON sr.id=t.supply_request_id
+    LEFT JOIN routing_dispatches rd ON rd.id=sr.routing_dispatch_id
+    WHERE t.id=?
+  `, tripId);
+  if (!trip) return { success: false, missing: true };
+  if (!trip.routing_dispatch_id) return { success: false, notRouting: true };
+  if (trip.status !== "cancelled") return { success: false, conflict: true };
+
+  const initialStatus = trip.route_type === "via_fusahat" ? "assigned" : "in_transit";
+  const restored = await execute(`
+    UPDATE supply_request_trips
+    SET status=?, delivered_at=NULL, loaded_at=NULL, updated_at=datetime('now')
+    WHERE id=? AND status='cancelled'
+  `, initialStatus, trip.id);
+  if (restored.changes !== 1) return { success: false, conflict: true };
+
+  if (trip.vehicle_plate) {
+    await execute("UPDATE fleet_vehicles SET status='busy' WHERE plate_number=?", trip.vehicle_plate);
+    await execute("UPDATE driver_profiles SET status='في رحلة' WHERE vehicle_plate=?", trip.vehicle_plate);
+  }
+  await updateRoutingRequestAggregateStatus(trip.supply_request_id, true);
+  await syncRoutingTripLog(trip.id, { createIfMissing: true });
   return { success: true };
 }
 

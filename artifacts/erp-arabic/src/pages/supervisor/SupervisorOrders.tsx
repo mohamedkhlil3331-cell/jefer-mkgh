@@ -336,6 +336,29 @@ export default function SupervisorOrders() {
       setMyTripsError(error instanceof Error ? error.message : "تعذر إلغاء الرحلة");
     } finally { setMyTripsSaving(null); }
   };
+  const recoverMyTrip = async (id: number, action: "restore" | "complete") => {
+    const confirmation = action === "restore"
+      ? "إعادة هذه الرحلة الملغاة إلى التشغيل؟"
+      : "اعتماد هذه الرحلة الملغاة مكتملة؟ سيُحدّث المخزون عند انطباق ذلك.";
+    if (!confirm(confirmation)) return;
+    setMyTripsSaving(id);
+    setMyTripsError("");
+    try {
+      const response = await fetch(`/api/routing-dispatch-trips/${id}/${action}`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${localStorage.getItem("mkgh_token") || ""}` },
+      });
+      if (!response.ok) {
+        const result = await response.json().catch(() => null);
+        throw new Error(result?.error || "تعذر تنفيذ الإجراء على الرحلة");
+      }
+      loadMyTrips();
+    } catch (error) {
+      setMyTripsError(error instanceof Error ? error.message : "تعذر تنفيذ الإجراء على الرحلة");
+    } finally {
+      setMyTripsSaving(null);
+    }
+  };
   const deleteMyTrip = async (id: number) => {
     if (!confirm("حذف الرحلة نهائياً؟ لا يمكن التراجع.")) return;
     setMyTripsSaving(id);
@@ -5872,6 +5895,28 @@ export default function SupervisorOrders() {
                             </td>
                             <td className="whitespace-nowrap px-4 py-3">
                               <div className="flex items-center gap-1.5">
+                                {trip.status === "cancelled" && (
+                                  <>
+                                    <button
+                                      onClick={() => recoverMyTrip(trip.id, "restore")}
+                                      disabled={myTripsSaving === trip.id}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+                                      title="إعادة إلى التشغيل"
+                                    >
+                                      <RefreshCw size={13} />
+                                      إعادة التشغيل
+                                    </button>
+                                    <button
+                                      onClick={() => recoverMyTrip(trip.id, "complete")}
+                                      disabled={myTripsSaving === trip.id}
+                                      className="inline-flex items-center gap-1 rounded-lg border border-green-200 bg-green-50 px-2 py-1.5 font-bold text-green-700 hover:bg-green-100 disabled:opacity-50"
+                                      title="اعتماد الرحلة مكتملة"
+                                    >
+                                      <CheckCircle size={13} />
+                                      مكتملة
+                                    </button>
+                                  </>
+                                )}
                                 {!["completed","cancelled"].includes(trip.status) && (
                                   <>
                                     <button

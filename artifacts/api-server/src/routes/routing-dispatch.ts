@@ -3,7 +3,11 @@ import multer from "multer";
 import path from "path";
 import { execute, executeBatch, queryAll, queryOne } from "../lib/erp-sql.js";
 import { isSysAdminToken } from "./auth.js";
-import { finalizeDisabledWarehouseRoutingRequest } from "./supply-requests.js";
+import {
+  completeCancelledRoutingDispatchTrip,
+  finalizeDisabledWarehouseRoutingRequest,
+  restoreCancelledRoutingDispatchTrip,
+} from "./supply-requests.js";
 import { deletePendingRoutingTripLog, syncRoutingTripLog } from "./routing-trip-log.js";
 import { r2MulterStorage, uniqueUploadName } from "../lib/r2-storage.js";
 
@@ -414,6 +418,30 @@ router.put("/routing-dispatch-trips/:id/cancel", requireRoutingSupervisor, async
     } catch {}
   }
   res.json({ message: "تم إلغاء الرحلة" });
+});
+
+router.put("/routing-dispatch-trips/:id/restore", requireRoutingSupervisor, async (req, res) => {
+  const tripId = Number(req.params.id);
+  if (!Number.isSafeInteger(tripId) || tripId <= 0) {
+    return void res.status(400).json({ error: "رقم الرحلة غير صحيح" });
+  }
+  const result = await restoreCancelledRoutingDispatchTrip(tripId);
+  if ("missing" in result && result.missing) return void res.status(404).json({ error: "الرحلة غير موجودة" });
+  if ("notRouting" in result && result.notRouting) return void res.status(409).json({ error: "هذا الإجراء مخصص لرحلات التوجيه" });
+  if ("conflict" in result && result.conflict) return void res.status(409).json({ error: "يمكن إعادة الرحلات الملغاة فقط" });
+  res.json({ message: "تمت إعادة الرحلة إلى التشغيل" });
+});
+
+router.put("/routing-dispatch-trips/:id/complete", requireRoutingSupervisor, async (req, res) => {
+  const tripId = Number(req.params.id);
+  if (!Number.isSafeInteger(tripId) || tripId <= 0) {
+    return void res.status(400).json({ error: "رقم الرحلة غير صحيح" });
+  }
+  const result = await completeCancelledRoutingDispatchTrip(tripId);
+  if (result.missing) return void res.status(404).json({ error: "الرحلة غير موجودة" });
+  if (result.notRouting) return void res.status(409).json({ error: "هذا الإجراء مخصص لرحلات التوجيه" });
+  if (result.conflict) return void res.status(409).json({ error: "يمكن إتمام الرحلات الملغاة فقط" });
+  res.json({ message: "تم اعتماد الرحلة مكتملة وتحديث آثارها" });
 });
 
 /* ── Hard-delete a routing-dispatch trip ────────────────────────────────── */
