@@ -435,28 +435,37 @@ async function verifyRequestedPreservedD1Extras(
   rowIdColumns,
   sourceTables,
   requestedExtras,
-  dynamicallyPreservedTables = new Set(),
+  {
+    preserveDiscovered = false,
+    allowUnlistedForPreflight = false,
+    dynamicallyPreservedTables = new Set(),
+  } = {},
 ) {
-  const sourceTableNames = new Set(sourceTables.map(table => table.name));
   const verified = {};
-  const tableNames = new Set([...requestedExtras.keys(), ...dynamicallyPreservedTables]);
-  for (const tableName of tableNames) {
+  for (const { name: tableName } of sourceTables) {
     const requestedRowIds = requestedExtras.get(tableName);
-    if (!sourceTableNames.has(tableName)) {
-      throw new Error(`Cannot preserve D1-only rows from a table missing in the source snapshot: ${tableName}`);
-    }
     const pseudoColumn = rowIdColumns.get(tableName);
     const sourceRows = db.prepare(
       `SELECT ${quoteIdentifier(pseudoColumn)} AS row_id FROM ${quoteIdentifier(tableName)}`,
     ).all();
     const sourceIds = new Set(sourceRows.map(row => String(row.row_id)));
-    const d1Rows = (await queryProductionD1(
-      `SELECT ${quoteIdentifier(pseudoColumn)} AS row_id FROM ${quoteIdentifier(tableName)}`,
-    )).results;
-    const actualD1OnlyIds = d1Rows
-      .map(row => String(row.row_id))
-      .filter(rowId => !sourceIds.has(rowId))
-      .sort((left, right) => Number(left) - Number(right));
+    const actualD1OnlyIds = [];
+    let cursor = null;
+    while (true) {
+      const cursorClause = cursor === null ? "" : ` WHERE ${quoteIdentifier(pseudoColumn)} > ?`;
+      const params = cursor === null ? [VERIFY_PAGE_SIZE] : [safeNumber(cursor, `${tableName} D1 rowid cursor`), VERIFY_PAGE_SIZE];
+      const d1Rows = (await queryProductionD1(
+        `SELECT ${quoteIdentifier(pseudoColumn)} AS row_id FROM ${quoteIdentifier(tableName)}${cursorClause} ORDER BY ${quoteIdentifier(pseudoColumn)} LIMIT ?`,
+        params,
+      )).results;
+      if (!d1Rows.length) break;
+      for (const row of d1Rows) {
+        const rowId = String(row.row_id);
+        if (!sourceIds.has(rowId)) actualD1OnlyIds.push(rowId);
+      }
+      cursor = d1Rows[d1Rows.length - 1].row_id;
+    }
+    actualD1OnlyIds.sort((left, right) => Number(left) - Number(right));
     const expectedD1OnlyIds = requestedRowIds
       ? [...requestedRowIds].sort((left, right) => Number(left) - Number(right))
       : null;
@@ -465,7 +474,18 @@ async function verifyRequestedPreservedD1Extras(
         `D1-only rows in ${tableName} differ from the explicitly approved preserve list; expected ${JSON.stringify(expectedD1OnlyIds)}, found ${JSON.stringify(actualD1OnlyIds)}`,
       );
     }
-    verified[tableName] = actualD1OnlyIds;
+    if (
+      actualD1OnlyIds.length
+      && !requestedRowIds
+      && !preserveDiscovered
+      && !allowUnlistedForPreflight
+      && !dynamicallyPreservedTables.has(tableName)
+    ) {
+      throw new Error(
+        `D1-only rows in ${tableName} require an explicit preserve list or --preserve-discovered-d1-extras: ${JSON.stringify(actualD1OnlyIds)}`,
+      );
+    }
+    if (actualD1OnlyIds.length) verified[tableName] = actualD1OnlyIds;
   }
   return verified;
 }
@@ -1035,7 +1055,8 @@ async function restoreSequences(db) {
 
 async function run() {
   const apply = process.argv.includes("--apply");
-  const dryRun = process.argv.includes("--dry-run");
+  const preflightResume = process.argv.includes("--preflight-resume");
+  const dryRun = process.argv.includes("--dry-run") || preflightResume;
   const expectedSourceEtagArgument = process.argv.find(argument => argument.startsWith("--expected-source-etag="));
   const expectedSourceEtag = expectedSourceEtagArgument?.slice("--expected-source-etag=".length);
   const sourceObjectKeyArgument = process.argv.find(argument => argument.startsWith("--source-object-key="));
@@ -1045,6 +1066,16 @@ async function run() {
   const replaceD1SessionsFromSource = process.argv.includes("--replace-d1-sessions-from-source");
   const preserveD1Sessions = process.argv.includes("--preserve-d1-sessions");
   const preserveAllD1OnlyChatQueueRows = process.argv.includes("--preserve-all-d1-only-chat-queue-rows");
+  const preserveDiscoveredD1Extras = process.argv.includes("--preserve-discovered-d1-extras");
+  if (process.argv.includes("--preflight-resume=")) {
+    throw new Error("--preflight-resume does not take a value");
+  }
+  if (preflightResume && process.argv.includes("--dry-run")) {
+    throw new Error("Use either --preflight-resume or --dry-run, not both");
+  }
+  if (preflightResume && !expectedSourceEtag) {
+    throw new Error("--preflight-resume requires --expected-source-etag to pin the R2 snapshot");
+  }
   if (process.argv.some(argument => argument.startsWith("--recover-verified-progress="))) {
     throw new Error("--recover-verified-progress does not take a value");
   }
@@ -1071,6 +1102,9 @@ async function run() {
   if (hasMalformedPreserveExtrasFlag) {
     throw new Error("Use --resume-preserving-extras=table_name:id,id[;another_table:id,id]");
   }
+  if (preflightResume && preserveExtrasArgument) {
+    throw new Error("--preflight-resume discovers D1-only rows; do not pass an explicit preserve list");
+  }
   if (preserveExtrasArgument && process.argv.includes("--resume")) {
     throw new Error("Choose either --resume or --resume-preserving-extras, not both");
   }
@@ -1083,8 +1117,14 @@ async function run() {
   if (preserveAllD1OnlyChatQueueRows && !preserveExtrasArgument) {
     throw new Error("--preserve-all-d1-only-chat-queue-rows requires --resume-preserving-extras");
   }
-  if (recoverVerifiedProgress && !preserveExtrasArgument) {
-    throw new Error("--recover-verified-progress requires --resume-preserving-extras");
+  if (preserveDiscoveredD1Extras && (apply || dryRun || !recoverVerifiedProgress)) {
+    throw new Error("--preserve-discovered-d1-extras is a resume apply mode and requires --recover-verified-progress");
+  }
+  if (preflightResume && !recoverVerifiedProgress) {
+    throw new Error("--preflight-resume requires --recover-verified-progress");
+  }
+  if (recoverVerifiedProgress && !preserveExtrasArgument && !preflightResume && !preserveDiscoveredD1Extras) {
+    throw new Error("--recover-verified-progress requires a preserving resume mode");
   }
   if (reconcileExistingValues && (!preserveExtrasArgument || !recoverVerifiedProgress)) {
     throw new Error("--reconcile-existing-values requires --resume-preserving-extras and --recover-verified-progress");
@@ -1115,10 +1155,12 @@ async function run() {
   const dynamicallyPreservedTables = preserveAllD1OnlyChatQueueRows
     ? new Set(["chat_push_queue"])
     : new Set();
-  const resume = process.argv.includes("--resume")
+  const resume = preflightResume
+    || process.argv.includes("--resume")
     || Boolean(preserveExtrasArgument)
     || replaceD1SessionsFromSource
-    || preserveAllD1OnlyChatQueueRows;
+    || preserveAllD1OnlyChatQueueRows
+    || preserveDiscoveredD1Extras;
   const replaceFromSourceTables = replaceD1SessionsFromSource ? new Set(["sessions"]) : new Set();
   const preserveD1Tables = preserveD1Sessions ? new Set(["sessions"]) : new Set();
   if ([apply, dryRun && !resume, resume && !dryRun, dryRun && resume].filter(Boolean).length !== 1) {
@@ -1297,7 +1339,6 @@ async function run() {
     const adjustmentsJson = JSON.stringify(schemaAdjustments);
     let markerSnapshotSha256 = snapshotSha256;
     if (resume) {
-      await ensureFinalSourceManifestColumns();
       const manifestResult = await queryProductionD1(
         `SELECT source_object_key, source_etag, source_last_modified, source_size_bytes,
                 source_sha256, source_table_count, source_row_count, migrated_table_counts_json
@@ -1325,9 +1366,15 @@ async function run() {
       } catch {
         throw new Error("Cannot resume: the D1 migration manifest contains invalid table progress");
       }
+      const progressEntriesValid = Object.entries(manifestProgress).every(
+        ([name, count]) => orderedNames.includes(name) && Number.isSafeInteger(count) && count >= 0,
+      );
       if (
-        Object.keys(manifestProgress).length !== sourceTables.length
-        || orderedNames.some(name => !Number.isSafeInteger(manifestProgress[name]))
+        !progressEntriesValid
+        || (!recoverVerifiedProgress && (
+          Object.keys(manifestProgress).length !== sourceTables.length
+          || orderedNames.some(name => !Number.isSafeInteger(manifestProgress[name]))
+        ))
       ) {
         throw new Error("Cannot resume: the D1 migration manifest does not show every source table imported");
       }
@@ -1353,10 +1400,14 @@ async function run() {
         .map(row => String(row.name))
         .sort();
       const expectedTriggerNames = triggers.map(item => String(item.name)).sort();
-      if (
-        JSON.stringify(currentIndexNames) !== JSON.stringify(expectedIndexNames)
-        || JSON.stringify(currentTriggerNames) !== JSON.stringify(expectedTriggerNames)
-      ) {
+      const schemaObjectDifferences = {
+        missingIndexes: expectedIndexNames.filter(name => !currentIndexNames.includes(name)),
+        unexpectedIndexes: currentIndexNames.filter(name => !expectedIndexNames.includes(name)),
+        missingTriggers: expectedTriggerNames.filter(name => !currentTriggerNames.includes(name)),
+        unexpectedTriggers: currentTriggerNames.filter(name => !expectedTriggerNames.includes(name)),
+      };
+      const hasSchemaObjectDifferences = Object.values(schemaObjectDifferences).some(names => names.length > 0);
+      if (hasSchemaObjectDifferences && !preflightResume) {
         throw new Error("Cannot resume: D1 indexes or triggers differ from the production snapshot");
       }
 
@@ -1371,13 +1422,17 @@ async function run() {
       )) {
         throw new Error(`Cannot resume: D1 row counts differ from the imported manifest: ${JSON.stringify(baselineMismatches)}`);
       }
-      preservedD1ExtrasByTable = preserveExtrasArgument
+      preservedD1ExtrasByTable = (preserveExtrasArgument || preflightResume || preserveDiscoveredD1Extras)
         ? await verifyRequestedPreservedD1Extras(
           db,
           rowIdColumns,
           sourceTables,
           requestedPreservedExtras,
-          dynamicallyPreservedTables,
+          {
+            preserveDiscovered: preserveDiscoveredD1Extras,
+            allowUnlistedForPreflight: preflightResume,
+            dynamicallyPreservedTables,
+          },
         )
         : {};
       const comparableBaselineCounts = { ...baselineCounts };
@@ -1454,7 +1509,18 @@ async function run() {
             columns: [...summary.columns].sort(),
           })),
           appendedRows: additions.map(({ tableName, gap }) => ({ table: tableName, rows: gap })),
-          preservedD1ExtrasByTable,
+          preservedD1ExtrasByTable: Object.fromEntries(
+            Object.entries(preservedD1ExtrasByTable).map(([table, rowIds]) => [
+              table,
+              {
+                count: rowIds.length,
+                rowIdsSha256: sha256(Buffer.from(rowIds.join(","), "utf8")),
+                sampleRowIds: rowIds.slice(0, 20),
+              },
+            ]),
+          ),
+          schemaObjectDifferences,
+          preflightOnly: preflightResume,
           existingValuesWouldBeReconciled: reconcileExistingValues,
           preservedTables: [...preserveD1Tables].map(table => ({
             table,
@@ -1474,6 +1540,7 @@ async function run() {
       }
       manifestCreated = true;
       preserveSnapshotOnFailure = true;
+      await ensureFinalSourceManifestColumns();
       await queryProductionD1(
         `UPDATE d1_migration_manifest
          SET source_object_key=?, migrated_table_counts_json=?, status='running', finished_at=NULL
