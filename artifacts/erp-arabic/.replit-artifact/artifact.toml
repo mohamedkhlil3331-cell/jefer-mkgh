@@ -15,7 +15,7 @@ paths = [ "/" ]
 localPort = 25982
 
 [services.development]
-run = "pnpm --filter @workspace/erp-arabic run dev"
+run = "pnpm --filter @workspace/erp-arabic run dev:cloudflare"
 
 [services.production]
 build = [ "pnpm", "--filter", "@workspace/erp-arabic", "run", "build" ]

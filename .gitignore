@@ -52,3 +52,4 @@ artifacts/data/erp.db-wal
 artifacts/data/erp.db
 artifacts/api-server/data/erp.db*
 /artifacts/api-server/.wrangler/
+/artifacts/erp-arabic/.wrangler/
