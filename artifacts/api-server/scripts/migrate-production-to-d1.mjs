@@ -23,10 +23,15 @@ const MAX_BATCH_BINDINGS = 500;
 const MAX_BATCH_BODY_BYTES = 512_000;
 const D1_WRITE_REQUEST_DELAY_MS = 1_000;
 const VERIFY_PAGE_SIZE = 500;
+const PRESERVED_EXTRA_ROWID_PAGE_SIZE = 5_000;
 const VERIFY_QUERIES_PER_BATCH = 20;
 let completedD1InsertRequest = false;
 const INTERNAL_D1_TABLES = new Set([
   "_cf_KV",
+  "__d1_replication_outbox",
+  "__d1_replication_state",
+  "__d1_replication_applied",
+  "__d1_runtime_state",
   "d1_migration_manifest",
   "d1_migration_overflow_values",
   "d1_migration_reconciliation_log",
@@ -318,10 +323,20 @@ function keepsRowIdThroughPrimaryKey(columns) {
   return primaryKey.length === 1 && String(primaryKey[0].type).toUpperCase() === "INTEGER";
 }
 
-function rowSelect(tableName, pseudoColumn, columns, cursor, limit, excludedRowIds = []) {
+function rowSelect(
+  tableName,
+  pseudoColumn,
+  columns,
+  cursor,
+  limit,
+  excludedRowIds = [],
+  columnsMissingFromTarget = new Set(),
+) {
   const selectColumns = [
     `${quoteIdentifier(pseudoColumn)} AS "__d1_source_rowid__"`,
-    ...columns.map(column => quoteIdentifier(column.name)),
+    ...columns.map(column => columnsMissingFromTarget.has(column.name)
+      ? `NULL AS ${quoteIdentifier(column.name)}`
+      : quoteIdentifier(column.name)),
   ];
   const conditions = [];
   const params = [];
@@ -453,7 +468,9 @@ async function verifyRequestedPreservedD1Extras(
     let cursor = null;
     while (true) {
       const cursorClause = cursor === null ? "" : ` WHERE ${quoteIdentifier(pseudoColumn)} > ?`;
-      const params = cursor === null ? [VERIFY_PAGE_SIZE] : [safeNumber(cursor, `${tableName} D1 rowid cursor`), VERIFY_PAGE_SIZE];
+      const params = cursor === null
+        ? [PRESERVED_EXTRA_ROWID_PAGE_SIZE]
+        : [safeNumber(cursor, `${tableName} D1 rowid cursor`), PRESERVED_EXTRA_ROWID_PAGE_SIZE];
       const d1Rows = (await queryProductionD1(
         `SELECT ${quoteIdentifier(pseudoColumn)} AS row_id FROM ${quoteIdentifier(tableName)}${cursorClause} ORDER BY ${quoteIdentifier(pseudoColumn)} LIMIT ?`,
         params,
@@ -497,7 +514,12 @@ async function validateEveryValue(
   rowIdColumns,
   expectedCounts,
   markerSnapshotSha256,
-  { collectChanges = false, excludedRowIdsByTable = {}, skipTables = new Set() } = {},
+  {
+    collectChanges = false,
+    excludedRowIdsByTable = {},
+    skipTables = new Set(),
+    columnsMissingFromTargetByTable = {},
+  } = {},
 ) {
   let checkedRows = 0;
   const oversized = new Map();
@@ -529,7 +551,15 @@ async function validateEveryValue(
         rowsQueued += sourcePage.length;
         pages.push({
           sourcePage,
-          statement: rowSelect(tableName, pseudoColumn, columns, requestCursor, pageLimit, excludedRowIds),
+          statement: rowSelect(
+            tableName,
+            pseudoColumn,
+            columns,
+            requestCursor,
+            pageLimit,
+            excludedRowIds,
+            columnsMissingFromTargetByTable[tableName] ?? new Set(),
+          ),
           sourceCursor: pageCursor,
         });
       }
@@ -1088,7 +1118,8 @@ async function restoreSequences(db) {
 async function run() {
   const apply = process.argv.includes("--apply");
   const preflightResume = process.argv.includes("--preflight-resume");
-  const dryRun = process.argv.includes("--dry-run") || preflightResume;
+  const preflightNewSnapshot = process.argv.includes("--preflight-new-snapshot");
+  const dryRun = process.argv.includes("--dry-run") || preflightResume || preflightNewSnapshot;
   const expectedSourceEtagArgument = process.argv.find(argument => argument.startsWith("--expected-source-etag="));
   const expectedSourceEtag = expectedSourceEtagArgument?.slice("--expected-source-etag=".length);
   const sourceObjectKeyArgument = process.argv.find(argument => argument.startsWith("--source-object-key="));
@@ -1104,6 +1135,18 @@ async function run() {
   }
   if (preflightResume && process.argv.includes("--dry-run")) {
     throw new Error("Use either --preflight-resume or --dry-run, not both");
+  }
+  if (preflightNewSnapshot && (preflightResume || apply || process.argv.includes("--resume") || process.argv.some(argument => argument.startsWith("--resume-preserving-extras")))) {
+    throw new Error("--preflight-new-snapshot is a read-only mode and cannot be combined with apply or resume flags");
+  }
+  if (preflightNewSnapshot && !recoverVerifiedProgress) {
+    throw new Error("--preflight-new-snapshot requires --recover-verified-progress");
+  }
+  if (preflightNewSnapshot && !sourceObjectKeyArgument) {
+    throw new Error("--preflight-new-snapshot requires an explicit pinned --source-object-key under db-migrations/");
+  }
+  if (preflightNewSnapshot && !expectedSourceEtag) {
+    throw new Error("--preflight-new-snapshot requires --expected-source-etag to pin the R2 snapshot");
   }
   if (preflightResume && !expectedSourceEtag) {
     throw new Error("--preflight-resume requires --expected-source-etag to pin the R2 snapshot");
@@ -1155,7 +1198,7 @@ async function run() {
   if (preflightResume && !recoverVerifiedProgress) {
     throw new Error("--preflight-resume requires --recover-verified-progress");
   }
-  if (recoverVerifiedProgress && !preserveExtrasArgument && !preflightResume && !preserveDiscoveredD1Extras) {
+  if (recoverVerifiedProgress && !preserveExtrasArgument && !preflightResume && !preflightNewSnapshot && !preserveDiscoveredD1Extras) {
     throw new Error("--recover-verified-progress requires a preserving resume mode");
   }
   if (reconcileExistingValues && (!preserveExtrasArgument || !recoverVerifiedProgress)) {
@@ -1187,7 +1230,8 @@ async function run() {
   const dynamicallyPreservedTables = preserveAllD1OnlyChatQueueRows
     ? new Set(["chat_push_queue"])
     : new Set();
-  const resume = preflightResume
+  const resume = preflightNewSnapshot
+    || preflightResume
     || process.argv.includes("--resume")
     || Boolean(preserveExtrasArgument)
     || replaceD1SessionsFromSource
@@ -1210,6 +1254,9 @@ async function run() {
   let sourceDownloaded = false;
   let preserveSnapshotOnFailure = false;
   let migrationSucceeded = false;
+  let missingSourceTables = [];
+  let sourceColumnsMissingFromD1 = {};
+  let missingRequiredSessionColumns = [];
   let sourceReport;
   let sourceTables = [];
   let snapshotSha256;
@@ -1378,10 +1425,14 @@ async function run() {
       );
       const manifest = manifestResult.results[0];
       if (!manifest) throw new Error("Cannot resume: the D1 migration manifest is missing");
-      if (String(manifest.source_object_key) !== SOURCE_KEY && String(manifest.source_object_key) !== sourceObjectKey) {
+      if (
+        !preflightNewSnapshot
+        && String(manifest.source_object_key) !== SOURCE_KEY
+        && String(manifest.source_object_key) !== sourceObjectKey
+      ) {
         throw new Error("Cannot resume: the existing D1 manifest points at a different source object");
       }
-      if (Number(manifest.source_table_count) !== sourceTables.length) {
+      if (!preflightNewSnapshot && Number(manifest.source_table_count) !== sourceTables.length) {
         throw new Error("Cannot resume: the source table count differs from the D1 migration baseline");
       }
       markerSnapshotSha256 = String(manifest.source_sha256);
@@ -1419,8 +1470,38 @@ async function run() {
         .map(row => String(row.name))
         .sort();
       const expectedTableNames = [...orderedNames].sort();
-      if (JSON.stringify(currentTableNames) !== JSON.stringify(expectedTableNames)) {
+      missingSourceTables = expectedTableNames.filter(name => !currentTableNames.includes(name));
+      const unexpectedD1Tables = currentTableNames.filter(name => !expectedTableNames.includes(name));
+      if (!preflightNewSnapshot && JSON.stringify(currentTableNames) !== JSON.stringify(expectedTableNames)) {
         throw new Error("Cannot resume: D1 application table names differ from the production snapshot");
+      }
+      if (preflightNewSnapshot) {
+        const unsafeMissingTables = missingSourceTables.filter(
+          name => Number.isSafeInteger(manifestProgress[name]) || tableCounts[name] !== 0,
+        );
+        if (unexpectedD1Tables.length || unsafeMissingTables.length) {
+          throw new Error(
+            `Cannot safely preflight the new snapshot: unexpected D1 tables ${JSON.stringify(unexpectedD1Tables)}, missing source tables that are not new-and-empty ${JSON.stringify(unsafeMissingTables)}`,
+          );
+        }
+        const sessionColumns = (await queryProductionD1("PRAGMA table_info(sessions)")).results;
+        const sessionColumnNames = new Set(sessionColumns.map(column => String(column.name)));
+        missingRequiredSessionColumns = ["created_at", "ip_address"].filter(name => !sessionColumnNames.has(name));
+        const commonSourceTables = sourceTables.filter(table => currentTableNames.includes(table.name));
+        for (let start = 0; start < commonSourceTables.length; start += 20) {
+          const chunk = commonSourceTables.slice(start, start + 20);
+          const targetSchemas = await queryProductionD1Batch(chunk.map(table => ({
+            sql: `PRAGMA table_info(${quoteIdentifier(table.name)})`,
+            params: [],
+          })));
+          for (let index = 0; index < chunk.length; index++) {
+            const targetColumns = new Set(targetSchemas[index].results.map(column => String(column.name)));
+            const missingColumns = tableInfo.get(chunk[index].name)
+              .map(column => column.name)
+              .filter(name => !targetColumns.has(name));
+            if (missingColumns.length) sourceColumnsMissingFromD1[chunk[index].name] = new Set(missingColumns);
+          }
+        }
       }
       const currentIndexNames = actualObjects
         .filter(row => row.type === "index" && !String(row.name).startsWith("sqlite_autoindex"))
@@ -1447,7 +1528,11 @@ async function run() {
         throw new Error("Cannot resume: D1 indexes or triggers differ from the production snapshot");
       }
 
-      const baselineCounts = await readD1Inventory(orderedNames);
+      const inventoryTables = preflightNewSnapshot
+        ? orderedNames.filter(name => currentTableNames.includes(name))
+        : orderedNames;
+      const baselineCounts = await readD1Inventory(inventoryTables);
+      for (const name of orderedNames) baselineCounts[name] ??= 0;
       const baselineMismatches = orderedNames
         .filter(name => !replaceFromSourceTables.has(name) && !preserveD1Tables.has(name) && baselineCounts[name] !== manifestProgress[name])
         .map(name => ({ table: name, manifest: manifestProgress[name], d1: baselineCounts[name] }));
@@ -1458,15 +1543,18 @@ async function run() {
       )) {
         throw new Error(`Cannot resume: D1 row counts differ from the imported manifest: ${JSON.stringify(baselineMismatches)}`);
       }
-      preservedD1ExtrasByTable = (preserveExtrasArgument || preflightResume || preserveDiscoveredD1Extras)
+      const tablesPresentInD1 = preflightNewSnapshot
+        ? sourceTables.filter(table => currentTableNames.includes(table.name))
+        : sourceTables;
+      preservedD1ExtrasByTable = (preserveExtrasArgument || preflightResume || preflightNewSnapshot || preserveDiscoveredD1Extras)
         ? await verifyRequestedPreservedD1Extras(
           db,
           rowIdColumns,
-          sourceTables,
+          tablesPresentInD1,
           requestedPreservedExtras,
           {
             preserveDiscovered: preserveDiscoveredD1Extras,
-            allowUnlistedForPreflight: preflightResume,
+            allowUnlistedForPreflight: preflightResume || preflightNewSnapshot,
             dynamicallyPreservedTables,
           },
         )
@@ -1497,9 +1585,10 @@ async function run() {
         comparableBaselineCounts,
         markerSnapshotSha256,
         {
-          collectChanges: reconcileExistingValues || !recoverVerifiedProgress,
+          collectChanges: preflightNewSnapshot || reconcileExistingValues || !recoverVerifiedProgress,
           excludedRowIdsByTable: preservedD1ExtrasByTable,
           skipTables: new Set([...replaceFromSourceTables, ...preserveD1Tables]),
+          columnsMissingFromTargetByTable: sourceColumnsMissingFromD1,
         },
       );
       await verifyOverflowValues(baselineVerification.oversized, markerSnapshotSha256);
@@ -1533,7 +1622,7 @@ async function run() {
           changesByTable.set(change.table, current);
         }
         console.info(JSON.stringify({
-          mode: "resume-dry-run",
+          mode: preflightNewSnapshot ? "new-snapshot-dry-run" : "resume-dry-run",
           source: sourceReport.source,
           migrationBaselineSource: baseSnapshot,
           verifiedBaselineRows: baselineVerification.checkedRows,
@@ -1555,8 +1644,17 @@ async function run() {
               },
             ]),
           ),
+          sourceTablesMissingFromD1: missingSourceTables.map(table => ({
+            table,
+            sourceRows: tableCounts[table],
+          })),
+          sourceColumnsMissingFromD1: Object.fromEntries(
+            Object.entries(sourceColumnsMissingFromD1).map(([table, columns]) => [table, [...columns]]),
+          ),
+          missingRequiredSessionColumns,
           schemaObjectDifferences,
-          preflightOnly: preflightResume,
+          preflightOnly: preflightResume || preflightNewSnapshot,
+          dataWritesPerformed: false,
           existingValuesWouldBeReconciled: reconcileExistingValues,
           preservedTables: [...preserveD1Tables].map(table => ({
             table,

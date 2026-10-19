@@ -57,6 +57,12 @@ Keep the production D1 startup gate closed until every route and schema check pa
 
 **How to apply:** Keep D1 IDs and feature flags test-only until all API routes pass against migrated test data and exact parity checks; never flip the published backend as an automatic consequence of a successful synthetic integration test.
 
+Preflight the primary and replica independently. An empty replication outbox and a zero replica sequence do not establish data parity; either database may contain target-only records that are absent from the current source snapshot.
+
+**Why:** The D1 primary and replica had different session rows despite no pending replication operations, so a primary-only preflight would have missed the replica's extra records.
+
+**How to apply:** Compare exact source values, append candidates, and target-only row IDs against each D1 database separately. Preserve target-only rows unless the user explicitly approves their removal.
+
 The Cloudflare Worker import graph must not statically load `db-sync`; keep runtime-mode checks and backup-writer status in SQLite-free modules, and load legacy database/storage services only inside their Replit/SQLite-only paths.
 
 **Why:** Importing the Express app can transitively evaluate `better-sqlite3` and Replit storage clients before any route is called, even when D1 and R2 are selected.
