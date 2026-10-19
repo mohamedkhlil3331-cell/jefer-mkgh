@@ -403,17 +403,19 @@ function addBoundedStatement(pending, statement) {
 
 async function flushInsertBatch(pending, tableName) {
   if (!pending.statements.length) return 0;
+  if (completedD1InsertRequest) {
+    await new Promise(resolve => setTimeout(resolve, D1_WRITE_REQUEST_DELAY_MS));
+  }
+  const results = await queryProductionD1Batch(
+    pending.statements.map(({ sql, params }) => ({ sql, params: params ?? [] })),
+  );
+  completedD1InsertRequest = true;
+  if (results.length !== pending.statements.length) {
+    throw new Error(`D1 returned ${results.length} result(s), expected ${pending.statements.length}, in ${tableName}`);
+  }
   let inserted = 0;
   for (let index = 0; index < pending.statements.length; index++) {
-    if (completedD1InsertRequest) {
-      await new Promise(resolve => setTimeout(resolve, D1_WRITE_REQUEST_DELAY_MS));
-    }
-    const result = await queryProductionD1(
-      pending.statements[index].sql,
-      pending.statements[index].params ?? [],
-    );
-    completedD1InsertRequest = true;
-    const actual = Number(result.meta?.changes ?? 0);
+    const actual = Number(results[index].meta?.changes ?? 0);
     const expected = pending.expectedChanges[index];
     if (actual !== expected) {
       throw new Error(`D1 reported ${actual} inserted row(s), expected ${expected}, in ${tableName}`);

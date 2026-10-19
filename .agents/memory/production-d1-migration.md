@@ -86,3 +86,9 @@ When a source column is missing in D1, compare against the value D1 will expose 
 **Why:** Treating a missing column as `NULL` overstated reconciliation changes for columns with defaults, and the configured replica ID pointed to a shadow-test database while the production replica had a different name.
 
 **How to apply:** Derive safe constant defaults from the pinned source schema and use them in both the preflight projection and `ALTER TABLE`. Confirm primary and replica names in Cloudflare before any D1 write; never write to a shadow target as a substitute for the production replica.
+
+For large D1 reconciliations, send several parameterized insert statements per atomic batch request rather than one request per statement. Keep the batch within D1's statement and payload limits, validate every returned change count, and retain the request delay. If a run stops, recover only after exact source-row/value verification.
+
+**Why:** A one-second delay between individual write requests can make a tens-of-thousands-row migration exceed its timeout; batching reduces network calls without weakening per-statement change checks.
+
+**How to apply:** Use small atomic batches (currently five statements), verify each result's reported changes, and resume an interrupted run only with verified-progress recovery against the same pinned snapshot.
