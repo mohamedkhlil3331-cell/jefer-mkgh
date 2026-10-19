@@ -80,3 +80,9 @@ Some `dev_audit_log.path` values can trigger HTTP 403 when sent as ordinary D1 q
 **Why:** The proxy rejected selected path strings in the request payload even though the same query shape and other fields succeeded.
 
 **How to apply:** Isolate the failing column with a duplicate-key no-op probe, encode only the confirmed field as a safe hex literal, then require full exact-value verification; never drop or rewrite the source data.
+
+When a source column is missing in D1, compare against the value D1 will expose after the planned `ALTER TABLE`, including a constant schema default; do not model every missing column as `NULL`. Verify the Cloudflare database name and role before using `ERP_D1_REPLICA_DATABASE_ID`, since it may point to a shadow-test database rather than the production replica.
+
+**Why:** Treating a missing column as `NULL` overstated reconciliation changes for columns with defaults, and the configured replica ID pointed to a shadow-test database while the production replica had a different name.
+
+**How to apply:** Derive safe constant defaults from the pinned source schema and use them in both the preflight projection and `ALTER TABLE`. Confirm primary and replica names in Cloudflare before any D1 write; never write to a shadow target as a substitute for the production replica.

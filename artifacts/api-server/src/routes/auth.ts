@@ -57,9 +57,10 @@ async function createSingleSession(userId: number | bigint, ipAddress: string | 
   try {
     const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    const createdAt = new Date().toISOString();
     await executeBatch([
       { sql: "DELETE FROM sessions WHERE user_id=?", params: [userId] },
-      { sql: "INSERT INTO sessions (token, user_id, expires_at, ip_address) VALUES (?,?,?,?)", params: [token, userId, expiresAt, ipAddress] },
+      { sql: "INSERT INTO sessions (token, user_id, expires_at, ip_address, created_at) VALUES (?,?,?,?,?)", params: [token, userId, expiresAt, ipAddress, createdAt] },
     ]);
     return token;
   } finally {
