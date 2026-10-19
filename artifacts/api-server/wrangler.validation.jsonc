@@ -16,7 +16,7 @@
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["ChatRealtimeRoom"] }
   ],
-  "workers_dev": false,
+  "workers_dev": true,
   "preview_urls": false,
   "vars": {
     "NODE_ENV": "production",
