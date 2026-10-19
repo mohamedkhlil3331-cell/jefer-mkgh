@@ -146,7 +146,7 @@ async function verifyTicket(ticket: unknown): Promise<BackupTicket | null> {
 router.get("/system-backup/ticket", async (req, res) => {
   const admin = await currentAdmin(req);
   if (!admin) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة لتنزيل النسخة الاحتياطية" });
-  if ((!isFilesystemStorageMode() && !isR2Configured && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
+  if ((!isFilesystemStorageMode() && !isR2Configured() && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
     return void res.status(503).json({ error: "خدمة النسخ الاحتياطي غير مهيأة" });
   }
   const ticket = signTicket({
@@ -160,7 +160,7 @@ router.get("/system-backup/ticket", async (req, res) => {
 });
 
 router.get("/system-backup/download", async (req: Request, res: Response) => {
-  if ((!isFilesystemStorageMode() && !isR2Configured && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
+  if ((!isFilesystemStorageMode() && !isR2Configured() && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) || !process.env.SESSION_SECRET) {
     return void res.status(503).json({ error: "خدمة النسخ الاحتياطي غير مهيأة" });
   }
   if (!await verifyTicket(req.query.ticket)) {
@@ -225,7 +225,7 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
           localPath: object.filePath,
         });
       }
-    } else if (isR2Configured) {
+    } else if (isR2Configured()) {
       const files = await listR2Objects();
       for (const file of files) {
         if (file.key.startsWith("db-backups/") || file.key.startsWith("_system_restore_")) continue;
@@ -401,7 +401,7 @@ router.get("/system-backup/download", async (req: Request, res: Response) => {
 router.post("/system-backup/restore", async (req: Request, res: Response, next) => {
   const admin = await currentAdmin(req);
   if (!admin) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة لاستعادة النسخة" });
-  if (!isFilesystemStorageMode() && !isR2Configured && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) {
+  if (!isFilesystemStorageMode() && !isR2Configured() && !process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID) {
     return void res.status(503).json({ error: "تخزين الملفات غير مهيأ؛ لم تبدأ الاستعادة" });
   }
   restoreArchiveUpload(req, res, error => {

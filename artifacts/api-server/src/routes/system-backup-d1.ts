@@ -116,7 +116,7 @@ function safeArchivePath(key: string): string {
 router.get("/system-backup/ticket", async (req, res) => {
   const admin = await currentAdmin(req);
   if (!admin) return void res.status(403).json({ error: "صلاحيات مدير النظام مطلوبة لتنزيل النسخة الاحتياطية" });
-  if (!isR2Configured || !process.env.SESSION_SECRET) {
+  if (!isR2Configured() || !process.env.SESSION_SECRET) {
     return void res.status(503).json({ error: "خدمة النسخ الاحتياطي إلى R2 غير مهيأة" });
   }
   const ticket = signTicket({
@@ -130,7 +130,7 @@ router.get("/system-backup/ticket", async (req, res) => {
 });
 
 router.get("/system-backup/download", async (req, res) => {
-  if (!isR2Configured || !process.env.SESSION_SECRET) {
+  if (!isR2Configured() || !process.env.SESSION_SECRET) {
     return void res.status(503).json({ error: "خدمة النسخ الاحتياطي إلى R2 غير مهيأة" });
   }
   if (!await verifyTicket(req.query.ticket)) {

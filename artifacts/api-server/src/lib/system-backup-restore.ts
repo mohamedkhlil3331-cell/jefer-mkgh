@@ -923,7 +923,7 @@ async function restoreObjectFiles(
   runId: number,
 ): Promise<{ outcomes: FileOutcome[]; rollback: () => Promise<void>; cleanup: () => Promise<void> }> {
   if (isFilesystemStorageMode()) return restoreFilesystemObjectFiles(backup, mode, runId);
-  if (isR2Configured) return restoreR2ObjectFiles(backup, mode, runId);
+  if (isR2Configured()) return restoreR2ObjectFiles(backup, mode, runId);
   const bucketId = process.env.DEFAULT_OBJECT_STORAGE_BUCKET_ID;
   if (!bucketId) throw new Error("تخزين الملفات غير مهيأ؛ لم تُستعد الملفات");
   const bucket = makeStorage().bucket(bucketId);

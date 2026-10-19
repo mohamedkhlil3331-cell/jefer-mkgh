@@ -1,6 +1,4 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import buildReadinessManifest from "./d1-readiness.json";
 import {
   drainD1Replication,
   ensureD1ReplicationSchema,
@@ -135,18 +133,11 @@ const APPROVED_DYNAMIC_EXTRA_ROWS = 74;
 const APPROVED_PRESERVED_D1_TABLES = new Set(["sessions"]);
 
 function readBuildReadiness(): Promise<BuildReadiness> {
-  const directory = path.dirname(fileURLToPath(import.meta.url));
-  return readFile(path.join(directory, "d1-readiness.json"), "utf8").then(value => {
-    const parsed = JSON.parse(value) as BuildReadiness;
-    if (parsed.version !== 1 || !Array.isArray(parsed.sqliteBlockers)) {
-      throw new Error("[d1-readiness] Build readiness manifest has an unsupported format");
-    }
-    return parsed;
-  }).catch(error => {
-    throw new Error(
-      `[d1-readiness] Build readiness manifest is unavailable; rebuild the API before selecting D1: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  });
+  const parsed = buildReadinessManifest as BuildReadiness;
+  if (parsed.version !== 1 || !Array.isArray(parsed.sqliteBlockers)) {
+    throw new Error("[d1-readiness] Build readiness manifest has an unsupported format");
+  }
+  return Promise.resolve(parsed);
 }
 
 function parseTableCounts(value: string): Record<string, number> {

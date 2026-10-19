@@ -139,7 +139,7 @@ export async function downloadDbBackupToStaging(dbPath: string): Promise<boolean
   assertDevelopmentWriterLock("restore");
   const isProduction = process.env.NODE_ENV === "production";
   const stagingPath = dbPath + ".staging";
-  if (isR2Configured) {
+  if (isR2Configured()) {
     try {
       const object = await getR2Object(BACKUP_KEY);
       if (object?.Body) {
@@ -304,12 +304,12 @@ export async function uploadDbBackup(
   assertDevelopmentWriterLock("backup");
   const run = backupQueue.then(async () => {
     if (backupPauseDepth > 0 && !allowWhilePaused) return;
-    if ((!isR2Configured && !BUCKET_ID) || !fs.existsSync(dbPath)) return;
+    if ((!isR2Configured() && !BUCKET_ID) || !fs.existsSync(dbPath)) return;
     // Flush WAL into the main file FIRST. checkpointFn must throw unless every
     // committed frame is present in the main DB file.
     if (checkpointFn) checkpointFn();
 
-    if (isR2Configured) {
+    if (isR2Configured()) {
       for (let attempt = 0; attempt < 2; attempt++) {
         const incumbent = await headR2Object(BACKUP_KEY);
         const incumbentStartedAt = Number(incumbent?.Metadata?.writerstartedat || 0);

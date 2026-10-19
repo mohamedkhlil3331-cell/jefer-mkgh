@@ -78,6 +78,9 @@ async function buildAll() {
     throw new Error("D1 startup requires system-backup routes to be selected dynamically by database mode");
   }
   const sqliteBlockers = await collectD1SqliteBlockers(sourceDir);
+  const readinessManifest = { version: 1, sqliteBlockers };
+  const readinessJson = `${JSON.stringify(readinessManifest, null, 2)}\n`;
+  await writeFile(path.join(sourceDir, "lib/d1-readiness.json"), readinessJson);
 
   await esbuild({
     entryPoints: [
@@ -189,7 +192,7 @@ globalThis.__dirname = __bannerPath.dirname(globalThis.__filename);
 
   await writeFile(
     path.join(distDir, "d1-readiness.json"),
-    `${JSON.stringify({ version: 1, sqliteBlockers }, null, 2)}\n`,
+    readinessJson,
   );
 }
 
