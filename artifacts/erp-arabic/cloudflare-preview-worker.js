@@ -37,7 +37,7 @@ async function handleRequest(event) {
   const target = new URL(`${incoming.pathname}${incoming.search}`, ORIGIN);
   const isHashedAsset =
     incoming.pathname.startsWith("/assets/") &&
-    /\.[a-f0-9_-]{6,}\./i.test(incoming.pathname);
+    /-[a-z0-9_-]{6,}\./i.test(incoming.pathname);
 
   if (isHashedAsset && request.method === "GET") {
     const cache = caches.default;
