@@ -87,6 +87,12 @@ When a source column is missing in D1, compare against the value D1 will expose 
 
 **How to apply:** Derive safe constant defaults from the pinned source schema and use them in both the preflight projection and `ALTER TABLE`. Confirm primary and replica names in Cloudflare before any D1 write; never write to a shadow target as a substitute for the production replica.
 
+Data parity does not prove schema parity. A copied D1 database can still be missing a column that a real route writes, so schema checks and route-level write/read tests are separate cutover gates.
+
+**Why:** Authentication on the isolated shadow failed because its `sessions` table lacked `created_at`, which the login route inserts, even though other core route writes succeeded.
+
+**How to apply:** Compare the D1 table definitions with the application schema, then exercise each critical route's actual insert/update path against an isolated shadow before enabling production traffic.
+
 For large D1 reconciliations, send several parameterized insert statements per atomic batch request rather than one request per statement. Keep the batch within D1's statement and payload limits, validate every returned change count, and retain the request delay. If a run stops, recover only after exact source-row/value verification.
 
 **Why:** A one-second delay between individual write requests can make a tens-of-thousands-row migration exceed its timeout; batching reduces network calls without weakening per-statement change checks.
