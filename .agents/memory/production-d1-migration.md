@@ -104,3 +104,9 @@ Replica session rows can share a token and identical application fields with sou
 **Why:** The replica had 46 exact logical matches, 8 genuinely target-only sessions, and 9 source-only sessions; blindly appending all source rows violated the token primary key.
 
 **How to apply:** Verify matches and row-ID availability without displaying tokens; align only the hidden row ID for exact matches, preserve unmatched D1 sessions unchanged, then append source-only sessions and require exact read-back.
+
+After all application, data, and file validation gates pass, proceed with the production D1 cutover immediately; do not add another waiting period.
+
+**Why:** The user explicitly requested immediate migration after validation because the prolonged delay is costing money.
+
+**How to apply:** Finish the remaining checks without changing production traffic or runtime flags, then execute the approved cutover as soon as every gate is verified.
