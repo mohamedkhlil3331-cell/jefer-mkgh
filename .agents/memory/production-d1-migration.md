@@ -92,3 +92,9 @@ For large D1 reconciliations, send several parameterized insert statements per a
 **Why:** A one-second delay between individual write requests can make a tens-of-thousands-row migration exceed its timeout; batching reduces network calls without weakening per-statement change checks.
 
 **How to apply:** Use small atomic batches (currently five statements), verify each result's reported changes, and resume an interrupted run only with verified-progress recovery against the same pinned snapshot.
+
+Replica session rows can share a token and identical application fields with source rows while having different implicit row IDs. Treat token plus all shared session fields as the logical identity before classifying such rows as target-only extras.
+
+**Why:** The replica had 46 exact logical matches, 8 genuinely target-only sessions, and 9 source-only sessions; blindly appending all source rows violated the token primary key.
+
+**How to apply:** Verify matches and row-ID availability without displaying tokens; align only the hidden row ID for exact matches, preserve unmatched D1 sessions unchanged, then append source-only sessions and require exact read-back.

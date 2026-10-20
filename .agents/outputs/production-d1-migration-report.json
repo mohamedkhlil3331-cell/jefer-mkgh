@@ -1,6 +1,6 @@
 {
   "status": "completed",
-  "migratedAt": "2026-10-19T22:43:16.043Z",
+  "migratedAt": "2026-10-20T04:21:47.627Z",
   "source": {
     "objectKey": "db-migrations/erp-reconcile-1792443281471.db",
     "etag": "\"b5f3f21d2f2fc1f5d1541d3f1b56544f\"",
@@ -1901,35 +1901,35 @@
     },
     {
       "table": "sessions",
-      "rowId": "77284"
+      "rowId": "41"
     },
     {
       "table": "sessions",
-      "rowId": "77297"
+      "rowId": "43"
     },
     {
       "table": "sessions",
-      "rowId": "77308"
+      "rowId": "46"
     },
     {
       "table": "sessions",
-      "rowId": "77310"
+      "rowId": "47"
     },
     {
       "table": "sessions",
-      "rowId": "77320"
+      "rowId": "50"
     },
     {
       "table": "sessions",
-      "rowId": "77322"
+      "rowId": "51"
     },
     {
       "table": "sessions",
-      "rowId": "77325"
+      "rowId": "53"
     },
     {
       "table": "sessions",
-      "rowId": "77326"
+      "rowId": "54"
     },
     {
       "table": "trips",
