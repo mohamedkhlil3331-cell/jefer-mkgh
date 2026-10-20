@@ -48,3 +48,4 @@
 - [Production D1 migration boundary](production-d1-migration.md) — production may move to Cloudflare D1/R2, but keep dev on its separate SQLite/R2 data and defer published cutover until validation.
 - [Production domains and SEO target](production-domains.md) — jefer-mkgh1.com is active on Replit and Cloudflare; jefer-mkgh.com is Replit-only, with an intended move and search-branding goal.
 - [Cloudflare Worker multipart uploads](cloudflare-worker-multipart.md) — for service-worker syntax, the multipart file part name must match metadata.body_part.
+- [Miniflare D1 integration tests](miniflare-d1-tests.md) — Miniflare 5 uses the V4 config converter; seed D1 test schemas with prepared statements.
