@@ -307,13 +307,6 @@ async function validateCompletedMigration(): Promise<void> {
   }
 
   try {
-    await queryProductionD1(
-      "SELECT created_at, ip_address FROM sessions LIMIT 0",
-    );
-  } catch {
-    throw new Error("[d1-readiness] D1 sessions table is missing created_at or ip_address required by authentication");
-  }
-  try {
     await queryProductionD1("SELECT client_request_id FROM trips LIMIT 0");
   } catch {
     throw new Error("[d1-readiness] D1 trips table is missing client_request_id required by routing trip idempotency");
@@ -394,6 +387,12 @@ export async function validateProductionD1Startup(): Promise<void> {
     throw new Error(
       `[d1-readiness] Refusing to start: ${files.length} runtime source module(s) still import or call SQLite (${preview}${remaining})`,
     );
+  }
+
+  try {
+    await queryProductionD1("SELECT created_at, ip_address FROM sessions LIMIT 0");
+  } catch {
+    throw new Error("[d1-readiness] D1 sessions table is missing created_at or ip_address required by authentication");
   }
 
   await ensureD1ReplicationSchema();
