@@ -138,6 +138,44 @@ async function main(): Promise<void> {
     assert.equal(meBody.phone, phone);
     assert.equal("password" in meBody, false, "/auth/me must not expose the password");
 
+    const secondLogin = await fetch(`${baseUrl}/auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Forwarded-For": forwardedIp,
+      },
+      body: JSON.stringify({ phone, password }),
+    });
+    assert.equal(secondLogin.status, 200, "the same user must be able to log in again");
+    const secondLoginBody = await secondLogin.json() as {
+      token: string;
+      user: Record<string, unknown>;
+    };
+    assert.notEqual(secondLoginBody.token, loginBody.token, "each login must issue a different token");
+
+    const currentSessions = await testDatabase.prepare(
+      "SELECT token FROM sessions WHERE user_id = ?",
+    ).bind(userId).all<{ token: string }>();
+    assert.deepEqual(
+      currentSessions.results.map((session: { token: string }) => session.token),
+      [secondLoginBody.token],
+      "D1 must retain only the latest session for the user",
+    );
+
+    const oldTokenMe = await fetch(`${baseUrl}/auth/me`, {
+      headers: { Authorization: `Bearer ${loginBody.token}` },
+    });
+    assert.equal(oldTokenMe.status, 401, "the first token must be rejected after a new login");
+
+    const currentTokenMe = await fetch(`${baseUrl}/auth/me`, {
+      headers: { Authorization: `Bearer ${secondLoginBody.token}` },
+    });
+    assert.equal(currentTokenMe.status, 200, "the latest token must still authorize /auth/me");
+    const currentTokenMeBody = await currentTokenMe.json() as Record<string, unknown>;
+    assert.equal(currentTokenMeBody.id, userId);
+    assert.equal(currentTokenMeBody.phone, phone);
+    assert.equal("password" in currentTokenMeBody, false, "/auth/me must not expose the password");
+
     console.log("D1 auth login-to-me integration test passed");
   } finally {
     try {
@@ -148,7 +186,7 @@ async function main(): Promise<void> {
       }
     } finally {
       try {
-        if (database && userId !== undefined) {
+        if (database) {
           await database.prepare(
             "DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE phone = ?)",
           ).bind(phone).run();
