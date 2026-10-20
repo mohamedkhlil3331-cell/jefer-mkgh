@@ -71,7 +71,7 @@ export default {
     if (uploadResponse) return uploadResponse;
 
     const handler = await getExpressHandler();
-    const response = await handler(request, env, context);
+    const response = await handler.fetch(request, env, context);
     if (process.env.NODE_ENV === "production" && process.env.ERP_DATABASE_BACKEND === "d1") {
       const { drainD1Replication } = await import("./lib/cloudflare-d1.js");
       context.waitUntil(drainD1Replication(100).catch(error => {

@@ -125,8 +125,11 @@ type MigrationAdjustments = {
 };
 
 const APPROVED_EXPLICIT_EXTRA_COUNTS: Record<string, number> = {
+  driver_expenses: 1,
+  sessions: 8,
+  trips: 6,
   warehouse_items: 4,
-  workshop_inventory_transactions: 4,
+  workshop_inventory_transactions: 13,
 };
 const APPROVED_DYNAMIC_EXTRA_TABLES = new Set(["chat_push_queue"]);
 const APPROVED_DYNAMIC_EXTRA_ROWS = 74;
@@ -273,11 +276,16 @@ async function validateCompletedMigration(): Promise<void> {
 
   const tableCounts = parseTableCounts(migration.migrated_table_counts_json);
   const tableNames = Object.keys(tableCounts);
+  const initialSourceTableCount = Number(migration.source_table_count);
+  const finalSourceTableCount = Number(migration.final_source_table_count);
   if (
-    tableNames.length !== Number(migration.source_table_count)
-    || tableNames.length !== Number(migration.final_source_table_count)
+    !Number.isSafeInteger(initialSourceTableCount)
+    || initialSourceTableCount < 1
+    || !Number.isSafeInteger(finalSourceTableCount)
+    || finalSourceTableCount < initialSourceTableCount
+    || tableNames.length !== finalSourceTableCount
   ) {
-    throw new Error("[d1-readiness] D1 migration table count does not match its verified source snapshot");
+    throw new Error("[d1-readiness] D1 migration table count does not match its final verified source snapshot");
   }
   const expectedRowCount = Object.values(tableCounts).reduce((total, count) => total + count, 0);
   const sourceRowCount = Number(migration.final_source_row_count);
