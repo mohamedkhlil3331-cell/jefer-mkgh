@@ -176,7 +176,35 @@ async function main(): Promise<void> {
     assert.equal(currentTokenMeBody.phone, phone);
     assert.equal("password" in currentTokenMeBody, false, "/auth/me must not expose the password");
 
-    console.log("D1 auth login-to-me integration test passed");
+    const expireSession = await testDatabase.prepare(
+      "UPDATE sessions SET expires_at = datetime('now', '-1 minute') WHERE token = ?",
+    ).bind(secondLoginBody.token).run();
+    assert.equal(expireSession.meta.changes, 1, "the test must expire the persisted D1 session");
+    const expiredTokenMe = await fetch(`${baseUrl}/auth/me`, {
+      headers: { Authorization: `Bearer ${secondLoginBody.token}` },
+    });
+    assert.equal(expiredTokenMe.status, 401, "an expired D1 session must be rejected");
+
+    const thirdLogin = await fetch(`${baseUrl}/auth/login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Forwarded-For": forwardedIp,
+      },
+      body: JSON.stringify({ phone, password }),
+    });
+    assert.equal(thirdLogin.status, 200, "the user must be able to establish a fresh test session");
+    const thirdLoginBody = await thirdLogin.json() as { token: string };
+    const revokeSession = await testDatabase.prepare(
+      "DELETE FROM sessions WHERE token = ?",
+    ).bind(thirdLoginBody.token).run();
+    assert.equal(revokeSession.meta.changes, 1, "the test must remove the persisted D1 session");
+    const revokedTokenMe = await fetch(`${baseUrl}/auth/me`, {
+      headers: { Authorization: `Bearer ${thirdLoginBody.token}` },
+    });
+    assert.equal(revokedTokenMe.status, 401, "a session deleted from D1 must be rejected");
+
+    console.log("D1 auth login, expiry, and revocation integration test passed");
   } finally {
     try {
       if (server?.listening) {
