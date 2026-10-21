@@ -1,15 +1,15 @@
 {
   "status": "completed",
-  "migratedAt": "2026-10-21T22:37:21.758Z",
+  "migratedAt": "2026-10-21T23:01:26.659Z",
   "source": {
-    "objectKey": "db-migrations/erp-cutover-a32c6f32-8603-43ee-9862-db31a9cdfb80.db",
-    "etag": "\"d97ed37d2db476f4cef6105cbc06242a\"",
-    "lastModified": "2026-10-21T21:38:03.000Z",
-    "sizeBytes": 74600448,
-    "sha256": "5d41511aabe943b49b63cb03ed465d642449337f413773c2fda839a96b1e4099"
+    "objectKey": "db-migrations/erp-cutover-5bc6d43fb0f623973c3b0040b818d0a9.db",
+    "etag": "\"5bc6d43fb0f623973c3b0040b818d0a9\"",
+    "lastModified": "2026-10-21T22:40:10.000Z",
+    "sizeBytes": 74637312,
+    "sha256": "b739ac497421234e48c6ab2bdfd61915d31083905c78d7b5c74786f77261151d"
   },
   "migrationBaselineSource": {
-    "objectKey": "db-migrations/erp-cutover-600687d0-5f25-48d3-99e3-924209b87d5c.db",
+    "objectKey": "db-migrations/erp-cutover-a32c6f32-8603-43ee-9862-db31a9cdfb80.db",
     "etag": "\"5ea00d29c9c6c5e35c9d8558e7f0b34a\"",
     "lastModified": "2026-10-13T12:57:01.000Z",
     "sizeBytes": 63320064,
@@ -18,8 +18,8 @@
   },
   "sourceIntegrity": "ok",
   "tableCount": 140,
-  "totalSourceRows": 608548,
-  "totalD1SourceRows": 609007,
+  "totalSourceRows": 608945,
+  "totalD1SourceRows": 609404,
   "tableCounts": [
     {
       "table": "ai_messages",
@@ -107,8 +107,8 @@
     },
     {
       "table": "dev_audit_log",
-      "source": 593787,
-      "d1": 593787,
+      "source": 594183,
+      "d1": 594183,
       "exactValueReadback": true
     },
     {
@@ -773,8 +773,8 @@
     },
     {
       "table": "sessions",
-      "source": 54,
-      "d1": 69,
+      "source": 55,
+      "d1": 70,
       "exactValueReadback": true
     },
     {
@@ -2537,7 +2537,35 @@
     },
     {
       "table": "sessions",
-      "rowId": "77284"
+      "rowId": "41"
+    },
+    {
+      "table": "sessions",
+      "rowId": "43"
+    },
+    {
+      "table": "sessions",
+      "rowId": "46"
+    },
+    {
+      "table": "sessions",
+      "rowId": "47"
+    },
+    {
+      "table": "sessions",
+      "rowId": "50"
+    },
+    {
+      "table": "sessions",
+      "rowId": "51"
+    },
+    {
+      "table": "sessions",
+      "rowId": "53"
+    },
+    {
+      "table": "sessions",
+      "rowId": "54"
     },
     {
       "table": "sessions",
@@ -2545,35 +2573,7 @@
     },
     {
       "table": "sessions",
-      "rowId": "77297"
-    },
-    {
-      "table": "sessions",
-      "rowId": "77308"
-    },
-    {
-      "table": "sessions",
-      "rowId": "77310"
-    },
-    {
-      "table": "sessions",
       "rowId": "77318"
-    },
-    {
-      "table": "sessions",
-      "rowId": "77320"
-    },
-    {
-      "table": "sessions",
-      "rowId": "77322"
-    },
-    {
-      "table": "sessions",
-      "rowId": "77325"
-    },
-    {
-      "table": "sessions",
-      "rowId": "77326"
     },
     {
       "table": "sessions",
@@ -2593,7 +2593,7 @@
     },
     {
       "table": "sessions",
-      "rowId": "77361"
+      "rowId": "77357"
     },
     {
       "table": "trips",
@@ -2741,9 +2741,150 @@
     }
   ],
   "reconciliation": {
-    "changedCells": 0,
+    "changedCells": 20,
     "auditTable": "d1_migration_reconciliation_log",
-    "entries": []
+    "entries": [
+      {
+        "table": "supply_request_trips",
+        "rowid": "232",
+        "column": "attachments_json",
+        "oldValueSha256": "b5b3377a70bf64218e5826d8874a95eb7bfcd6e4eb6cef4622c5626779f6b120",
+        "newValueSha256": "600ec008ea1f11370de673e07f0d4a0f5acf3c980c55f91df76acb20ffad52c2"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "232",
+        "column": "driver_loading_image",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "6e6f6c2b13eb70206b6440c800de7e258ff8d80daa8745f25b8f046d94ceb6b4"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "232",
+        "column": "loaded_at",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "c420fe3d3d182cac0ba327952f87bd15564f029ec6052488eb079cc2e6bae236"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "232",
+        "column": "status",
+        "oldValueSha256": "68ae73c709b3fd2c29b3a71337c5f8d95041c478b0aae6fab2ee6fdd6094aac7",
+        "newValueSha256": "1bcb3abb3fc0f1a462ffb1f426fe89a9f57a91ac5135a1bd58fcc86d1119792e"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "232",
+        "column": "updated_at",
+        "oldValueSha256": "a79bcdcb4d3832a89cda961c44a0e2dec9afbd0ab5d793d1ef2c7c3cd592a63b",
+        "newValueSha256": "c420fe3d3d182cac0ba327952f87bd15564f029ec6052488eb079cc2e6bae236"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "233",
+        "column": "attachments_json",
+        "oldValueSha256": "779b274506188665237ccf629a1a847ed5efeadf93f011de5653962a7991e0f4",
+        "newValueSha256": "9d5f1dab21f42f9ff98641aeb5c8b2415b854a744f631905fff8ce44118bbc84"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "233",
+        "column": "driver_loading_image",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "ff990fdb7213255b90859fd621fe85f28f74b19735fd42424bcb4adf3b2631f1"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "233",
+        "column": "loaded_at",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "7ced4aed8340d4822e5dc0321483590f8cc74db06d52ca56d207ecb0a1a2558b"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "233",
+        "column": "status",
+        "oldValueSha256": "68ae73c709b3fd2c29b3a71337c5f8d95041c478b0aae6fab2ee6fdd6094aac7",
+        "newValueSha256": "1bcb3abb3fc0f1a462ffb1f426fe89a9f57a91ac5135a1bd58fcc86d1119792e"
+      },
+      {
+        "table": "supply_request_trips",
+        "rowid": "233",
+        "column": "updated_at",
+        "oldValueSha256": "0341852a7e861bc270ef0279f88d61a6391952fd6dfac60933e30cdec2effa49",
+        "newValueSha256": "7ced4aed8340d4822e5dc0321483590f8cc74db06d52ca56d207ecb0a1a2558b"
+      },
+      {
+        "table": "supply_requests",
+        "rowid": "234",
+        "column": "loaded_at",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "c420fe3d3d182cac0ba327952f87bd15564f029ec6052488eb079cc2e6bae236"
+      },
+      {
+        "table": "supply_requests",
+        "rowid": "234",
+        "column": "status",
+        "oldValueSha256": "68ae73c709b3fd2c29b3a71337c5f8d95041c478b0aae6fab2ee6fdd6094aac7",
+        "newValueSha256": "1bcb3abb3fc0f1a462ffb1f426fe89a9f57a91ac5135a1bd58fcc86d1119792e"
+      },
+      {
+        "table": "supply_requests",
+        "rowid": "234",
+        "column": "updated_at",
+        "oldValueSha256": "a79bcdcb4d3832a89cda961c44a0e2dec9afbd0ab5d793d1ef2c7c3cd592a63b",
+        "newValueSha256": "c420fe3d3d182cac0ba327952f87bd15564f029ec6052488eb079cc2e6bae236"
+      },
+      {
+        "table": "supply_requests",
+        "rowid": "235",
+        "column": "loaded_at",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "7ced4aed8340d4822e5dc0321483590f8cc74db06d52ca56d207ecb0a1a2558b"
+      },
+      {
+        "table": "supply_requests",
+        "rowid": "235",
+        "column": "status",
+        "oldValueSha256": "68ae73c709b3fd2c29b3a71337c5f8d95041c478b0aae6fab2ee6fdd6094aac7",
+        "newValueSha256": "1bcb3abb3fc0f1a462ffb1f426fe89a9f57a91ac5135a1bd58fcc86d1119792e"
+      },
+      {
+        "table": "supply_requests",
+        "rowid": "235",
+        "column": "updated_at",
+        "oldValueSha256": "0341852a7e861bc270ef0279f88d61a6391952fd6dfac60933e30cdec2effa49",
+        "newValueSha256": "7ced4aed8340d4822e5dc0321483590f8cc74db06d52ca56d207ecb0a1a2558b"
+      },
+      {
+        "table": "trips",
+        "rowid": "25790",
+        "column": "image_url",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "6e6f6c2b13eb70206b6440c800de7e258ff8d80daa8745f25b8f046d94ceb6b4"
+      },
+      {
+        "table": "trips",
+        "rowid": "25790",
+        "column": "notes",
+        "oldValueSha256": "d78c909e8f0bf0d031ea8b0bfd5f390b10ffe2735b600b95dbb537f8d959f5ed",
+        "newValueSha256": "e7a5e3c6b00a8ab4ace3d23b9e0d2e26c70db1a1c0afd7c1485914a5b67b8b4b"
+      },
+      {
+        "table": "trips",
+        "rowid": "25791",
+        "column": "image_url",
+        "oldValueSha256": "415f6399633611eef48590fbd8943d9e46a6f970a7a8b0a6bcf36e4c5f64b6ff",
+        "newValueSha256": "ff990fdb7213255b90859fd621fe85f28f74b19735fd42424bcb4adf3b2631f1"
+      },
+      {
+        "table": "trips",
+        "rowid": "25791",
+        "column": "notes",
+        "oldValueSha256": "4f0fc99aa14456ad0f6efb33b32068699b566232b65af80b4ce6ba493b81cb93",
+        "newValueSha256": "f985c6a9b88ccdaa59bd9edd371e8fc37f54703b5eda4822d5315ff91d61100a"
+      }
+    ]
   },
   "schema": {
     "copiedTables": 140,
@@ -2778,7 +2919,7 @@
       "reconstructionVerified": true
     }
   ],
-  "exactRowsReadBack": 608548,
+  "exactRowsReadBack": 608945,
   "d1IntegrityCheck": "ok",
   "developmentDatabaseChanged": false,
   "publishedApplicationCutOverToD1": false,
