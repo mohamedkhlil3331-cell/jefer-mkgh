@@ -3,8 +3,8 @@ name: Production domains and SEO target
 description: Current domain roles and the requested domain/search visibility direction for the ERP project.
 ---
 
-The user states that `jefer-mkgh1.com` is the active domain connected to both Replit and Cloudflare. `jefer-mkgh.com` currently works only on Replit. They want the system consolidated under the active domain and discoverable under the Arabic brand name «مجموعة جيفر» across search platforms.
+The user chose `jefer-mkgh1.com` as the sole production domain going forward and wants production traffic fully off Replit. `jefer-mkgh.com` was purchased through Replit; nameserver delegation is unavailable there, and transfer requires Replit Support after the 60-day purchase hold.
 
-**Why:** The user supplied the current domain roles and asked to save the active domain.
+**Why:** The user clarified the production-domain choice and the registrar limitation.
 
-**How to apply:** Treat `jefer-mkgh1.com` as the intended production domain. Before changing DNS, redirects, canonical URLs, or SEO metadata, explain the exact scope and wait for the user's confirmation. Search visibility cannot be guaranteed by a domain switch alone.
+**How to apply:** Treat `jefer-mkgh1.com` as the production domain. Do not leave it routed to Cloudflare D1 while the old `.com` remains active on a Replit-backed database; stop the Replit deployment only after Worker validation and explicit confirmation of the old domain impact. Revisit the old `.com` only if the user transfers it out or intentionally abandons it.
