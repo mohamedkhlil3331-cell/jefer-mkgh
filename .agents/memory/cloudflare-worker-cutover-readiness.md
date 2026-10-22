@@ -9,6 +9,12 @@ Cloudflare's `httpServerHandler` returns an exported handler object. Route reque
 
 Do not leave active production domains split between Replit SQLite and Cloudflare D1. A secondary-domain test route can validate the Worker while DNS stays direct, but revert it if the primary domain cannot be cut over at the same time.
 
+Check Cloudflare `Workers Routes: Write` access before attempting a production route. Do not substitute the Custom Domain flow when DNS must remain unchanged; it creates or changes DNS records. If route access is denied, leave the domain on its current host rather than retrying after the approved reconnect attempt.
+
+**Why:** Route access was denied, while the Custom Domain flow would have crossed the approved DNS boundary.
+
+**How to apply:** Confirm route-write permission before cutover; if unavailable, keep Replit serving production and stop before any DNS-changing setup.
+
 **Why:** stale D1 readiness assumptions and an incorrect handler call both caused Worker 1101 failures; partial domain routing can split production writes across databases.
 
 **How to apply:** verify the final manifest and Worker adapter, smoke-test through a narrow route, and confirm all production domains are delegated/routed before leaving the full Worker route enabled.
