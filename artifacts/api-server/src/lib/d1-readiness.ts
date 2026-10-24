@@ -126,6 +126,7 @@ type MigrationAdjustments = {
 
 const APPROVED_EXPLICIT_EXTRA_COUNTS: Record<string, number> = {
   driver_expenses: 2,
+  printed_marks: 1,
   sessions: 15,
   trips: 8,
   warehouse_items: 4,
