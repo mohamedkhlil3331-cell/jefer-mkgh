@@ -50,3 +50,4 @@
 - [Cloudflare Worker multipart uploads](cloudflare-worker-multipart.md) — for service-worker syntax, the multipart file part name must match metadata.body_part.
 - [Miniflare D1 integration tests](miniflare-d1-tests.md) — Miniflare 5 uses the V4 config converter; seed D1 test schemas with prepared statements.
 - [Cloudflare Worker cutover readiness](cloudflare-worker-cutover-readiness.md) — validate the final D1 manifest and Worker handler contract; do not split live domains across SQLite and D1.
+- [Cloudflare Worker response compression](worker-response-compression.md) — skip Express compression in Worker mode; production JSON responses were Brotli-compressed twice and unreadable after one browser decode.

@@ -56,7 +56,9 @@ if ((globalThis as typeof globalThis & { __ERP_WORKER_ENV?: unknown }).__ERP_WOR
   );
 }
 
-app.use(compression({ threshold: 1024 }));
+// Cloudflare's Worker response path applies its own content encoding. Compressing
+// in Express as well can leave JSON Brotli-compressed twice but labeled once.
+if (!isCloudflareWorker) app.use(compression({ threshold: 1024 }));
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
