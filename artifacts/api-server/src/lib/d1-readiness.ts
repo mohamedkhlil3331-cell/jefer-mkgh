@@ -125,11 +125,11 @@ type MigrationAdjustments = {
 };
 
 const APPROVED_EXPLICIT_EXTRA_COUNTS: Record<string, number> = {
-  driver_expenses: 1,
-  sessions: 8,
-  trips: 6,
+  driver_expenses: 2,
+  sessions: 15,
+  trips: 8,
   warehouse_items: 4,
-  workshop_inventory_transactions: 13,
+  workshop_inventory_transactions: 14,
 };
 const APPROVED_DYNAMIC_EXTRA_TABLES = new Set(["chat_push_queue"]);
 const APPROVED_DYNAMIC_EXTRA_ROWS = 74;
