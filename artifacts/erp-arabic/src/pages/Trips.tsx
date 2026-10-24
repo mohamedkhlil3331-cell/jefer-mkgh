@@ -90,6 +90,34 @@ interface FleetVehicle {
   driver_name: string | null;
 }
 
+async function fetchAllTrips(cache?: RequestCache): Promise<Trip[]> {
+  const limit = 100;
+  const fetchPage = async (page: number): Promise<{ rows: Trip[]; pages: number }> => {
+    const response = await fetch(`/api/trips?page=${page}&limit=${limit}`, cache ? { cache } : undefined);
+    if (!response.ok) throw new Error("تعذر تحميل سجل الرحلات");
+    const data = await response.json() as unknown;
+    if (Array.isArray(data)) return { rows: data as Trip[], pages: 1 };
+    if (!data || typeof data !== "object" || !Array.isArray((data as { rows?: unknown }).rows)) {
+      throw new Error("استجابة سجل الرحلات غير صالحة");
+    }
+    const result = data as { rows: Trip[]; pages?: number };
+    return { rows: result.rows, pages: Math.max(1, Number(result.pages) || 1) };
+  };
+
+  const firstPage = await fetchPage(1);
+  if (firstPage.pages === 1) return firstPage.rows;
+
+  const remainingPages: Trip[][] = [];
+  for (let start = 2; start <= firstPage.pages; start += 3) {
+    const pages = Array.from(
+      { length: Math.min(3, firstPage.pages - start + 1) },
+      (_, index) => start + index,
+    );
+    remainingPages.push(...await Promise.all(pages.map(async page => (await fetchPage(page)).rows)));
+  }
+  return [...firstPage.rows, ...remainingPages.flat()];
+}
+
 async function requestTripSave(
   url: string,
   init: RequestInit,
@@ -591,10 +619,7 @@ function TripsContent({ user }: { user: User | null }) {
     if (!silent) setLoading(true);
     setLoadError("");
     Promise.all([
-      fetch("/api/trips").then(r => {
-        if (!r.ok) throw new Error("تعذر تحميل سجل الردود");
-        return r.json();
-      }),
+      fetchAllTrips(),
       fetch("/api/trips/summary").then(r => r.json()),
       fetch("/api/fleet-vehicles").then(r => r.json()).catch(() => []),
       fetch("/api/tariffs/loading-places").then(r => r.json()).catch(() => []),
@@ -606,7 +631,7 @@ function TripsContent({ user }: { user: User | null }) {
         .catch(() => []),
       fetch("/api/trip-customers").then(r => r.ok ? r.json() : []).catch(() => []),
     ]).then(([t, s, v, lp, up, st, td, marks, customers]) => {
-      setRows(Array.isArray(t) ? t : (t.rows || []));
+      setRows(t);
       setSummary(s);
       if (s?.show_vehicle_stops !== undefined) setShowStops(!!s.show_vehicle_stops);
       if (Array.isArray(v)) setFleetVehicles(v);
@@ -636,12 +661,12 @@ function TripsContent({ user }: { user: User | null }) {
       refreshing = true;
       try {
         const [tripsResponse, summaryResponse] = await Promise.all([
-          fetch("/api/trips", { cache: "no-store" }),
+          fetchAllTrips("no-store"),
           fetch("/api/trips/summary", { cache: "no-store" }),
         ]);
-        if (!tripsResponse.ok || !summaryResponse.ok) throw new Error("تعذر تحديث سجل الرحلات");
-        const [trips, latestSummary] = await Promise.all([tripsResponse.json(), summaryResponse.json()]);
-        setRows(Array.isArray(trips) ? trips : (trips.rows || []));
+        if (!summaryResponse.ok) throw new Error("تعذر تحديث ملخص الرحلات");
+        const [trips, latestSummary] = await Promise.all([tripsResponse, summaryResponse.json()]);
+        setRows(trips);
         setSummary(latestSummary);
       } catch {
         // The existing refresh button remains available if a background request fails.
