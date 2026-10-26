@@ -682,6 +682,7 @@ export default function WorkshopInventoryPage() {
   const [search, setSearch]   = useRememberedState("workshop-inventory-search", "");
   const [catFilter, setCatFilter] = useRememberedState("workshop-inventory-category-filter", "all");
   const [stockFilter, setStockFilter] = useRememberedState<"all" | "zero" | "low">("workshop-inventory-stock-filter", "all");
+  const [itemSort, setItemSort] = useState<"default" | "code-asc" | "code-desc" | "name-asc" | "name-desc">("default");
   const [txSearch, setTxSearch]   = useRememberedState("workshop-inventory-transaction-search", "");
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -914,6 +915,16 @@ export default function WorkshopInventoryPage() {
     const matchStock  = stockFilter === "all" || statusOf(i) === stockFilter;
     return matchSearch && matchCat && matchStock;
   });
+  if (itemSort !== "default") {
+    const sortByCode = itemSort.startsWith("code");
+    const direction = itemSort.endsWith("asc") ? 1 : -1;
+    const collator = new Intl.Collator("ar", { numeric: true, sensitivity: "base" });
+    filteredItems.sort((a, b) => {
+      const valueA = sortByCode ? (a.item_code || "") : a.item_name;
+      const valueB = sortByCode ? (b.item_code || "") : b.item_name;
+      return direction * collator.compare(valueA, valueB);
+    });
+  }
 
   const filteredTxs = txs.filter(t =>
     !txSearch || t.item_name.includes(txSearch) || (t.reason || "").includes(txSearch) || (t.reference_no || "").includes(txSearch)
@@ -1104,6 +1115,16 @@ export default function WorkshopInventoryPage() {
                   {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
                 <ChevronDown size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"/>
+              </div>
+              <div className="relative">
+                <select aria-label="ترتيب الأصناف" value={itemSort} onChange={e => setItemSort(e.target.value as typeof itemSort)}
+                  className="px-3 py-2 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none bg-white">
+                  <option value="default">ترتيب افتراضي</option>
+                  <option value="code-asc">رقم الصنف: من الأصغر للأكبر</option>
+                  <option value="code-desc">رقم الصنف: من الأكبر للأصغر</option>
+                  <option value="name-asc">الصنف: من أ إلى ي</option>
+                  <option value="name-desc">الصنف: من ي إلى أ</option>
+                </select>
               </div>
               <button onClick={() => setStockFilter(f => f === "zero" ? "all" : "zero")}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold border transition-all ${stockFilter === "zero" ? "bg-red-600 text-white border-red-600" : "bg-red-50 text-red-600 border-red-200 hover:bg-red-100"}`}>
