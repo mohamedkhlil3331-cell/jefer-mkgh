@@ -689,7 +689,10 @@ export default function WorkshopInventoryPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [addOpen, setAddOpen]     = useState(false);
-  const [editItem, setEditItem]   = useState<InventoryItem | null>(null);
+  const [inlineEditId, setInlineEditId] = useState<number | null>(null);
+  const [inlineDraft, setInlineDraft] = useState<InventoryItem | null>(null);
+  const [inlineSaving, setInlineSaving] = useState(false);
+  const [inlineError, setInlineError] = useState("");
   const [adjustItem, setAdjustItem] = useState<{ item: InventoryItem; type: "in" | "out" } | null>(null);
   const [purchaseItem, setPurchaseItem] = useState<InventoryItem | null>(null);
   const [deleteId, setDeleteId]   = useState<number | null>(null);
@@ -726,6 +729,52 @@ export default function WorkshopInventoryPage() {
       if (!silent) setLoading(false);
     }).catch(() => { if (!silent) setLoading(false); });
   }, []);
+
+  const startInlineEdit = (item: InventoryItem) => {
+    setInlineEditId(item.id);
+    setInlineDraft({ ...item });
+    setInlineError("");
+  };
+
+  const cancelInlineEdit = () => {
+    setInlineEditId(null);
+    setInlineDraft(null);
+    setInlineError("");
+  };
+
+  const saveInlineEdit = async () => {
+    if (!inlineDraft) return;
+    if (!inlineDraft.item_name.trim()) {
+      setInlineError("اسم الصنف مطلوب");
+      return;
+    }
+    setInlineSaving(true);
+    setInlineError("");
+    try {
+      const response = await fetch(`/api/workshop-inventory/${inlineDraft.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          item_name: inlineDraft.item_name.trim(),
+          item_code: inlineDraft.item_code || "",
+          category: inlineDraft.category,
+          quantity: Number(inlineDraft.quantity),
+          unit: inlineDraft.unit,
+          min_stock: Number(inlineDraft.min_stock),
+          cost_per_unit: Number(inlineDraft.cost_per_unit),
+          updated_by: user?.name || user?.phone || "مدير الورشة",
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error || "تعذر حفظ التعديل");
+      cancelInlineEdit();
+      loadItems(true);
+    } catch (error) {
+      setInlineError(error instanceof Error ? error.message : "تعذر حفظ التعديل");
+    } finally {
+      setInlineSaving(false);
+    }
+  };
 
   const loadTxs = useCallback((type?: "in" | "out", silent?: boolean) => {
     if (!silent) setTxLoading(true);
@@ -1183,7 +1232,9 @@ export default function WorkshopInventoryPage() {
                   </thead>
                   <tbody className="divide-y divide-gray-50">
                     {filteredItems.map(item => {
-                      const st = statusOf(item);
+                      const isEditing = inlineEditId === item.id && inlineDraft?.id === item.id;
+                      const rowItem = isEditing ? inlineDraft : item;
+                      const st = statusOf(rowItem);
                       return (
                         <tr key={item.id} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(item.id) ? "bg-red-50/50" : ""}`}>
                           <td className="px-3 py-3 w-8">
@@ -1200,41 +1251,88 @@ export default function WorkshopInventoryPage() {
                             />
                           </td>
                           <td className="px-3 py-3">
-                            {item.item_code
-                              ? <span className="text-xs font-mono bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{item.item_code}</span>
+                            {isEditing ? (
+                              <input aria-label="رقم الصنف" value={rowItem.item_code || ""}
+                                onChange={e => setInlineDraft(draft => draft ? { ...draft, item_code: e.target.value } : draft)}
+                                className="w-28 px-2 py-1 border border-blue-200 rounded-lg text-xs font-mono outline-none focus:ring-2 focus:ring-blue-400"/>
+                            ) : rowItem.item_code
+                              ? <span className="text-xs font-mono bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{rowItem.item_code}</span>
                               : <span className="text-xs text-gray-300">—</span>}
                           </td>
                           <td className="px-3 py-3">
-                            <div className="font-semibold text-gray-800 text-sm">{item.item_name}</div>
+                            {isEditing ? (
+                              <input aria-label="اسم الصنف" value={rowItem.item_name}
+                                onChange={e => setInlineDraft(draft => draft ? { ...draft, item_name: e.target.value } : draft)}
+                                className="min-w-36 w-full px-2 py-1 border border-blue-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-400"/>
+                            ) : <div className="font-semibold text-gray-800 text-sm">{rowItem.item_name}</div>}
                           </td>
                           <td className="px-3 py-3">
-                            <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{item.category}</span>
+                            {isEditing ? (
+                              <select aria-label="الفئة" value={rowItem.category}
+                                onChange={e => setInlineDraft(draft => draft ? { ...draft, category: e.target.value } : draft)}
+                                className="min-w-28 px-2 py-1 border border-blue-200 rounded-lg text-xs bg-white outline-none focus:ring-2 focus:ring-blue-400">
+                                {[...new Set([...CATEGORIES, rowItem.category])].map(category => <option key={category} value={category}>{category}</option>)}
+                              </select>
+                            ) : <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">{rowItem.category}</span>}
                           </td>
                           <td className="px-3 py-3 font-bold text-gray-900">
-                            {fmtNum(item.quantity)} <span className="text-xs text-gray-400 font-normal">{item.unit}</span>
+                            {isEditing ? (
+                              <div className="flex items-center gap-1 min-w-40">
+                                <input aria-label="الكمية المتوفرة" type="number" min="0" step="0.1" value={rowItem.quantity}
+                                  onChange={e => setInlineDraft(draft => draft ? { ...draft, quantity: Number(e.target.value) || 0 } : draft)}
+                                  className="w-20 px-2 py-1 border border-blue-200 rounded-lg text-xs font-normal outline-none focus:ring-2 focus:ring-blue-400"/>
+                                <select aria-label="الوحدة" value={rowItem.unit}
+                                  onChange={e => setInlineDraft(draft => draft ? { ...draft, unit: e.target.value } : draft)}
+                                  className="w-20 px-1 py-1 border border-blue-200 rounded-lg text-xs font-normal bg-white outline-none focus:ring-2 focus:ring-blue-400">
+                                  {[...new Set([...UNITS, rowItem.unit])].map(unit => <option key={unit} value={unit}>{unit}</option>)}
+                                </select>
+                              </div>
+                            ) : <>{fmtNum(rowItem.quantity)} <span className="text-xs text-gray-400 font-normal">{rowItem.unit}</span></>}
                           </td>
                           <td className="px-3 py-3 text-gray-500 text-xs">
-                            {item.min_stock > 0 ? `${fmtNum(item.min_stock)} ${item.unit}` : "—"}
+                            {isEditing ? (
+                              <input aria-label="الحد الأدنى" type="number" min="0" step="0.1" value={rowItem.min_stock}
+                                onChange={e => setInlineDraft(draft => draft ? { ...draft, min_stock: Number(e.target.value) || 0 } : draft)}
+                                className="w-24 px-2 py-1 border border-blue-200 rounded-lg text-xs outline-none focus:ring-2 focus:ring-blue-400"/>
+                            ) : rowItem.min_stock > 0 ? `${fmtNum(rowItem.min_stock)} ${rowItem.unit}` : "—"}
                           </td>
                           <td className="px-3 py-3 text-gray-500 text-xs">
-                            {item.cost_per_unit > 0 ? `${fmtNum(item.cost_per_unit)} ر.س` : "—"}
+                            {isEditing ? (
+                              <input aria-label="تكلفة الوحدة" type="number" min="0" step="0.01" value={rowItem.cost_per_unit}
+                                onChange={e => setInlineDraft(draft => draft ? { ...draft, cost_per_unit: Number(e.target.value) || 0 } : draft)}
+                                className="w-24 px-2 py-1 border border-blue-200 rounded-lg text-xs outline-none focus:ring-2 focus:ring-blue-400"/>
+                            ) : rowItem.cost_per_unit > 0 ? `${fmtNum(rowItem.cost_per_unit)} ر.س` : "—"}
                           </td>
                           <td className="px-3 py-3 text-xs font-semibold text-gray-700">
-                            {item.cost_per_unit > 0 ? `${fmtNum(Math.round(item.quantity * item.cost_per_unit))} ر.س` : "—"}
+                            {rowItem.cost_per_unit > 0 ? `${fmtNum(Math.round(rowItem.quantity * rowItem.cost_per_unit))} ر.س` : "—"}
                           </td>
                           <td className="px-3 py-3">
                             <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${STATUS_CLS[st]}`}>{STATUS_LBL[st]}</span>
                           </td>
                           <td className="px-3 py-3">
-                            {item.updated_by ? (
+                            {rowItem.updated_by ? (
                               <div className="leading-tight">
-                                <span className="text-xs font-semibold text-gray-700 block">{item.updated_by}</span>
-                                <span className="text-[10px] text-gray-400">{fmtDate(item.last_updated)}</span>
+                                <span className="text-xs font-semibold text-gray-700 block">{rowItem.updated_by}</span>
+                                <span className="text-[10px] text-gray-400">{fmtDate(rowItem.last_updated)}</span>
                               </div>
                             ) : <span className="text-xs text-gray-300">—</span>}
                           </td>
                           <td className="px-3 py-3">
-                            <div className="flex items-center gap-1">
+                            {isEditing ? (
+                              <div className="flex flex-col items-start gap-2 min-w-28">
+                                <div className="flex items-center gap-1">
+                                  <button onClick={saveInlineEdit} disabled={inlineSaving} title="حفظ التعديل"
+                                    className="p-1.5 text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg disabled:opacity-50">
+                                    {inlineSaving ? <RefreshCw size={15} className="animate-spin"/> : <Save size={15}/>}
+                                  </button>
+                                  <button onClick={cancelInlineEdit} disabled={inlineSaving} title="إلغاء التعديل"
+                                    className="p-1.5 text-gray-500 hover:bg-gray-100 rounded-lg disabled:opacity-50">
+                                    <X size={15}/>
+                                  </button>
+                                </div>
+                                {inlineError && <span role="alert" className="max-w-48 text-[11px] text-red-600">{inlineError}</span>}
+                              </div>
+                            ) : <div className="flex items-center gap-1">
                               <button onClick={() => setAdjustItem({ item, type: "in" })} title="إضافة وارد"
                                 className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-lg transition-colors">
                                 <ArrowDownCircle size={16}/>
@@ -1249,15 +1347,16 @@ export default function WorkshopInventoryPage() {
                                   <ShoppingCart size={16}/>
                                 </button>
                               )}
-                              <button onClick={() => setEditItem(item)} title="تعديل"
-                                className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors">
+                              <button onClick={() => startInlineEdit(item)} title="تعديل من الجدول"
+                                disabled={inlineEditId !== null}
+                                className="p-1.5 text-blue-500 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-40">
                                 <Pencil size={15}/>
                               </button>
                               <button onClick={() => setDeleteId(item.id)} title="حذف"
                                 className="p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500 rounded-lg transition-colors">
                                 <Trash2 size={15}/>
                               </button>
-                            </div>
+                            </div>}
                           </td>
                         </tr>
                       );
@@ -1399,10 +1498,10 @@ export default function WorkshopInventoryPage() {
       </div>
 
       {/* ── Modals ── */}
-      {(addOpen || editItem) && (
-        <ItemModal item={editItem || undefined}
-          onClose={() => { setAddOpen(false); setEditItem(null); }}
-          onSave={() => { setAddOpen(false); setEditItem(null); loadItems(true); }}
+      {addOpen && (
+        <ItemModal
+          onClose={() => setAddOpen(false)}
+          onSave={() => { setAddOpen(false); loadItems(true); }}
         />
       )}
       {adjustItem && (
