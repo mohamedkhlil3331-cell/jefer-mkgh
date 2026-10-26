@@ -529,38 +529,161 @@ router.post("/workshop-inventory/import", upload.single("file"), async (req, res
     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws);
     if (!rows.length) return void res.status(400).json({ error: "الملف فارغ" });
 
-    // Column aliases (Arabic headers from our export template)
-    const g = (r: Record<string,unknown>, ...keys: string[]) => {
-      for (const k of keys) { const v = r[k]; if (v !== undefined && v !== "") return v; }
+    const asciiDigits = (value: string) => value
+      .replace(/[٠-٩]/g, digit => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+      .replace(/[۰-۹]/g, digit => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)));
+    const normalizeCode = (value: unknown): { code: string; invalid: boolean } => {
+      if (typeof value === "number") {
+        return Number.isFinite(value) && Number.isInteger(value)
+          ? { code: String(value), invalid: false }
+          : { code: String(value), invalid: true };
+      }
+      const raw = asciiDigits(String(value ?? "").trim());
+      if (!raw) return { code: "", invalid: false };
+      const decimalCode = raw.match(/^(\d+)[.,٫](\d+)$/);
+      if (decimalCode) {
+        if (/^0+$/.test(decimalCode[2])) return { code: decimalCode[1], invalid: false };
+        return { code: raw, invalid: true };
+      }
+      return { code: raw, invalid: false };
+    };
+    const toQuantity = (value: unknown): { quantity: number; wasText: boolean } => {
+      if (typeof value === "number") {
+        return Number.isFinite(value) ? { quantity: value, wasText: false } : { quantity: 0, wasText: true };
+      }
+      const raw = asciiDigits(String(value ?? "").trim());
+      if (!raw) return { quantity: 0, wasText: false };
+      const parsed = Number(raw.replace(/[,\u066C]/g, "").replace(/\u066B/g, "."));
+      return Number.isFinite(parsed)
+        ? { quantity: parsed, wasText: false }
+        : { quantity: 0, wasText: true };
+    };
+    const getValue = (row: Record<string, unknown>, ...keys: string[]) => {
+      const normalizedRow = Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [key.trim(), value]),
+      );
+      for (const key of keys) {
+        const value = normalizedRow[key];
+        if (value !== undefined && value !== null && value !== "") return value;
+      }
       return undefined;
     };
 
-    const inserted: string[] = []; const skipped: string[] = [];
-    const importedBy = String(req.body?.created_by || "") || null;
-    for (const r of rows) {
-        const name = String(g(r, "اسم الصنف", "item_name", "Name") ?? "").trim();
-        if (!name) { skipped.push("صف بدون اسم"); continue; }
-        const qty  = Number(g(r, "الكمية", "quantity", "Qty") ?? 0);
-        const res2 = await execute(`
-          INSERT INTO workshop_inventory (item_name, item_code, category, quantity, unit, min_stock, cost_per_unit, supplier, updated_by)
-          VALUES (?,?,?,?,?,?,?,?,?)
-        `,
-          name,
-          g(r, "الكود", "item_code", "Code") || null,
-          String(g(r, "الفئة", "category", "Category") ?? "عام"),
-          qty, String(g(r, "الوحدة", "unit", "Unit") ?? "قطعة"),
-          Number(g(r, "الحد الأدنى", "min_stock", "Min Stock") ?? 0),
-          Number(g(r, "سعر الوحدة", "cost_per_unit", "Cost") ?? 0),
-          g(r, "المورد", "supplier", "Supplier") || null,
-          importedBy,
-        );
-        const newId = Number(res2.lastInsertRowid);
-        if (qty > 0) await logInventoryTransaction(newId, name, "in", qty, "استيراد_إكسل", undefined, String(req.body?.created_by || ""));
-        inserted.push(name);
+    const skippedRows: { row: number; code: string; name: string; reason: string }[] = [];
+    const convertedQuantities: { row: number; code: string; name: string; original: string }[] = [];
+    const changeByCode = new Map<string, {
+      code: string; name: string; oldQuantity: number | null; newQuantity: number; action: "added" | "updated";
+    }>();
+    const statements: { sql: string; params: unknown[] }[] = [];
+    const updatedCodes = new Set<string>();
+    const importedCodes = new Map<string, {
+      id: number | null; name: string; unit: string; quantity: number; existedBeforeImport: boolean;
+    }>();
+    const existingRows = await queryAll<{
+      id: number; item_code: string | null; item_name: string; unit: string; quantity: number;
+    }>("SELECT id, item_code, item_name, unit, quantity FROM workshop_inventory WHERE item_code IS NOT NULL AND item_code <> ''");
+    for (const existing of existingRows) {
+      const normalized = normalizeCode(existing.item_code);
+      if (normalized.code && !normalized.invalid) {
+        importedCodes.set(normalized.code, {
+          id: existing.id, name: existing.item_name, unit: existing.unit,
+          quantity: Number(existing.quantity) || 0, existedBeforeImport: true,
+        });
+      }
     }
-    res.json({ ok: true, inserted: inserted.length, skipped: skipped.length, skipped_names: skipped });
+
+    const importedBy = String(req.body?.created_by || "") || null;
+    let inserted = 0;
+    for (const [index, sourceRow] of rows.entries()) {
+      const row = Object.fromEntries(Object.entries(sourceRow).map(([key, value]) => [key.trim(), value]));
+      const rawCode = getValue(row, "رقم الصنف", "الكود", "item_code", "Code");
+      const normalized = normalizeCode(rawCode);
+      const code = normalized.code;
+      const name = String(getValue(row, "اسم الصنف", "الصنف", "item_name", "Name") ?? "").trim();
+      const rawUnit = getValue(row, "الوحدة", "unit", "Unit");
+      const unit = rawUnit === undefined ? "" : String(rawUnit).trim();
+      const rawQuantity = getValue(row, "الكمية الفعلية", "الكمية الفعليه", "المتوفر", "الكمية", "quantity", "Qty");
+      const { quantity, wasText } = toQuantity(rawQuantity);
+      const rowNumber = index + 2;
+
+      if (!code || normalized.invalid) {
+        skippedRows.push({
+          row: rowNumber, code: code || "—", name,
+          reason: !code ? "رقم الصنف غير موجود" : "رقم الصنف يحتوي على جزء عشري غير صالح",
+        });
+        continue;
+      }
+
+      const current = importedCodes.get(code);
+      if (!current && !name) {
+        skippedRows.push({ row: rowNumber, code, name, reason: "اسم الصنف مطلوب لإضافة صنف جديد" });
+        continue;
+      }
+
+      const finalName = name || current?.name || "";
+      const finalUnit = unit || current?.unit || "قطعة";
+      if (wasText) {
+        convertedQuantities.push({
+          row: rowNumber, code, name: finalName, original: String(rawQuantity ?? ""),
+        });
+      }
+
+      if (!current) {
+        statements.push({
+          sql: `INSERT INTO workshop_inventory
+            (item_name, item_code, category, quantity, unit, min_stock, cost_per_unit, supplier, updated_by)
+            VALUES (?, ?, 'عام', ?, ?, 0, 0, NULL, ?)`,
+          params: [finalName, code, quantity, finalUnit, importedBy],
+        });
+        importedCodes.set(code, {
+          id: null, name: finalName, unit: finalUnit, quantity, existedBeforeImport: false,
+        });
+        changeByCode.set(code, {
+          code, name: finalName, oldQuantity: null, newQuantity: quantity, action: "added",
+        });
+        inserted++;
+        continue;
+      }
+
+      statements.push({
+        sql: `UPDATE workshop_inventory
+          SET item_name=?, unit=?, quantity=?, last_updated=datetime('now'), updated_by=?
+          WHERE ${current.id === null ? "item_code=?" : "id=?"}`,
+        params: [finalName, finalUnit, quantity, importedBy, current.id ?? code],
+      });
+      importedCodes.set(code, {
+        ...current, name: finalName, unit: finalUnit, quantity,
+      });
+      if (current.existedBeforeImport) updatedCodes.add(code);
+
+      const priorChange = changeByCode.get(code);
+      changeByCode.set(code, {
+        code,
+        name: finalName,
+        oldQuantity: priorChange ? priorChange.oldQuantity : (current.existedBeforeImport ? current.quantity : null),
+        newQuantity: quantity,
+        action: priorChange?.action ?? "updated",
+      });
+    }
+
+    if (statements.length) await executeBatch(statements);
+    const updated = updatedCodes.size;
+    const changes = [...changeByCode.values()].filter(change =>
+      change.oldQuantity === null || change.oldQuantity !== change.newQuantity,
+    );
+    const skipped_names = skippedRows.map(row => `صف ${row.row}: ${row.reason} (${row.code})`);
+    res.json({
+      ok: true,
+      inserted,
+      updated,
+      skipped: skippedRows.length,
+      skipped_rows: skippedRows,
+      converted_quantities: convertedQuantities,
+      changes,
+      skipped_names,
+    });
   } catch (err) {
-    res.status(400).json({ error: "خطأ في قراءة الملف", detail: String(err) });
+    res.status(400).json({ error: "خطأ في قراءة أو تحديث الملف", detail: String(err) });
   }
 });
 

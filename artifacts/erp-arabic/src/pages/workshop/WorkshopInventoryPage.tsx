@@ -28,6 +28,22 @@ type WorkshopInvoiceReceipt = {
   status: "pending" | "received"; inventory_item_id: number | null; inventory_item_name: string | null;
   inventory_item_code: string | null; received_by: string | null; received_at: string | null; created_at: string;
 };
+type WorkshopInventoryImportChange = {
+  code: string; name: string; oldQuantity: number | null; newQuantity: number; action: "added" | "updated";
+};
+type WorkshopInventoryImportWarning = {
+  row: number; code: string; name: string; original: string;
+};
+type WorkshopInventoryImportSkipped = {
+  row: number; code: string; name: string; reason: string;
+};
+type WorkshopInventoryImportResponse = {
+  ok?: boolean; inserted?: number; updated?: number; skipped?: number;
+  changes?: WorkshopInventoryImportChange[];
+  converted_quantities?: WorkshopInventoryImportWarning[];
+  skipped_rows?: WorkshopInventoryImportSkipped[];
+  error?: string;
+};
 
 const CATEGORIES = ["عام", "زيوت وفلاتر", "إطارات", "كهرباء", "هيكل وميكانيكا", "أدوات", "قطع غيار أخرى"];
 const UNITS      = ["قطعة", "لتر", "كيلو", "متر", "صندوق", "زوج", "طقم"];
@@ -685,7 +701,10 @@ export default function WorkshopInventoryPage() {
   const [itemSort, setItemSort] = useState<"default" | "code-asc" | "code-desc" | "name-asc" | "name-desc">("default");
   const [txSearch, setTxSearch]   = useRememberedState("workshop-inventory-transaction-search", "");
   const [importing, setImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [importMsg, setImportMsg] = useState<{
+    ok: boolean; text: string; changes?: WorkshopInventoryImportChange[];
+    convertedQuantities?: WorkshopInventoryImportWarning[]; skippedRows?: WorkshopInventoryImportSkipped[];
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [addOpen, setAddOpen]     = useState(false);
@@ -939,9 +958,15 @@ export default function WorkshopInventoryPage() {
       fd.append("file", file);
       fd.append("created_by", user?.name || user?.phone || "");
       const res = await fetch("/api/workshop-inventory/import", { method: "POST", body: fd });
-      const data = await res.json() as { ok?: boolean; inserted?: number; skipped?: number; error?: string };
-      if (data.ok) {
-        setImportMsg({ ok: true, text: `✅ تم الاستيراد: ${data.inserted} صنف. تجاهل: ${data.skipped ?? 0}` });
+      const data = await res.json() as WorkshopInventoryImportResponse;
+      if (res.ok && data.ok) {
+        setImportMsg({
+          ok: true,
+          text: `✅ تمت المزامنة: أُضيف ${data.inserted ?? 0}، تحدّث ${data.updated ?? 0}، تم تخطي ${data.skipped ?? 0}`,
+          changes: data.changes ?? [],
+          convertedQuantities: data.converted_quantities ?? [],
+          skippedRows: data.skipped_rows ?? [],
+        });
         loadItems();
       } else {
         setImportMsg({ ok: false, text: `❌ ${data.error || "خطأ في الاستيراد"}` });
@@ -1036,9 +1061,47 @@ export default function WorkshopInventoryPage() {
 
       {/* Import result message */}
       {importMsg && (
-        <div className={`mb-4 px-4 py-2.5 rounded-xl text-sm font-medium flex items-center justify-between ${importMsg.ok ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
-          <span>{importMsg.text}</span>
-          <button onClick={() => setImportMsg(null)} className="opacity-60 hover:opacity-100"><X size={16}/></button>
+        <div className={`mb-4 px-4 py-3 rounded-xl text-sm font-medium ${importMsg.ok ? "bg-emerald-50 text-emerald-800 border border-emerald-200" : "bg-red-50 text-red-700 border border-red-200"}`}>
+          <div className="flex items-center justify-between gap-3">
+            <span>{importMsg.text}</span>
+            <button onClick={() => setImportMsg(null)} className="shrink-0 opacity-60 hover:opacity-100" aria-label="إغلاق نتيجة الاستيراد"><X size={16}/></button>
+          </div>
+          {importMsg.changes && importMsg.changes.length > 0 && (
+            <div className="mt-3 border-t border-emerald-200 pt-2">
+              <p className="mb-1 font-bold">الأرصدة التي تغيّرت:</p>
+              <div className="max-h-40 space-y-1 overflow-y-auto">
+                {importMsg.changes.map((change, index) => (
+                  <p key={`${change.code}-${index}`} className="text-xs">
+                    {change.code} · {change.name} — {change.oldQuantity === null
+                      ? `صنف جديد، الرصيد ${fmtNum(change.newQuantity)}`
+                      : `كان ${fmtNum(change.oldQuantity)} وأصبح ${fmtNum(change.newQuantity)}`}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+          {importMsg.convertedQuantities && importMsg.convertedQuantities.length > 0 && (
+            <div className="mt-3 border-t border-amber-200 pt-2 text-amber-800">
+              <p className="mb-1 font-bold">كميات نصية تم تحويلها إلى صفر:</p>
+              <div className="max-h-32 space-y-1 overflow-y-auto">
+                {importMsg.convertedQuantities.map((warning, index) => (
+                  <p key={`${warning.code}-${index}`} className="text-xs">
+                    صف {warning.row} · {warning.code} · {warning.name} — القيمة: {warning.original || "فارغة"}
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+          {importMsg.skippedRows && importMsg.skippedRows.length > 0 && (
+            <div className="mt-3 border-t border-red-200 pt-2 text-red-700">
+              <p className="mb-1 font-bold">صفوف لم تُستورد:</p>
+              <div className="max-h-32 space-y-1 overflow-y-auto">
+                {importMsg.skippedRows.map((row, index) => (
+                  <p key={`${row.row}-${index}`} className="text-xs">صف {row.row} · {row.code} · {row.name} — {row.reason}</p>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
