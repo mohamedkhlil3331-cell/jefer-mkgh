@@ -543,9 +543,9 @@ export default function WorkshopManagerPage() {
   });
 
   const exportToExcel = () => {
-    if (maintenanceLogs.length === 0) return void alert("لا توجد بيانات للتصدير");
+    if (displayedMaintenanceLogs.length === 0) return void alert("لا توجد بيانات مطابقة للفلاتر للتصدير");
 
-    const exportLogs = maintenanceLogs;
+    const exportLogs = displayedMaintenanceLogs;
     const allTypes = new Set<string>();
     exportLogs.forEach(r => {
       Object.keys(parseBd(r)).forEach(k => allTypes.add(k));
@@ -636,7 +636,7 @@ export default function WorkshopManagerPage() {
     };
 
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, toSheet(exportLogs), makeSheetName("السجل الكامل"));
+    XLSX.utils.book_append_sheet(wb, toSheet(exportLogs), makeSheetName("السجل المفلتر"));
 
     const byBranch = new Map<string, MaintenanceLog[]>();
     exportLogs.forEach(log => {
@@ -707,6 +707,7 @@ export default function WorkshopManagerPage() {
         mlFrom && `من: ${mlFrom}`,
         mlTo && `إلى: ${mlTo}`,
         mlTypeFilter && `نوع العطل: ${mlTypeFilter}`,
+        mlBranchCardFilter && `فرع السجل: ${mlBranchCardFilter}`,
       ].filter(Boolean).join(" | ") || "لا توجد فلاتر"],
       [],
       ["ملخص حسب الفرع"],
@@ -757,18 +758,9 @@ export default function WorkshopManagerPage() {
     XLSX.writeFile(wb, `سجل_الأعطال_${new Date().toLocaleDateString("en-CA")}.xlsx`);
   };
 
-  // ── Company maintenance register: one sheet per branch, mech/electric only ─
-  const exportCompanyMaintenanceRegister = async () => {
-    let exportLogs: MaintenanceLog[];
-    try {
-      // This report is for the company, so it must include every branch even
-      // when the maintenance-log screen currently has a filter applied.
-      const response = await fetch("/api/maintenance-logs");
-      const data = await response.json();
-      exportLogs = Array.isArray(data) ? data as MaintenanceLog[] : [];
-    } catch {
-      return void alert("تعذر تحميل بيانات سجل الشركة");
-    }
+  // ── Company maintenance register: filtered rows, one sheet per branch ──────
+  const exportCompanyMaintenanceRegister = () => {
+    const exportLogs = displayedMaintenanceLogs;
     if (exportLogs.length === 0) return void alert("لا توجد بيانات لسجل الشركة");
 
     type CompanyRow = MaintenanceLog & {
