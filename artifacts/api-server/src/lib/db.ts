@@ -100,7 +100,9 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS sessions (
     token       TEXT    PRIMARY KEY,
     user_id     INTEGER REFERENCES users(id),
-    expires_at  TEXT    NOT NULL
+    expires_at  TEXT    NOT NULL,
+    created_at  TEXT,
+    ip_address  TEXT
   );
 
   CREATE TABLE IF NOT EXISTS products (
@@ -2788,8 +2790,18 @@ db.exec(`
 `);
 
 // ─── Sessions: add login-tracking columns (safe migration) ───────────────────
-try { db.exec(`ALTER TABLE sessions ADD COLUMN created_at TEXT DEFAULT (datetime('now'))`); } catch {}
-try { db.exec(`ALTER TABLE sessions ADD COLUMN ip_address TEXT`); } catch {}
+const sessionColumns = new Set(
+  (db.pragma("table_info(sessions)") as { name: string }[]).map(column => column.name),
+);
+if (!sessionColumns.has("created_at")) {
+  // SQLite does not allow non-constant defaults when adding a column to an
+  // existing table. Add it nullable, then backfill existing sessions.
+  db.exec("ALTER TABLE sessions ADD COLUMN created_at TEXT");
+}
+if (!sessionColumns.has("ip_address")) {
+  db.exec("ALTER TABLE sessions ADD COLUMN ip_address TEXT");
+}
+db.exec("UPDATE sessions SET created_at = datetime('now') WHERE created_at IS NULL");
 
 // ─── Single active sessions for hidden/developer administration ─────────────
 db.exec(`
