@@ -286,6 +286,8 @@ export default function WorkshopManagerPage() {
   const [invSearchQ, setInvSearchQ] = useState("");
   const [invItems, setInvItems] = useState<{ item: InventoryItem; qty: string }[]>([]);
   const [invDropOpen, setInvDropOpen] = useState(false);
+  const [invPickerRefreshing, setInvPickerRefreshing] = useState(false);
+  const [invPickerRefreshError, setInvPickerRefreshError] = useState(false);
 
   // Fleet / drivers / branches
   const [fleetVehicles, setFleetVehicles] = useState<FleetVehicle[]>([]);
@@ -312,6 +314,27 @@ export default function WorkshopManagerPage() {
   const loadReports   = () => fetch("/api/workflow/breakdown-reports").then(r => r.json()).then(d => setReports(Array.isArray(d) ? d : []));
   const loadJobs      = () => fetch("/api/workshop-jobs").then(r => r.json()).then(d => setJobs(Array.isArray(d) ? d : []));
   const loadInventory = () => fetch("/api/workshop-inventory").then(r => r.json()).then(d => setInventory(Array.isArray(d) ? d : []));
+  const refreshInventoryForPicker = async () => {
+    setInvPickerRefreshing(true);
+    setInvPickerRefreshError(false);
+    try {
+      const response = await fetch("/api/workshop-inventory", { cache: "no-store" });
+      if (!response.ok) throw new Error("تعذر تحديث رصيد المستودع");
+      const data: unknown = await response.json();
+      if (!Array.isArray(data)) throw new Error("استجابة مخزون الورشة غير صالحة");
+      const latestItems = data as InventoryItem[];
+      const latestById = new Map(latestItems.map(item => [item.id, item]));
+      setInventory(latestItems);
+      setInvItems(current => current.map(selected => ({
+        ...selected,
+        item: latestById.get(selected.item.id) ?? { ...selected.item, quantity: 0 },
+      })));
+    } catch {
+      setInvPickerRefreshError(true);
+    } finally {
+      setInvPickerRefreshing(false);
+    }
+  };
   const loadFleet     = () => fetch("/api/fleet-vehicles-list").then(r => r.json()).then(d => setFleetVehicles(Array.isArray(d) ? d : []));
   const loadDrivers   = () => fetch("/api/drivers-list").then(r => r.ok ? r.json() : []).then(d => setDrivers(Array.isArray(d) ? d : []));
   const loadWsBranches = () => fetch("/api/company-settings").then(r => r.ok ? r.json() : []).then(d => setWsBranches(Array.isArray(d) ? d : []));
@@ -3320,12 +3343,28 @@ ${buildCardHTML(r, now)}
                   <input
                     value={invSearchQ}
                     onChange={e => { setInvSearchQ(e.target.value); setInvDropOpen(true); }}
-                    onFocus={() => setInvDropOpen(true)}
+                    onFocus={() => { setInvDropOpen(true); void refreshInventoryForPicker(); }}
                     onBlur={() => setTimeout(() => setInvDropOpen(false), 180)}
                     placeholder={invItems.length > 0 ? "+ إضافة قطعة أخرى من المستودع..." : "ابحث باسم القطعة في المستودع..."}
                     className="w-full border border-gray-200 rounded-xl pr-8 pl-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#103c68]/20"
                   />
-                  {invDropOpen && (() => {
+                  {invDropOpen && (invPickerRefreshing ? (
+                    <div className="absolute z-50 top-full right-0 left-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl px-4 py-3 text-xs text-gray-500">
+                      جاري تحديث رصيد مستودع الورشة…
+                    </div>
+                  ) : invPickerRefreshError ? (
+                    <div className="absolute z-50 top-full right-0 left-0 mt-1 bg-white border border-red-200 rounded-xl shadow-xl px-4 py-3 flex items-center justify-between gap-3 text-xs">
+                      <span className="text-red-600">تعذر تحديث رصيد المستودع؛ لم نعرض الأرقام القديمة.</span>
+                      <button
+                        type="button"
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => void refreshInventoryForPicker()}
+                        className="font-bold text-[#103c68] whitespace-nowrap"
+                      >
+                        إعادة المحاولة
+                      </button>
+                    </div>
+                  ) : (() => {
                     const q = invSearchQ.trim().toLowerCase();
                     const alreadyIds = new Set(invItems.map(ii => ii.item.id));
                     const results = (q
@@ -3354,7 +3393,7 @@ ${buildCardHTML(r, now)}
                         ))}
                       </div>
                     ) : null;
-                  })()}
+                  })())}
                 </div>
               </div>
 
