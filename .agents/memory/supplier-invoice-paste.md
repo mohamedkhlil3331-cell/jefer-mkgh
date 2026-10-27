@@ -7,6 +7,8 @@ Supplier invoice entry keeps the existing Excel file import and adds an editable
 
 A workshop-inventory invoice is a pending receipt request, not an immediate stock increase. A user with the existing workshop-inventory access links it to an existing item or creates one with a unique code. Confirmation updates quantity and unit cost and logs one incoming transaction exactly once. Do not backfill old invoices or change unrelated purchase/workshop flows.
 
+The workshop receipt screen also supports direct receipt when exactly one inventory item matches the invoice item name after trimming and collapsing whitespace (case-insensitive). If there is no match or multiple matches, do not change stock; keep manual linking available.
+
 **Why:** The user wants spreadsheet and manual entry in the supplier invoice flow while preserving the established file import, fleet records, and stock audit history.
 
-**How to apply:** Keep paste changes staged and editable before saving. Treat workshop invoices as pending until an authorized receipt confirmation; keep stock mutations atomic and idempotent.
+**How to apply:** Keep paste changes staged and editable before saving. Treat workshop invoices as pending until an authorized direct or manual receipt action; keep stock mutations atomic and idempotent.

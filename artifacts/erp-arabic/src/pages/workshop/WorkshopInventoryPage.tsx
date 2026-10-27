@@ -733,6 +733,8 @@ export default function WorkshopInventoryPage() {
   const [receiptNewCode, setReceiptNewCode] = useState("");
   const [receiptUnit, setReceiptUnit] = useState("قطعة");
   const [receiptSaving, setReceiptSaving] = useState(false);
+  const [directReceivingId, setDirectReceivingId] = useState<number | null>(null);
+  const [receiptDirectErrors, setReceiptDirectErrors] = useState<Record<number, string>>({});
 
   const loadTxCounts = useCallback(() => {
     fetch("/api/workshop-inventory/transactions/counts")
@@ -857,6 +859,46 @@ export default function WorkshopInventoryPage() {
     } catch (error) {
       setReceiptError(error instanceof Error ? error.message : "تعذر تأكيد الاستلام");
     } finally { setReceiptSaving(false); }
+  };
+
+  const receiveInvoiceDirect = async (receipt: WorkshopInvoiceReceipt) => {
+    if (directReceivingId !== null) return;
+    setDirectReceivingId(receipt.id);
+    setReceiptDirectErrors(previous => ({ ...previous, [receipt.id]: "" }));
+    try {
+      const inventoryResponse = await fetch("/api/workshop-inventory", { cache: "no-store" });
+      const inventoryData = await inventoryResponse.json();
+      if (!inventoryResponse.ok || !Array.isArray(inventoryData))
+        throw new Error("تعذر التحقق من أصناف مخزون الورشة");
+
+      const normalizeName = (value: string) => value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+      const matchingItems = (inventoryData as InventoryItem[]).filter(
+        item => normalizeName(item.item_name) === normalizeName(receipt.item_name),
+      );
+      if (matchingItems.length === 0) {
+        throw new Error("لا يوجد صنف مطابق بالاسم في المخزون؛ استخدم الربط اليدوي");
+      }
+      if (matchingItems.length > 1) {
+        throw new Error("يوجد أكثر من صنف بهذا الاسم؛ استخدم الربط اليدوي لتحديد الصنف");
+      }
+
+      const response = await fetch(`/api/workshop-inventory/purchase-invoice-receipts/${receipt.id}/receive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ inventory_item_id: matchingItems[0].id }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data?.error || "تعذر تأكيد الاستلام");
+      await Promise.all([loadInvoiceReceipts(), loadItems(true), loadTxs("in", true)]);
+      loadTxCounts();
+    } catch (error) {
+      setReceiptDirectErrors(previous => ({
+        ...previous,
+        [receipt.id]: error instanceof Error ? error.message : "تعذر تأكيد الاستلام",
+      }));
+    } finally {
+      setDirectReceivingId(null);
+    }
   };
 
   const doBulkDelete = async () => {
@@ -1188,15 +1230,30 @@ export default function WorkshopInventoryPage() {
                         فاتورة {receipt.invoice_number || receipt.invoice_id} · {receipt.supplier_name || "مورد غير محدد"}
                       </div>
                     </div>
-                    <button onClick={() => {
-                      setReceivingReceipt(receipt);
-                      setReceiptItemId("");
-                      setReceiptNewItem(false);
-                      setReceiptError("");
-                    }} className="rounded-xl bg-cyan-700 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-800">
-                      ربط الصنف وتأكيد الاستلام
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={() => void receiveInvoiceDirect(receipt)}
+                        disabled={directReceivingId !== null || receiptSaving}
+                        className="rounded-xl bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:opacity-60"
+                      >
+                        {directReceivingId === receipt.id ? "جارٍ الاستلام..." : "استلام مباشر"}
+                      </button>
+                      <button onClick={() => {
+                        setReceivingReceipt(receipt);
+                        setReceiptItemId("");
+                        setReceiptNewItem(false);
+                        setReceiptError("");
+                      }} disabled={directReceivingId !== null || receiptSaving}
+                        className="rounded-xl bg-cyan-700 px-4 py-2 text-sm font-bold text-white hover:bg-cyan-800 disabled:opacity-60">
+                        ربط يدوي
+                      </button>
+                    </div>
                   </div>
+                  {receiptDirectErrors[receipt.id] && (
+                    <p role="alert" className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800">
+                      {receiptDirectErrors[receipt.id]}
+                    </p>
+                  )}
                   <div className="mt-3 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
                     <div><span className="block text-xs text-gray-400">الكمية</span><b>{fmtNum(receipt.quantity)}</b></div>
                     <div><span className="block text-xs text-gray-400">تكلفة الوحدة قبل الضريبة</span><b>{fmtNum(receipt.unit_cost)} ر.س</b></div>
