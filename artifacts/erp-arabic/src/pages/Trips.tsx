@@ -3,7 +3,7 @@ import { useRememberedState } from "@/hooks/useRememberedState";
 import { Truck, Plus, Trash2, RefreshCw, X, Save, Download, Upload, AlertTriangle, Search, Filter, Pencil, Printer, PauseCircle, ChevronDown, ScanLine, FileImage, Undo2, CheckCircle, Maximize2, Minimize2, EyeOff, Eye, Share2, Fuel } from "lucide-react";
 import { MonthShortcuts } from "@/components/MonthShortcuts";
 import * as XLSX from "xlsx";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
+import { LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend } from "recharts";
 import RentalAccountsTab from "@/pages/trips/RentalAccountsTab";
 import { useAuth, type User } from "@/context/AuthContext";
 import { createTripPdf, type TripPdfDetails } from "@/pages/trips/tripPdf";
@@ -96,6 +96,28 @@ interface DieselLedgerEntry {
   expense_date: string | null;
   vehicle_plate: string | null;
   liters: number | null;
+}
+
+interface WorkshopExpenseEntry {
+  maintenance_date: string | null;
+  vehicle_plate: string | null;
+  trailer_number?: string | null;
+  vehicle_choice?: string | null;
+  amount: number | null;
+}
+
+type TripPieMetric = "revenue" | "net" | "diesel" | "workshop";
+
+const TRIP_CHART_COLORS = ["#2563eb", "#f97316", "#16a34a", "#a855f7", "#0d9488", "#e11d48", "#6366f1", "#ca8a04"];
+
+function maintenanceDateToISO(value: string | null | undefined): string {
+  const raw = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  const parts = raw.split("/");
+  if (parts.length !== 3) return "";
+  const [month, day, year] = parts;
+  const fullYear = year.length === 2 ? `20${year}` : year;
+  return `${fullYear}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
 }
 
 interface VehicleAnalysisDieselFilters {
@@ -635,6 +657,10 @@ function TripsContent({ user }: { user: User | null }) {
   const [dieselLedger, setDieselLedger] = useState<DieselLedgerEntry[]>([]);
   const [dieselLedgerLoading, setDieselLedgerLoading] = useState(true);
   const [dieselLedgerError, setDieselLedgerError] = useState(false);
+  const [workshopExpenses, setWorkshopExpenses] = useState<WorkshopExpenseEntry[]>([]);
+  const [workshopExpensesLoading, setWorkshopExpensesLoading] = useState(true);
+  const [workshopExpensesError, setWorkshopExpensesError] = useState(false);
+  const [pieMetric, setPieMetric] = useState<TripPieMetric>("revenue");
   const [newTripVehicles, setNewTripVehicles] = useState<FleetVehicle[]>([]);
   const [tripDrivers,     setTripDrivers]     = useState<{ id: number; name: string }[]>([]);
   const [openingAdd,      setOpeningAdd]      = useState(false);
@@ -687,6 +713,32 @@ function TripsContent({ user }: { user: User | null }) {
   useEffect(() => {
     void loadDieselLedger();
   }, [loadDieselLedger]);
+
+  const loadWorkshopExpenses = useCallback(async () => {
+    const params = new URLSearchParams();
+    if (filterDateFrom) params.set("from", filterDateFrom);
+    if (filterDateTo) params.set("to", filterDateTo);
+    if (filterVehicle) params.set("vehicle_plate", filterVehicle);
+    try {
+      const response = await fetch(`/api/maintenance-logs?${params.toString()}`, {
+        headers: sessionHeaders(),
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("تعذر تحميل مصروفات الورشة");
+      const data: unknown = await response.json();
+      if (!Array.isArray(data)) throw new Error("استجابة مصروفات الورشة غير صالحة");
+      setWorkshopExpenses(data as WorkshopExpenseEntry[]);
+      setWorkshopExpensesError(false);
+    } catch {
+      setWorkshopExpensesError(true);
+    } finally {
+      setWorkshopExpensesLoading(false);
+    }
+  }, [filterDateFrom, filterDateTo, filterVehicle]);
+
+  useEffect(() => {
+    void loadWorkshopExpenses();
+  }, [loadWorkshopExpenses]);
 
   useEffect(() => {
     try {
@@ -898,16 +950,105 @@ function TripsContent({ user }: { user: User | null }) {
   }, [filteredStopRows, accountedRows, filterDateFrom, filterDateTo]);
 
   // ── Daily chart data ──────────────────────────────────────────────────────
+  const tripVehiclePlates = useMemo(
+    () => new Set(accountedRows.map(row => (row.car_id || "").trim()).filter(Boolean)),
+    [accountedRows],
+  );
   const chartData = useMemo(() => {
-    const map = new Map<string, number>();
+    const map = new Map<string, { fullDate: string; count: number; diesel: number; net: number; workshop: number }>();
+    const getDay = (date: string) => {
+      let entry = map.get(date);
+      if (!entry) {
+        entry = { fullDate: date, count: 0, diesel: 0, net: 0, workshop: 0 };
+        map.set(date, entry);
+      }
+      return entry;
+    };
     for (const r of accountedRows) {
       const d = toISO(r.date);
-      if (d) map.set(d, (map.get(d) || 0) + (r.trips_count || 0));
+      if (!d) continue;
+      const day = getDay(d);
+      day.count += r.trips_count || 0;
+      day.net += r.net_amount ?? (r.return_value_no_vat || 0);
     }
-    return Array.from(map.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([date, cnt]) => ({ date: date.slice(8), fullDate: date, count: cnt }));
-  }, [accountedRows]);
+    const expenseMatchesFilters = (date: string, plate: string) => {
+      if (!date || !plate) return false;
+      if (filterDateFrom && date < filterDateFrom) return false;
+      if (filterDateTo && date > filterDateTo) return false;
+      if (filterVehicle && plate !== filterVehicle.trim()) return false;
+      if (!filterVehicle && !tripVehiclePlates.has(plate)) return false;
+      return true;
+    };
+    for (const expense of dieselLedger) {
+      const date = (expense.expense_date || "").slice(0, 10);
+      const plate = (expense.vehicle_plate || "").trim();
+      if (!expenseMatchesFilters(date, plate)) continue;
+      getDay(date).diesel += Number(expense.liters) || 0;
+    }
+    for (const expense of workshopExpenses) {
+      const date = maintenanceDateToISO(expense.maintenance_date);
+      const plate = (expense.vehicle_plate || "").trim();
+      const belongsToVehicle = expense.vehicle_choice === "vehicle" ||
+        (!expense.vehicle_choice && !String(expense.trailer_number || "").trim());
+      if (!belongsToVehicle || !expenseMatchesFilters(date, plate)) continue;
+      getDay(date).workshop += Number(expense.amount) || 0;
+    }
+    return Array.from(map.values())
+      .sort((a, b) => a.fullDate.localeCompare(b.fullDate))
+      .map(day => ({ ...day, date: day.fullDate.slice(8) }));
+  }, [
+    accountedRows, dieselLedger, workshopExpenses, filterDateFrom, filterDateTo,
+    filterVehicle, tripVehiclePlates,
+  ]);
+
+  const pieData = useMemo(() => {
+    const values = new Map<string, { revenue: number; net: number; diesel: number; workshop: number }>();
+    const getVehicle = (plate: string) => {
+      let value = values.get(plate);
+      if (!value) {
+        value = { revenue: 0, net: 0, diesel: 0, workshop: 0 };
+        values.set(plate, value);
+      }
+      return value;
+    };
+    for (const row of accountedRows) {
+      const plate = (row.car_id || "").trim();
+      if (!plate) continue;
+      const value = getVehicle(plate);
+      value.revenue += row.return_value_no_vat || 0;
+      value.net += row.net_amount ?? (row.return_value_no_vat || 0);
+    }
+    const expenseMatchesFilters = (date: string, plate: string) => {
+      if (!date || !plate) return false;
+      if (filterDateFrom && date < filterDateFrom) return false;
+      if (filterDateTo && date > filterDateTo) return false;
+      if (filterVehicle && plate !== filterVehicle.trim()) return false;
+      if (!filterVehicle && !tripVehiclePlates.has(plate)) return false;
+      return true;
+    };
+    for (const expense of dieselLedger) {
+      const date = (expense.expense_date || "").slice(0, 10);
+      const plate = (expense.vehicle_plate || "").trim();
+      if (!expenseMatchesFilters(date, plate)) continue;
+      getVehicle(plate).diesel += Number(expense.liters) || 0;
+    }
+    for (const expense of workshopExpenses) {
+      const date = maintenanceDateToISO(expense.maintenance_date);
+      const plate = (expense.vehicle_plate || "").trim();
+      const belongsToVehicle = expense.vehicle_choice === "vehicle" ||
+        (!expense.vehicle_choice && !String(expense.trailer_number || "").trim());
+      if (!belongsToVehicle || !expenseMatchesFilters(date, plate)) continue;
+      getVehicle(plate).workshop += Number(expense.amount) || 0;
+    }
+    return Array.from(values.entries())
+      .map(([name, metrics]) => ({ name, value: metrics[pieMetric] }))
+      .filter(item => Number.isFinite(item.value) && item.value > 0)
+      .sort((a, b) => b.value - a.value);
+  }, [
+    accountedRows, dieselLedger, workshopExpenses, filterDateFrom, filterDateTo,
+    filterVehicle, tripVehiclePlates, pieMetric,
+  ]);
+  const pieMetricUnit = pieMetric === "diesel" ? "لتر" : "ر.س";
 
   // ── Dynamic summary from filtered rows ───────────────────────────────────
   const totalNet = accountedRows.reduce((s, r) => s + (r.net_amount ?? (r.return_value_no_vat || 0)), 0);
@@ -1987,31 +2128,109 @@ function TripsContent({ user }: { user: User | null }) {
         </div>
       )}
 
-      {/* ── Daily returns chart ── */}
-      {!compactSections && showChartSection && chartData.length > 1 && (
-        <div className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-bold text-gray-700 flex items-center gap-1.5">
-              <span className="w-3 h-3 rounded-sm bg-[#103c68] inline-block" />
-              الردود اليومية
-            </h3>
-            <span className="text-xs text-gray-400">
-              {chartData.length} يوم — {accountedRows.reduce((s, r) => s + (r.trips_count || 0), 0).toLocaleString("ar-SA")} رد
-            </span>
-          </div>
-          <ResponsiveContainer width="100%" height={110}>
-            <BarChart data={chartData} margin={{ top: 2, right: 4, left: -24, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
-              <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
-              <YAxis tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} allowDecimals={false} />
-              <Tooltip
-                contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e5e7eb", direction: "rtl" }}
-                formatter={(v: number) => [v.toLocaleString("ar-SA"), "الردود"]}
-                labelFormatter={(l) => `يوم ${l}`}
-              />
-              <Bar dataKey="count" fill="#103c68" radius={[3, 3, 0, 0]} maxBarSize={32} />
-            </BarChart>
-          </ResponsiveContainer>
+      {/* ── Daily performance lines + per-vehicle pie chart ── */}
+      {!compactSections && showChartSection && (chartData.length > 0 || pieData.length > 0) && (
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.7fr)_minmax(280px,1fr)] gap-3">
+          <section className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 min-w-0">
+            <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
+              <h3 className="text-sm font-bold text-gray-700 flex items-center gap-1.5">
+                <span className="w-3 h-3 rounded-full bg-[#103c68] inline-block" />
+                المؤشرات اليومية
+              </h3>
+              <span className="text-xs text-gray-400">
+                {chartData.length} يوم — القيم بالريال واللتر والردود، لكل مؤشر مقياس مستقل
+              </span>
+            </div>
+            {(dieselLedgerError || workshopExpensesError) && (
+              <p className="text-[11px] text-amber-700 mb-2" role="status">
+                {dieselLedgerError && workshopExpensesError
+                  ? "تعذر تحميل بيانات الديزل والورشة."
+                  : dieselLedgerError
+                    ? "تعذر تحميل بيانات الديزل."
+                    : "تعذر تحميل بيانات الورشة."}
+              </p>
+            )}
+            <ResponsiveContainer width="100%" height={250}>
+              <LineChart data={chartData} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: "#9ca3af" }} axisLine={false} tickLine={false} interval="preserveStartEnd" />
+                <YAxis yAxisId="sar" hide />
+                <YAxis yAxisId="liters" hide />
+                <YAxis yAxisId="replies" hide />
+                <Tooltip
+                  contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e5e7eb", direction: "rtl" }}
+                  formatter={(value: number, name: string) => [
+                    Number(value).toLocaleString("ar-SA"),
+                    name,
+                  ]}
+                  labelFormatter={label => `يوم ${label}`}
+                />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Line yAxisId="liters" type="monotone" dataKey="diesel" name="استهلاك الديزل (لتر)" stroke="#f97316" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls />
+                <Line yAxisId="replies" type="monotone" dataKey="count" name="الردود" stroke="#2563eb" strokeWidth={2.5} dot={false} activeDot={{ r: 4 }} connectNulls />
+                <Line yAxisId="sar" type="monotone" dataKey="net" name="صافي الإيرادات (ر.س)" stroke="#16a34a" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls />
+                <Line yAxisId="sar" type="monotone" dataKey="workshop" name="مصروف الورشة (ر.س)" stroke="#a855f7" strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls />
+              </LineChart>
+            </ResponsiveContainer>
+          </section>
+
+          <section className="bg-white border border-gray-100 rounded-2xl shadow-sm p-4 min-w-0">
+            <div className="flex items-center justify-between gap-2 mb-3 flex-wrap">
+              <h3 className="text-sm font-bold text-gray-700">التوزيع حسب السيارة</h3>
+              <select
+                data-testid="select-trip-pie-metric"
+                value={pieMetric}
+                onChange={event => setPieMetric(event.target.value as TripPieMetric)}
+                className="text-xs border border-gray-200 rounded-lg px-2 py-1.5 bg-gray-50 font-semibold"
+                aria-label="المؤشر المعروض في الدائرة"
+              >
+                <option value="revenue">الإيرادات</option>
+                <option value="net">صافي الإيرادات</option>
+                <option value="diesel">استهلاك الديزل (لتر)</option>
+                <option value="workshop">مصروف الورشة</option>
+              </select>
+            </div>
+            {((pieMetric === "diesel" && (dieselLedgerLoading || dieselLedgerError)) ||
+              (pieMetric === "workshop" && (workshopExpensesLoading || workshopExpensesError))) ? (
+              <div data-testid="trip-pie-metric-status" className="h-[230px] flex items-center justify-center text-center text-xs text-gray-400">
+                {pieMetric === "diesel"
+                  ? dieselLedgerLoading ? "جاري تحميل سجل الديزل…" : "تعذر تحميل سجل الديزل"
+                  : workshopExpensesLoading ? "جاري تحميل مصروفات الورشة…" : "تعذر تحميل مصروفات الورشة"}
+              </div>
+            ) : pieData.length === 0 ? (
+              <div data-testid="trip-pie-empty" className="h-[230px] flex items-center justify-center text-xs text-gray-400">
+                لا توجد قيم موجبة لعرضها في هذا المؤشر
+              </div>
+            ) : (
+              <>
+                <ResponsiveContainer width="100%" height={190}>
+                  <PieChart>
+                    <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={78} paddingAngle={1}>
+                      {pieData.map((item, index) => (
+                        <Cell key={item.name} fill={TRIP_CHART_COLORS[index % TRIP_CHART_COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{ fontSize: 11, borderRadius: 8, border: "1px solid #e5e7eb", direction: "rtl" }}
+                      formatter={(value: number) => [`${Number(value).toLocaleString("ar-SA")} ${pieMetricUnit}`, pieMetric === "diesel" ? "استهلاك الديزل" : pieMetric === "workshop" ? "مصروف الورشة" : pieMetric === "net" ? "صافي الإيرادات" : "الإيرادات"]}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-[11px] max-h-32 overflow-y-auto">
+                  {pieData.map((item, index) => (
+                    <div key={item.name} data-testid={`trip-pie-vehicle-${index}`} className="flex items-center gap-1.5 min-w-0">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: TRIP_CHART_COLORS[index % TRIP_CHART_COLORS.length] }} />
+                      <span className="truncate text-gray-600">{item.name}</span>
+                      <span className="font-bold text-gray-800 mr-auto whitespace-nowrap">{item.value.toLocaleString("ar-SA")} {pieMetricUnit}</span>
+                    </div>
+                  ))}
+                </div>
+                {pieMetric === "net" && (
+                  <p className="text-[10px] text-gray-400 mt-2">لا تظهر القيم الصافية الصفرية أو السالبة في الرسم الدائري.</p>
+                )}
+              </>
+            )}
+          </section>
         </div>
       )}
 
