@@ -1,12 +1,13 @@
 import { useEffect, useState, useRef, useMemo, useCallback } from "react";
 import { useRememberedState } from "@/hooks/useRememberedState";
-import { Truck, Plus, Trash2, RefreshCw, X, Save, Download, Upload, AlertTriangle, Search, Filter, Pencil, Printer, PauseCircle, ChevronDown, ScanLine, FileImage, Undo2, CheckCircle, Maximize2, Minimize2, EyeOff, Eye, Share2 } from "lucide-react";
+import { Truck, Plus, Trash2, RefreshCw, X, Save, Download, Upload, AlertTriangle, Search, Filter, Pencil, Printer, PauseCircle, ChevronDown, ScanLine, FileImage, Undo2, CheckCircle, Maximize2, Minimize2, EyeOff, Eye, Share2, Fuel } from "lucide-react";
 import { MonthShortcuts } from "@/components/MonthShortcuts";
 import * as XLSX from "xlsx";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
 import RentalAccountsTab from "@/pages/trips/RentalAccountsTab";
 import { useAuth, type User } from "@/context/AuthContext";
 import { createTripPdf, type TripPdfDetails } from "@/pages/trips/tripPdf";
+import { VIEW_STATE_PREFIX } from "@/lib/remembered-view-storage";
 
 interface Trip {
   id: number;
@@ -88,6 +89,62 @@ interface FleetVehicle {
   plate_number: string;
   vehicle_type: string | null;
   driver_name: string | null;
+  branch?: string | null;
+}
+
+interface DieselLedgerEntry {
+  expense_date: string | null;
+  vehicle_plate: string | null;
+  liters: number | null;
+}
+
+interface VehicleAnalysisDieselFilters {
+  from: string;
+  to: string;
+  vehicleType: string;
+  branch: string;
+  plates: string[];
+}
+
+function defaultVehicleAnalysisDieselFilters(): VehicleAnalysisDieselFilters {
+  const today = new Date();
+  const format = (date: Date) =>
+    `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return {
+    from: format(new Date(today.getFullYear(), today.getMonth() - 1, 1)),
+    to: format(new Date(today.getFullYear(), today.getMonth(), 0)),
+    vehicleType: "",
+    branch: "",
+    plates: [],
+  };
+}
+
+function readVehicleAnalysisDieselFilters(user: User | null): VehicleAnalysisDieselFilters {
+  const defaults = defaultVehicleAnalysisDieselFilters();
+  const stateKey = (name: string) =>
+    `${VIEW_STATE_PREFIX}${user?.role ?? "guest"}:${user?.id ?? "guest"}:/vehicle-analytics:admin-vehicle-dashboard-${name}`;
+  const readText = (name: string, fallback: string) => {
+    try {
+      const value: unknown = JSON.parse(sessionStorage.getItem(stateKey(name)) || "null");
+      return typeof value === "string" ? value : fallback;
+    } catch {
+      return fallback;
+    }
+  };
+  let plates = defaults.plates;
+  try {
+    const value: unknown = JSON.parse(sessionStorage.getItem(stateKey("global-plates")) || "null");
+    if (Array.isArray(value)) plates = value.filter((plate): plate is string => typeof plate === "string");
+  } catch {
+    // Keep the default unfiltered vehicle list when saved state is unavailable.
+  }
+  return {
+    from: readText("global-from", defaults.from),
+    to: readText("global-to", defaults.to),
+    vehicleType: readText("global-type", defaults.vehicleType),
+    branch: readText("global-branch", defaults.branch),
+    plates,
+  };
 }
 
 async function fetchAllTrips(cache?: RequestCache): Promise<Trip[]> {
@@ -342,6 +399,7 @@ export default function Trips() {
 
 function TripsContent({ user }: { user: User | null }) {
   const [savedFilters] = useState(() => readTripFilters(user?.id));
+  const [vehicleAnalysisDieselFilters] = useState(() => readVehicleAnalysisDieselFilters(user));
   const [pageTab, setPageTab] = useRememberedState<"trips" | "rental_accounts">("trips-page-tab", "trips");
   const [rows, setRows]         = useState<Trip[]>([]);
   const [summary, setSummary]   = useState<Summary | null>(null);
@@ -574,6 +632,9 @@ function TripsContent({ user }: { user: User | null }) {
 
   // ── Fleet data for smart form ─────────────────────────────────────────────
   const [fleetVehicles,   setFleetVehicles]   = useState<FleetVehicle[]>([]);
+  const [dieselLedger, setDieselLedger] = useState<DieselLedgerEntry[]>([]);
+  const [dieselLedgerLoading, setDieselLedgerLoading] = useState(true);
+  const [dieselLedgerError, setDieselLedgerError] = useState(false);
   const [newTripVehicles, setNewTripVehicles] = useState<FleetVehicle[]>([]);
   const [tripDrivers,     setTripDrivers]     = useState<{ id: number; name: string }[]>([]);
   const [openingAdd,      setOpeningAdd]      = useState(false);
@@ -604,6 +665,28 @@ function TripsContent({ user }: { user: User | null }) {
   const [showFilterSection, setShowFilterSection] = useState(() => localStorage.getItem("trips_show_filters") !== "0");
   const [showSummarySection, setShowSummarySection] = useState(() => localStorage.getItem("trips_show_summary") !== "0");
   const [showChartSection, setShowChartSection] = useState(() => localStorage.getItem("trips_show_chart") !== "0");
+
+  const loadDieselLedger = useCallback(async () => {
+    try {
+      const response = await fetch("/api/driver-expenses/diesel-ledger", {
+        headers: sessionHeaders(),
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error("تعذر تحميل سجل ديزل السيارات");
+      const data: unknown = await response.json();
+      if (!Array.isArray(data)) throw new Error("استجابة سجل الديزل غير صالحة");
+      setDieselLedger(data as DieselLedgerEntry[]);
+      setDieselLedgerError(false);
+    } catch {
+      setDieselLedgerError(true);
+    } finally {
+      setDieselLedgerLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadDieselLedger();
+  }, [loadDieselLedger]);
 
   useEffect(() => {
     try {
@@ -668,6 +751,7 @@ function TripsContent({ user }: { user: User | null }) {
         const [trips, latestSummary] = await Promise.all([tripsResponse, summaryResponse.json()]);
         setRows(trips);
         setSummary(latestSummary);
+        void loadDieselLedger();
       } catch {
         // The existing refresh button remains available if a background request fails.
       } finally {
@@ -680,7 +764,7 @@ function TripsContent({ user }: { user: User | null }) {
       window.clearInterval(interval);
       document.removeEventListener("visibilitychange", refreshLog);
     };
-  }, []);
+  }, [loadDieselLedger]);
   useEffect(() => { loadBulkUndo(); }, []);
 
   // ── Fetch deductions whenever date/vehicle filter changes ─────────────────
@@ -839,6 +923,28 @@ function TripsContent({ user }: { user: User | null }) {
   }), [accountedRows, deductions]);
 
   const displaySummary = hasFilter ? dynamicSummary : summary;
+  const totalDieselLiters = useMemo(() => {
+    const vehiclesByPlate = new Map(
+      fleetVehicles.map(vehicle => [vehicle.plate_number.trim(), vehicle]),
+    );
+    return dieselLedger
+      .filter(expense => {
+        const date = (expense.expense_date || "").slice(0, 10);
+        const plate = (expense.vehicle_plate || "").trim();
+        const vehicle = vehiclesByPlate.get(plate);
+        const { from, to, plates, vehicleType, branch } = vehicleAnalysisDieselFilters;
+        if (from && date && date < from) return false;
+        if (to && date && date > to) return false;
+        if (plates.length && !plates.includes(plate)) return false;
+        if (vehicleType && vehicle?.vehicle_type !== vehicleType) return false;
+        if (branch && (vehicle?.branch || "النقليات") !== branch) return false;
+        return true;
+      })
+      .reduce((total, expense) => {
+        const liters = Number(expense.liters);
+        return total + (Number.isFinite(liters) ? liters : 0);
+      }, 0);
+  }, [dieselLedger, fleetVehicles, vehicleAnalysisDieselFilters]);
 
   const clearFilters = () => {
     setSearch(""); setFilterDateFrom(""); setFilterDateTo("");
@@ -1553,7 +1659,7 @@ function TripsContent({ user }: { user: User | null }) {
               </span>
             </div>
           )}
-          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-3">
             <div className={`rounded-2xl p-4 shadow-sm transition-colors ${hasFilter ? "bg-[#0d2e50] ring-2 ring-amber-300" : "bg-[#103c68]"} text-white`}>
               <div className="text-xl font-black">{dynamicSummary.total_records.toLocaleString("ar-SA")}</div>
               <div className="text-xs opacity-70 mt-0.5">إجمالي رحلات السيارات</div>
@@ -1581,6 +1687,25 @@ function TripsContent({ user }: { user: User | null }) {
               {totalDed > 0 && (
                 <div className="text-[10px] opacity-50 mt-1">خصم: {totalDed.toLocaleString("ar-SA")} ر.س</div>
               )}
+            </div>
+            <div
+              data-testid="summary-total-diesel-liters"
+              className="rounded-2xl p-4 shadow-sm bg-orange-600 text-white"
+              title="من سجل ديزل السيارات، وفق فلاتر تحليل السيارات"
+            >
+              <div className="flex items-center gap-1.5 text-xl font-black">
+                <Fuel size={18} aria-hidden="true" />
+                {dieselLedgerLoading
+                  ? "…"
+                  : dieselLedgerError
+                    ? "غير متاح"
+                    : totalDieselLiters.toLocaleString("ar-SA", { maximumFractionDigits: 2 })}
+                {!dieselLedgerLoading && !dieselLedgerError && (
+                  <span className="text-xs font-normal">لتر</span>
+                )}
+              </div>
+              <div className="text-xs opacity-80 mt-1">إجمالي الديزل المستهلك</div>
+              <div className="text-[10px] opacity-70 mt-1">حسب فلتر تحليل السيارات</div>
             </div>
           </div>
 
