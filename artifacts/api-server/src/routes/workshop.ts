@@ -1844,6 +1844,20 @@ router.get("/maintenance-logs/oil-changes", async (req, res) => {
   res.json(oilLogs);
 });
 
+function normalizedMaintenanceCardNumber(value: unknown): string {
+  return String(value ?? "").trim();
+}
+
+async function findDuplicateMaintenanceCardNumber(cardNumber: string, exceptId?: number) {
+  if (!cardNumber) return undefined;
+  return queryOne<{ id: number }>(
+    `SELECT id FROM maintenance_logs
+     WHERE TRIM(COALESCE(card_number,''))=?${exceptId == null ? "" : " AND id<>?"}
+     LIMIT 1`,
+    ...(exceptId == null ? [cardNumber] : [cardNumber, exceptId]),
+  );
+}
+
 router.post("/maintenance-logs", async (req, res) => {
   const { card_number, maintenance_date, entry_time, exit_time, exit_date,
     vehicle_plate, driver_name, branch, maintenance_type, description, amount,
@@ -1851,6 +1865,11 @@ router.post("/maintenance-logs", async (req, res) => {
     inv_items, inventory_item_id, inventory_qty_used, performed_by,
     technicians, trailer_number, trailer_type, is_external, amount_breakdown,
     vehicle_choice } = req.body as Record<string, unknown>;
+  const normalizedCardNumber = normalizedMaintenanceCardNumber(card_number);
+  if (await findDuplicateMaintenanceCardNumber(normalizedCardNumber)) {
+    res.status(409).json({ error: `رقم الكرت ${normalizedCardNumber} مستخدم بالفعل في سجل الأعطال` });
+    return;
+  }
   const vehiclePlate = typeof vehicle_plate === "string" ? vehicle_plate.trim() : "";
   const fleetVehicle = vehiclePlate
     ? await queryOne<{ branch?: string | null }>("SELECT branch FROM fleet_vehicles WHERE TRIM(plate_number)=?", vehiclePlate)
@@ -1897,7 +1916,7 @@ router.post("/maintenance-logs", async (req, res) => {
        trailer_number, trailer_type, is_external, amount_breakdown, vehicle_choice)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
   `,
-    card_number ? String(card_number).trim() : null,
+    normalizedCardNumber || null,
     maintenance_date || null, entry_time || null,
     exit_time || null, exit_date || null, vehicle_plate || null,
     driver_name || null, branchName, maintenance_type || null,
@@ -1913,7 +1932,7 @@ router.post("/maintenance-logs", async (req, res) => {
   );
 
   // ── Auto-deduct from workshop inventory (supports multiple items) ──────────
-  const refNo = card_number ? String(card_number).trim() : String(r.lastInsertRowid);
+  const refNo = normalizedCardNumber || String(r.lastInsertRowid);
   const itemsToDeduct: Array<{ id: number; qty: number }> = Array.isArray(inv_items)
     ? (inv_items as Array<{ id: unknown; qty: unknown }>).map(x => ({ id: Number(x.id), qty: Number(x.qty) || 1 }))
     : (inventory_item_id && Number(inventory_qty_used) > 0
@@ -1978,6 +1997,27 @@ router.put("/maintenance-logs/:id", async (req, res) => {
   , id);
   if (!oldLog) return void res.status(404).json({ error: "سجل العطل غير موجود" });
 
+  const oldCardNumber = normalizedMaintenanceCardNumber(oldLog.card_number);
+  const newCardNumber = normalizedMaintenanceCardNumber(card_number);
+  const cardNumberChanged = oldCardNumber !== newCardNumber;
+  if (cardNumberChanged && await findDuplicateMaintenanceCardNumber(newCardNumber, Number(id))) {
+    res.status(409).json({ error: `رقم الكرت ${newCardNumber} مستخدم بالفعل في سجل الأعطال` });
+    return;
+  }
+  if (oldCardNumber) {
+    const otherCardsWithOldNumber = await queryAll<{ id: number }>(
+      `SELECT id FROM maintenance_logs
+       WHERE TRIM(COALESCE(card_number,''))=? AND id<>? LIMIT 1`,
+      oldCardNumber, Number(id),
+    );
+    if (otherCardsWithOldNumber.length > 0 && (cardNumberChanged || Array.isArray(inv_items))) {
+      res.status(409).json({
+        error: "رقم هذا الكرت مكرر في سجلات قديمة؛ لا يمكن تعديل صرفه أو رقمه قبل معالجة التكرار",
+      });
+      return;
+    }
+  }
+
   const vehiclePlate = typeof vehicle_plate === "string" ? vehicle_plate.trim() : "";
   const vehicleChanged = vehiclePlate !== String(oldLog.vehicle_plate || "").trim();
   const fleetVehicle = vehiclePlate
@@ -2037,7 +2077,7 @@ router.put("/maintenance-logs/:id", async (req, res) => {
       WHERE id=?
     `,
     params: [
-      card_number ? String(card_number).trim() : null,
+      newCardNumber || null,
       maintenance_date || null, entry_time || null,
       exit_time || null, exit_date || null, newVehicle,
       driver_name || null, branchName, maintenance_type || null,
@@ -2088,8 +2128,8 @@ router.put("/maintenance-logs/:id", async (req, res) => {
 
   // ── Update inventory parts if inv_items provided ───────────────────────────
   if (Array.isArray(inv_items)) {
-    const newRefNo  = card_number ? String(card_number).trim() : String(id);
-    const oldRefNo  = oldLog?.card_number ? String(oldLog.card_number).trim() : String(id);
+    const newRefNo  = newCardNumber || String(id);
+    const oldRefNo  = oldCardNumber || String(id);
 
     // Restore old items back to inventory
     const oldTxns = await queryAll<{ item_id: number; quantity: number }>(
@@ -2180,14 +2220,118 @@ router.patch("/maintenance-logs/:id/printed", async (req, res) => {
   res.json({ ok: true, is_printed: next });
 });
 
-router.delete("/maintenance-logs/clear", async (_req, res) => {
-  await execute("DELETE FROM maintenance_logs");
-  res.json({ ok: true, message: "تم مسح جميع سجلات الأعطال" });
+router.delete("/maintenance-logs/clear", async (req, res) => {
+  const deletedBy = String(req.body?.deleted_by || "") || null;
+  const result = await executeBatch([
+    {
+      sql: `UPDATE workshop_inventory
+            SET quantity=quantity+(
+              SELECT COALESCE(SUM(t.quantity),0)
+              FROM workshop_inventory_transactions t
+              WHERE t.item_id=workshop_inventory.id
+                AND t.reason='سجل_عطل' AND t.type='out'
+                AND EXISTS (
+                  SELECT 1 FROM maintenance_logs ml
+                  WHERE t.reference_no=CASE
+                    WHEN TRIM(COALESCE(ml.card_number,''))<>'' THEN TRIM(ml.card_number)
+                    ELSE CAST(ml.id AS TEXT)
+                  END
+                )
+            ),
+            last_updated=datetime('now'),
+            updated_by=COALESCE(?,updated_by)
+            WHERE EXISTS (
+              SELECT 1 FROM workshop_inventory_transactions t
+              WHERE t.item_id=workshop_inventory.id
+                AND t.reason='سجل_عطل' AND t.type='out'
+                AND EXISTS (
+                  SELECT 1 FROM maintenance_logs ml
+                  WHERE t.reference_no=CASE
+                    WHEN TRIM(COALESCE(ml.card_number,''))<>'' THEN TRIM(ml.card_number)
+                    ELSE CAST(ml.id AS TEXT)
+                  END
+                )
+            )`,
+      params: [deletedBy],
+    },
+    {
+      sql: `DELETE FROM workshop_inventory_transactions
+            WHERE reason='سجل_عطل' AND type='out'
+              AND EXISTS (
+                SELECT 1 FROM maintenance_logs ml
+                WHERE workshop_inventory_transactions.reference_no=CASE
+                  WHEN TRIM(COALESCE(ml.card_number,''))<>'' THEN TRIM(ml.card_number)
+                  ELSE CAST(ml.id AS TEXT)
+                END
+              )`,
+    },
+    { sql: "DELETE FROM maintenance_logs" },
+  ]);
+  res.json({
+    ok: true,
+    deleted: result[2]?.changes ?? 0,
+    restoredTransactions: result[1]?.changes ?? 0,
+    message: "تم مسح جميع سجلات الأعطال وإرجاع الأصناف المصروفة",
+  });
 });
 
 router.delete("/maintenance-logs/:id", async (req, res) => {
-  await execute("DELETE FROM maintenance_logs WHERE id=?", req.params.id);
-  res.json({ ok: true });
+  const id = Number(req.params.id);
+  if (!Number.isSafeInteger(id) || id < 1) {
+    res.status(400).json({ error: "رقم سجل العطل غير صحيح" });
+    return;
+  }
+  const log = await queryOne<{ id: number; card_number: string | null }>(
+    "SELECT id, card_number FROM maintenance_logs WHERE id=?", id,
+  );
+  if (!log) {
+    res.status(404).json({ error: "سجل العطل غير موجود" });
+    return;
+  }
+
+  const cardNumber = normalizedMaintenanceCardNumber(log.card_number);
+  if (cardNumber) {
+    const duplicate = await queryOne<{ id: number }>(
+      `SELECT id FROM maintenance_logs
+       WHERE TRIM(COALESCE(card_number,''))=? AND id<>?
+       LIMIT 1`,
+      cardNumber, id,
+    );
+    if (duplicate) {
+      res.status(409).json({
+        error: "رقم الكرت مستخدم في أكثر من سجل قديم؛ لا يمكن تحديد حركات الصرف بأمان",
+      });
+      return;
+    }
+  }
+
+  const referenceNo = cardNumber || String(id);
+  const deletedBy = String(req.body?.deleted_by || "") || null;
+  const result = await executeBatch([
+    {
+      sql: `UPDATE workshop_inventory
+            SET quantity=quantity+(
+              SELECT COALESCE(SUM(quantity),0)
+              FROM workshop_inventory_transactions
+              WHERE item_id=workshop_inventory.id
+                AND reason='سجل_عطل' AND type='out' AND reference_no=?
+            ),
+            last_updated=datetime('now'),
+            updated_by=COALESCE(?,updated_by)
+            WHERE id IN (
+              SELECT item_id FROM workshop_inventory_transactions
+              WHERE reason='سجل_عطل' AND type='out' AND reference_no=?
+            )`,
+      params: [referenceNo, deletedBy, referenceNo],
+    },
+    {
+      sql: `DELETE FROM workshop_inventory_transactions
+            WHERE reason='سجل_عطل' AND type='out' AND reference_no=?`,
+      params: [referenceNo],
+    },
+    { sql: "DELETE FROM maintenance_logs WHERE id=?", params: [id] },
+  ]);
+  res.json({ ok: true, restoredTransactions: result[1]?.changes ?? 0 });
 });
 
 // ══════════════════════════════════════════════════════════════════

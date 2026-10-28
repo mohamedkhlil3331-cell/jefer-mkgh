@@ -28,6 +28,13 @@ Four conditions in OR to match out-transactions to a vehicle plate:
 - `reference_no = card_number` (the maintenance log card number string)
 - `vehicle_no = vehicle_plate` (set correctly in POST /maintenance-logs handler)
 
+## Card number and deletion behavior
+Keep a card number unique among currently existing maintenance logs; after the card is deleted, its number may be reused. Deleting a card restores and removes its linked outbound transactions. If an existing duplicate makes ownership ambiguous, block single-card deletion or stock-affecting edits rather than changing another card's stock.
+
+**Why:** The user wants a card's stock effects to exist only while the corresponding breakdown record exists, and wants to reuse a number only after its record is deleted.
+
+**How to apply:** Enforce uniqueness on new cards and card-number changes. On card deletion, reverse the linked stock deductions and remove only their outbound transaction rows; preserve unrelated inventory items and movements. When duplicate legacy references prevent safe attribution, stop rather than guessing.
+
 ## Workshop job inventory dispatch
 When `invoice_target = 'inventory'` on a workshop job, `logInventoryTransaction` is called with:
 - `reason = 'صرف_أمر_عمل'`

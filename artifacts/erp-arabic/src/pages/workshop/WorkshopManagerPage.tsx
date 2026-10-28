@@ -977,9 +977,21 @@ export default function WorkshopManagerPage() {
   };
 
   // ── Maintenance Log: add / edit ────────────────────────────────────────────
+  const hasDuplicateMaintenanceCardNumber = (value: string, exceptId?: number) => {
+    const normalized = value.trim();
+    return normalized !== "" && maintenanceLogs.some(
+      log => log.card_number?.trim() === normalized && log.id !== exceptId,
+    );
+  };
+
   const saveMaintenanceLog = async () => {
     setMlError("");
     const isEdit = editingLog !== null;
+    const cardNumber = mlForm.card_number.trim();
+    if (hasDuplicateMaintenanceCardNumber(cardNumber, editingLog?.id)) {
+      setMlError(`رقم الكرت ${cardNumber} مستخدم بالفعل في سجل الأعطال`);
+      return;
+    }
     const vehicleChanged = isEdit &&
       mlForm.vehicle_plate.trim() !== String(editingLog?.vehicle_plate || "").trim();
     if ((!isEdit || vehicleChanged) && !mlForm.branch.trim()) {
@@ -1041,9 +1053,22 @@ export default function WorkshopManagerPage() {
 
   // ── Maintenance Log: delete single ────────────────────────────────────────
   const deleteMaintenanceLog = async (id: number) => {
-    if (!confirm("حذف هذا السجل؟")) return;
-    await fetch(`/api/maintenance-logs/${id}`, { method: "DELETE" });
-    loadMaintenanceLogs({ search: mlSearch, vehicle: mlVehicle, branch: mlBranch, from: mlFrom, to: mlTo });
+    if (!confirm("حذف هذا السجل؟ ستُحذف حركات صرفه وتُعاد كمياتها إلى مخزون الورشة.")) return;
+    try {
+      const response = await fetch(`/api/maintenance-logs/${id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deleted_by: user?.name || null }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "تعذر حذف سجل العطل");
+      await Promise.all([
+        loadMaintenanceLogs({ search: mlSearch, vehicle: mlVehicle, branch: mlBranch, from: mlFrom, to: mlTo }),
+        loadInventory(),
+      ]);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "تعذر حذف سجل العطل");
+    }
   };
 
   // ── Maintenance Log: record exit time ──────────────────────────────────────
@@ -1086,9 +1111,19 @@ export default function WorkshopManagerPage() {
 
   // ── Maintenance Log: clear all ─────────────────────────────────────────────
   const clearAllMaintenanceLogs = async () => {
-    if (!confirm(`حذف جميع سجلات الأعطال (${maintenanceLogs.length} سجل)؟\nهذا الإجراء لا يمكن التراجع عنه.`)) return;
-    await fetch("/api/maintenance-logs/clear", { method: "DELETE" });
-    loadMaintenanceLogs();
+    if (!confirm("حذف جميع سجلات الأعطال؟ ستُحذف حركات صرفها وتُعاد كمياتها إلى مخزون الورشة.")) return;
+    try {
+      const response = await fetch("/api/maintenance-logs/clear", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deleted_by: user?.name || null }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "تعذر حذف سجلات الأعطال");
+      await Promise.all([loadMaintenanceLogs(), loadInventory()]);
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "تعذر حذف سجلات الأعطال");
+    }
   };
 
   // ── KPIs ────────────────────────────────────────────────────────────────────
@@ -2560,21 +2595,19 @@ ${buildCardHTML(r, now)}
                   <label className="text-sm font-bold text-gray-700 block mb-1">رقم كارت الصيانة</label>
                   {(() => {
                     const trimmed = mlForm.card_number.trim();
-                    const isDup = trimmed !== "" && maintenanceLogs.some(
-                      l => l.card_number?.trim() === trimmed && l.id !== editingLog?.id
-                    );
+                    const isDup = hasDuplicateMaintenanceCardNumber(trimmed, editingLog?.id);
                     return (
                       <>
                         <input
                           value={mlForm.card_number}
                           onChange={e => setMlForm(f => ({ ...f, card_number: e.target.value }))}
                           placeholder="1001"
-                          className={`w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ${isDup ? "border-amber-400 focus:ring-amber-300 bg-amber-50" : "border-gray-200 focus:ring-[#103c68]/20"}`}
+                          className={`w-full border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 ${isDup ? "border-red-400 focus:ring-red-300 bg-red-50" : "border-gray-200 focus:ring-[#103c68]/20"}`}
                         />
                         {isDup && (
-                          <div className="flex items-center gap-1.5 mt-1.5 text-amber-700 bg-amber-50 border border-amber-300 rounded-lg px-3 py-1.5 text-xs font-semibold">
+                          <div role="alert" className="flex items-center gap-1.5 mt-1.5 text-red-700 bg-red-50 border border-red-300 rounded-lg px-3 py-1.5 text-xs font-semibold">
                             <AlertTriangle size={13} className="flex-shrink-0" />
-                            تنبيه: رقم الكارت {trimmed} مستخدم في سجل آخر
+                            لا يمكن استخدام رقم الكرت {trimmed} لأنه مستخدم في سجل آخر
                           </div>
                         )}
                         {!editingLog && !isDup && (() => {
@@ -3437,7 +3470,8 @@ ${buildCardHTML(r, now)}
               )}
               <div className="flex gap-2 pt-1">
                 <button onClick={() => { if (!editingLog) localStorage.removeItem("workshop_card_draft"); setShowMlForm(false); setEditingLog(null); setMlError(""); setSelectedTechs([]); setTechInput(""); }} className="flex-1 py-3 border border-gray-200 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50">إلغاء</button>
-                <button onClick={saveMaintenanceLog} disabled={mlSubmitting}
+                <button onClick={saveMaintenanceLog}
+                  disabled={mlSubmitting || hasDuplicateMaintenanceCardNumber(mlForm.card_number, editingLog?.id)}
                   className={`flex-1 py-3 text-white rounded-xl font-black text-sm disabled:opacity-50 flex items-center justify-center gap-2 ${editingLog ? "bg-blue-600 hover:bg-blue-700" : "bg-[#103c68] hover:bg-[#0d3158]"}`}>
                   {mlSubmitting ? <><RefreshCw size={13} className="animate-spin" />جاري...</> : editingLog ? <><Pencil size={14} />حفظ التعديل</> : <><Plus size={14} />حفظ السجل</>}
                 </button>
