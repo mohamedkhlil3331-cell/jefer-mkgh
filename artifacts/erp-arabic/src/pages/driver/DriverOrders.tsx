@@ -75,6 +75,7 @@ interface DriverTrip {
   trailer_loads: number; priority: string;
   warehouse_name?: string; destination_division?: string;
   permit_image_url?: string | null; invoice_image?: string | null;
+  driver_expense?: number | null; driver_invoice_archived_count?: number;
   cargo_type?: string | null; reference_no?: string | null;
   rep_name?: string | null; rep_phone?: string | null;
   customer_name?: string | null; customer_type?: string | null;
@@ -381,7 +382,7 @@ export default function DriverOrders({ hideRequestUi = false, onRefresh }: { hid
 
   const loadMyTrips = () => {
     if (!user) return;
-    fetch(`/api/supply-request-trips?driver_phone=${encodeURIComponent(user.phone)}`)
+    fetch(`/api/supply-request-trips?driver_phone=${encodeURIComponent(user.phone)}&active_only=1&driver_invoice_limit=2`)
       .then(r => r.ok ? r.json() : [])
       .then(d => setMyTrips(Array.isArray(d) ? d.filter((t: DriverTrip) =>
         ["assigned","in_transit","loaded","delivered_to_warehouse","pending_warehouse_approval"].includes(t.status)
@@ -1933,6 +1934,20 @@ export default function DriverOrders({ hideRequestUi = false, onRefresh }: { hid
                           موقع التنزيل: {sr.unloading_location_name}
                         </a>
                       )}
+                    </div>
+                  )}
+                  {(sr.driver_invoice_archived_count || 0) > 0 && (
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="mb-2 text-xs font-bold text-slate-700">ملخص الفاتورة القديمة</div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-600">
+                        <span>📍 التحميل: <strong>{sr.loading_location_name || sr.warehouse_name || "—"}</strong></span>
+                        <span>📍 التنزيل: <strong>{sr.unloading_location_name || sr.destination_division || "—"}</strong></span>
+                        <span>💰 مصروف السائق: <strong>
+                          {sr.driver_expense != null
+                            ? `${Number(sr.driver_expense).toLocaleString("ar-SA")} ر.س`
+                            : "—"}
+                        </strong></span>
+                      </div>
                     </div>
                   )}
                   {sr.attachments?.some(doc => doc.kind === "driver_invoice")

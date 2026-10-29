@@ -811,6 +811,8 @@ function listTripAttachments(row: Record<string, unknown>): RoutingTripAttachmen
 
 router.get("/supply-request-trips", async (req, res) => {
   const { driver_phone, supply_request_id, active_only, warehouse_id } = req.query;
+  const limitDriverInvoicePhotos = req.query.driver_invoice_limit === "2" && Boolean(driver_phone);
+  let remainingDriverInvoicePhotos = limitDriverInvoicePhotos ? 2 : 0;
   let sql = `
     SELECT t.id, t.supply_request_id, t.vehicle_plate, t.driver_name, t.driver_phone,
            t.status, t.driver_loading_image, t.permit_number, t.loaded_at, t.delivered_at,
@@ -818,6 +820,7 @@ router.get("/supply-request-trips", async (req, res) => {
            t.cargo_items_json, t.attachments_json,
            sr.product_name, sr.requested_qty, sr.unit, sr.trailer_loads,
            sr.warehouse_name, sr.destination_division,
+            sr.driver_expense,
             COALESCE(t.invoice_image_url, sr.invoice_image) AS invoice_image,
             sr.cargo_type, COALESCE(t.reference_no, sr.reference_no) AS reference_no,
             sr.priority, sr.warehouse_id,
@@ -846,6 +849,9 @@ router.get("/supply-request-trips", async (req, res) => {
       ? " AND t.status!='rejected'"
       : " AND t.status NOT IN ('completed','rejected')";
   }
+  if (limitDriverInvoicePhotos) {
+    sql += " AND t.status IN ('assigned','in_transit','loaded','delivered_to_warehouse','pending_warehouse_approval')";
+  }
   if (req.query.include_archived !== "1") { sql += " AND (t.archived_at IS NULL)"; }
   sql += " ORDER BY t.created_at DESC";
   const rows = await queryAll<Record<string, unknown>>(sql, ...params);
@@ -862,7 +868,30 @@ router.get("/supply-request-trips", async (req, res) => {
       });
     }
     const { cargo_items_json: _cargoItemsJson, attachments_json: _attachmentsJson, ...publicRow } = row;
-    return { ...publicRow, cargo_items: cargoItems, attachments: listTripAttachments(row) };
+    let attachments = listTripAttachments(row);
+    let driverInvoiceArchivedCount = 0;
+    let driverLoadingImage = row.driver_loading_image;
+    if (limitDriverInvoicePhotos) {
+      const driverInvoicePhotos = attachments
+        .filter(item => item.kind === "driver_invoice")
+        .sort((a, b) => (Number(b.sort_order) || 0) - (Number(a.sort_order) || 0));
+      const visiblePhotos = driverInvoicePhotos.slice(0, Math.max(0, remainingDriverInvoicePhotos));
+      const visibleUrls = new Set(visiblePhotos.map(item => item.url));
+      remainingDriverInvoicePhotos -= visiblePhotos.length;
+      driverInvoiceArchivedCount = driverInvoicePhotos.length - visiblePhotos.length;
+      attachments = attachments.filter(item => item.kind !== "driver_invoice" || visibleUrls.has(item.url));
+      if (typeof driverLoadingImage === "string" && !visibleUrls.has(driverLoadingImage)) {
+        driverLoadingImage = null;
+      }
+    }
+    return {
+      ...publicRow,
+      ...(limitDriverInvoicePhotos
+        ? { driver_loading_image: driverLoadingImage, driver_invoice_archived_count: driverInvoiceArchivedCount }
+        : {}),
+      cargo_items: cargoItems,
+      attachments,
+    };
   }));
 });
 
