@@ -68,7 +68,7 @@ interface DriverTrip {
   unloading_location_name: string | null; unloading_location_url: string | null;
   vehicle_plate?: string; driver_name?: string; driver_phone?: string;
   status: string;
-  driver_loading_image?: string; permit_number?: string;
+  driver_loading_image?: string | null; permit_number?: string;
   loaded_at?: string; delivered_at?: string;
   /* joined from supply_request */
   product_name: string; requested_qty: number; unit: string;
@@ -93,6 +93,51 @@ function requiredInvoicePhotoCount(trip: DriverTrip): number {
   return attachments.filter(item => item.kind === "fsohat_permit").length
     || attachments.filter(item => item.kind === "supervisor_permit").length
     || ((trip.invoice_image || trip.permit_image_url) ? 1 : 1);
+}
+
+function limitActiveDriverInvoicePhotos(trips: DriverTrip[]): DriverTrip[] {
+  let remaining = 2;
+  const visibleUrls = new Set<string>();
+  const sortedTrips = [...trips].sort((a, b) => {
+    const aCreated = Date.parse(a.created_at) || 0;
+    const bCreated = Date.parse(b.created_at) || 0;
+    return bCreated - aCreated || b.id - a.id;
+  });
+
+  for (const trip of sortedTrips) {
+    const attachments = (trip.attachments || [])
+      .filter(item => item.kind === "driver_invoice" && item.url)
+      .sort((a, b) => (Number(b.sort_order) || 0) - (Number(a.sort_order) || 0));
+    const urls = [...new Set([
+      ...attachments.map(item => item.url),
+      ...(trip.driver_loading_image ? [trip.driver_loading_image] : []),
+    ])];
+    for (const url of urls) {
+      if (visibleUrls.has(url)) continue;
+      if (remaining <= 0) break;
+      visibleUrls.add(url);
+      remaining -= 1;
+    }
+    if (remaining <= 0) break;
+  }
+
+  return trips.map(trip => {
+    const attachments = trip.attachments || [];
+    const invoiceUrls = new Set([
+      ...attachments.filter(item => item.kind === "driver_invoice").map(item => item.url),
+      ...(trip.driver_loading_image ? [trip.driver_loading_image] : []),
+    ]);
+    const keptUrls = new Set([...invoiceUrls].filter(url => visibleUrls.has(url)));
+    const hiddenCount = [...invoiceUrls].filter(url => !visibleUrls.has(url)).length;
+    return {
+      ...trip,
+      attachments: attachments.filter(item => item.kind !== "driver_invoice" || keptUrls.has(item.url)),
+      driver_loading_image: trip.driver_loading_image && keptUrls.has(trip.driver_loading_image)
+        ? trip.driver_loading_image
+        : null,
+      driver_invoice_archived_count: (trip.driver_invoice_archived_count || 0) + hiddenCount,
+    };
+  });
 }
 
 interface TripRecord {
@@ -384,9 +429,9 @@ export default function DriverOrders({ hideRequestUi = false, onRefresh }: { hid
     if (!user) return;
     fetch(`/api/supply-request-trips?driver_phone=${encodeURIComponent(user.phone)}&active_only=1&driver_invoice_limit=2`)
       .then(r => r.ok ? r.json() : [])
-      .then(d => setMyTrips(Array.isArray(d) ? d.filter((t: DriverTrip) =>
+      .then(d => setMyTrips(Array.isArray(d) ? limitActiveDriverInvoicePhotos(d.filter((t: DriverTrip) =>
         ["assigned","in_transit","loaded","delivered_to_warehouse","pending_warehouse_approval"].includes(t.status)
-      ) : []))
+      )) : []))
       .catch(() => {});
   };
 
