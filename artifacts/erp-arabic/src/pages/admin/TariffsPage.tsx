@@ -21,8 +21,12 @@ interface Tariff {
   notes?: string;
   synced_at?: string;
   km_per_route?: number | null;
+  driver_expense_mode?: "fixed" | "per_km" | "tiered";
+  driver_expense_rate_per_km?: number | null;
+  driver_expense_segments_json?: string | null;
   image_url?: string | null;
 }
+type DriverExpenseTier = { km: number; rate: number };
 interface TariffLocation {
   id: number;
   kind: "loading" | "unloading";
@@ -75,7 +79,37 @@ const TRIP_STATE_ICONS: Record<string, string> = {
   "راس فقط":      "🔧", "رجوع خالي":   "↩️", "عطل / صيانة": "🔴", "فحص": "🔍",
 };
 
-const EMPTY: Partial<Tariff> = { loading_place: "", unloading_place: "", driver_expense: 0, rental: 0, vehicle_type: "", supplier: "", customer_name: "", loaded_meters: null, cargo_type: "" };
+const EMPTY: Partial<Tariff> = {
+  loading_place: "", unloading_place: "", driver_expense: 0, rental: 0,
+  vehicle_type: "", supplier: "", customer_name: "", loaded_meters: null, cargo_type: "",
+  km_per_route: null, driver_expense_mode: "fixed", driver_expense_rate_per_km: null,
+  driver_expense_segments_json: "[]",
+};
+
+function parseExpenseTiers(value?: string | null): DriverExpenseTier[] {
+  if (!value) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(item => item && Number(item.km) >= 0 && Number(item.rate) >= 0)
+      .map(item => ({ km: Number(item.km), rate: Number(item.rate) }));
+  } catch { return []; }
+}
+
+function parseExpenseTierColumn(value: unknown): DriverExpenseTier[] {
+  if (typeof value !== "string" || !value.trim()) return [];
+  try {
+    const json: unknown = JSON.parse(value);
+    if (Array.isArray(json)) {
+      return json.filter(item => item && Number(item.km) > 0 && Number(item.rate) >= 0)
+        .map(item => ({ km: Number(item.km), rate: Number(item.rate) }));
+    }
+  } catch { /* exported compact km@rate format below */ }
+  return value.split(";").map(part => {
+    const [km, rate] = part.trim().split("@");
+    return { km: Number(km), rate: Number(rate) };
+  }).filter(tier => Number.isFinite(tier.km) && tier.km > 0 && Number.isFinite(tier.rate) && tier.rate >= 0);
+}
 const FB_EMPTY: Partial<FbRule> = { origin_city: "", dest_city: "", multiplier: 2, notes: "" };
 const TRIP_FIELD_OPTIONS = [
   { key: "material_type", label: "نوع الحمولة" },
@@ -183,7 +217,11 @@ export default function TariffsPage() {
   const [importingTariff, setImportingTariff] = useState(false);
   const [importPreview, setImportPreview] = useState<{
     open: boolean;
-    rows: { loading_place: string; unloading_place: string; driver_expense: number; rental: number }[];
+    rows: {
+      loading_place: string; unloading_place: string; driver_expense: number; rental: number;
+      km_per_route: number | null; driver_expense_mode: "fixed" | "per_km" | "tiered";
+      driver_expense_rate_per_km: number | null; driver_expense_segments_json: string | null;
+    }[];
     replaceExisting: boolean;
     fileName: string;
   }>({ open: false, rows: [], replaceExisting: false, fileName: "" });
@@ -389,6 +427,10 @@ export default function TariffsPage() {
         loading_place: r.loading_place,
         unloading_place: r.unloading_place,
         driver_expense: r.driver_expense,
+        driver_expense_mode: r.driver_expense_mode || "fixed",
+        driver_expense_rate_per_km: r.driver_expense_rate_per_km ?? null,
+        driver_expense_segments_json: r.driver_expense_segments_json ?? null,
+        km_per_route: r.km_per_route ?? null,
         rental: r.rental,
         vehicle_type: r.vehicle_type || null,
         supplier: r.supplier || null,
@@ -434,12 +476,27 @@ export default function TariffsPage() {
       const raw  = XLSX.utils.sheet_to_json(ws) as Record<string, unknown>[];
       if (!raw.length) { alert("الملف فارغ أو لا يحتوي على صفوف"); return; }
       const parsed = raw
-        .map(row => ({
+        .map(row => {
+          const mode = String(row["نمط مصروف السائق"] || row["driver_expense_mode"] || "fixed");
+          const tiers = parseExpenseTierColumn(
+            row["شرائح مصروف السائق (كم@ريال/كم)"] ||
+            row["شرائح مصروف السائق"] ||
+            row["driver_expense_segments"] ||
+            row["driver_expense_segments_json"]
+          );
+          return ({
           loading_place:  String(row["مكان التحميل"]  || row["loading_place"]  || "").trim(),
           unloading_place:String(row["مكان التنزيل"] || row["unloading_place"] || "").trim(),
           driver_expense: parseFloat(String(row["مصروف السائق"] || row["السعر"] || row["driver_expense"] || "0")) || 0,
           rental:         parseFloat(String(row["الإيجار"] || row["الايجار"]   || row["rental"]          || "0")) || 0,
-        }))
+          km_per_route: parseFloat(String(row["كم لكل مسار"] || row["km_per_route"] || "")) || null,
+          driver_expense_mode: (["per_km", "tiered"].includes(mode) ? mode : "fixed") as "fixed" | "per_km" | "tiered",
+          driver_expense_rate_per_km: (() => {
+            const value = String(row["سعر السائق لكل كم"] ?? row["driver_expense_rate_per_km"] ?? "").trim();
+            return value && Number.isFinite(Number(value)) ? Number(value) : null;
+          })(),
+          driver_expense_segments_json: tiers.length ? JSON.stringify(tiers) : null,
+        });})
         .filter(r => r.loading_place && r.unloading_place);
       if (!parsed.length) { alert("لم يُعثر على صفوف صالحة — تأكد من وجود أعمدة: مكان التحميل، مكان التنزيل"); return; }
       setImportPreview({ open: true, rows: parsed, replaceExisting: false, fileName: file.name });
@@ -457,6 +514,10 @@ export default function TariffsPage() {
           "مكان التحميل":  r.loading_place,
           "مكان التنزيل": r.unloading_place,
           "مصروف السائق": r.driver_expense,
+          "كم لكل مسار": r.km_per_route ?? "",
+          "نمط مصروف السائق": r.driver_expense_mode,
+          "سعر السائق لكل كم": r.driver_expense_rate_per_km ?? "",
+          "شرائح مصروف السائق": r.driver_expense_segments_json ?? "",
           "الإيجار":       r.rental,
         })), replace_existing: importPreview.replaceExisting }),
       });
@@ -475,6 +536,10 @@ export default function TariffsPage() {
       "مكان التنزيل": r.unloading_place,
       "نوع السيارة":   r.vehicle_type || "",
       "مصروف السائق": r.driver_expense,
+      "كم لكل مسار": r.km_per_route ?? "",
+      "نمط مصروف السائق": r.driver_expense_mode || "fixed",
+      "سعر السائق لكل كم": r.driver_expense_rate_per_km ?? "",
+      "شرائح مصروف السائق (كم@ريال/كم)": parseExpenseTiers(r.driver_expense_segments_json).map(t => `${t.km}@${t.rate}`).join(";"),
       "الإيجار":       r.rental,
       "ملاحظات":       r.notes || "",
     }));
@@ -536,10 +601,23 @@ export default function TariffsPage() {
     setSaving(true);
     const { id, ...body } = modal.row;
     const url = id ? `/api/tariffs/${id}` : "/api/tariffs";
-    await fetch(url, { method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    setSaving(false);
-    setModal({ open: false, row: {} });
-    load();
+    const mode = body.driver_expense_mode || "fixed";
+    const payload = {
+      ...body,
+      driver_expense_mode: mode,
+      driver_expense_rate_per_km: mode === "per_km" ? body.driver_expense_rate_per_km ?? null : null,
+      driver_expense_segments_json: mode === "tiered" ? body.driver_expense_segments_json || "[]" : null,
+    };
+    try {
+      const response = await fetch(url, { method: id ? "PUT" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        alert(error.error || "تعذر حفظ التعريفة");
+        return;
+      }
+      setModal({ open: false, row: {} });
+      load();
+    } finally { setSaving(false); }
   };
 
   const saveInvoiceTemplate = async () => {
@@ -1118,12 +1196,20 @@ export default function TariffsPage() {
                         />
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <input
-                          type="number" min="0" step="1"
-                          value={Number(get("driver_expense"))}
-                          onChange={e => setInline(r.id, "driver_expense", parseFloat(e.target.value) || 0)}
-                          className={`w-24 px-2 py-1 text-sm text-center border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 ${isDirty ? "border-orange-300 bg-orange-50" : "border-gray-200"}`}
-                        />
+                        {r.driver_expense_mode === "per_km" ? (
+                          <span className="text-xs text-orange-700 font-medium">
+                            {r.driver_expense_rate_per_km ?? "—"} ريال/كم
+                          </span>
+                        ) : r.driver_expense_mode === "tiered" ? (
+                          <span className="text-xs text-orange-700 font-medium">شرائح</span>
+                        ) : (
+                          <input
+                            type="number" min="0" step="1"
+                            value={Number(get("driver_expense"))}
+                            onChange={e => setInline(r.id, "driver_expense", parseFloat(e.target.value) || 0)}
+                            className={`w-24 px-2 py-1 text-sm text-center border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 ${isDirty ? "border-orange-300 bg-orange-50" : "border-gray-200"}`}
+                          />
+                        )}
                       </td>
                       <td className="px-4 py-3 text-center">
                         <input
@@ -1970,6 +2056,67 @@ export default function TariffsPage() {
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-semibold text-cyan-700 block mb-1">كم لكل مسار</label>
+                  <input type="number" min="0" step="1" value={modal.row.km_per_route ?? ""}
+                    onChange={e => setModal(m => ({ ...m, row: { ...m.row, km_per_route: e.target.value === "" ? null : Number(e.target.value) } }))}
+                    placeholder="اتركه فارغًا للتعريفة الثابتة"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-cyan-400" />
+                </div>
+                <div>
+                  <label className="text-xs font-semibold text-orange-700 block mb-1">طريقة حساب مصروف السائق</label>
+                  <select value={modal.row.driver_expense_mode || "fixed"}
+                    onChange={e => setModal(m => ({ ...m, row: { ...m.row, driver_expense_mode: e.target.value as Tariff["driver_expense_mode"] } }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm">
+                    <option value="fixed">مبلغ ثابت</option>
+                    <option value="per_km">سعر واحد لكل كم</option>
+                    <option value="tiered">شرائح كيلومترات</option>
+                  </select>
+                </div>
+              </div>
+              {modal.row.driver_expense_mode === "per_km" && (
+                <div>
+                  <label className="text-xs font-semibold text-orange-700 block mb-1">مصروف السائق لكل كم (ريال)</label>
+                  <input type="number" min="0" step="0.01" value={modal.row.driver_expense_rate_per_km ?? ""}
+                    onChange={e => setModal(m => ({ ...m, row: { ...m.row, driver_expense_rate_per_km: e.target.value === "" ? null : Number(e.target.value) } }))}
+                    placeholder="مثال: 0.77"
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400" />
+                </div>
+              )}
+              {modal.row.driver_expense_mode === "tiered" && (() => {
+                const tiers = parseExpenseTiers(modal.row.driver_expense_segments_json);
+                const updateTiers = (next: DriverExpenseTier[]) => setModal(m => ({
+                  ...m, row: { ...m.row, driver_expense_segments_json: JSON.stringify(next) },
+                }));
+                const coveredKm = tiers.reduce((sum, tier) => sum + tier.km, 0);
+                return (
+                  <div className="rounded-xl border border-orange-100 bg-orange-50/50 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-orange-800">أجزاء المسافة وسعر كل كم</span>
+                      <button type="button" onClick={() => updateTiers([...tiers, { km: 0, rate: 0 }])}
+                        className="text-xs text-blue-700 font-semibold">+ إضافة شريحة</button>
+                    </div>
+                    {tiers.map((tier, index) => (
+                      <div key={index} className="grid grid-cols-[1fr_1fr_auto] gap-2 items-center">
+                        <input type="number" min="0" step="1" value={tier.km || ""}
+                          onChange={e => updateTiers(tiers.map((item, i) => i === index ? { ...item, km: Number(e.target.value) || 0 } : item))}
+                          placeholder="كم" aria-label={`كم الشريحة ${index + 1}`}
+                          className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                        <input type="number" min="0" step="0.01" value={tier.rate}
+                          onChange={e => updateTiers(tiers.map((item, i) => i === index ? { ...item, rate: Number(e.target.value) || 0 } : item))}
+                          placeholder="ريال/كم" aria-label={`سعر الشريحة ${index + 1}`}
+                          className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm" />
+                        <button type="button" onClick={() => updateTiers(tiers.filter((_, i) => i !== index))}
+                          aria-label={`حذف الشريحة ${index + 1}`} className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg"><X size={14} /></button>
+                      </div>
+                    ))}
+                    <p className="text-[11px] text-gray-600">
+                      مجموع الشرائح: {coveredKm} كم من {modal.row.km_per_route || 0} كم. يجب أن يساوي المجموع مسافة المسار ليُحسب تلقائيًا؛ وإلا يبقى المصروف الثابت.
+                    </p>
+                  </div>
+                );
+              })()}
               {/* Row 5: vehicle_type */}
               <div>
                 <label className="text-xs font-semibold text-indigo-600 block mb-1 flex items-center gap-1">

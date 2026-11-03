@@ -52,3 +52,4 @@
 - [Cloudflare Worker cutover readiness](cloudflare-worker-cutover-readiness.md) — validate the final D1 manifest and Worker handler contract; do not split live domains across SQLite and D1.
 - [Cloudflare Worker response compression](worker-response-compression.md) — skip Express compression in Worker mode; production JSON responses were Brotli-compressed twice and unreadable after one browser decode.
 - [Driver invoice photo visibility](driver-invoice-visibility.md) — show only the two newest driver invoice photos in the active driver list; do not change trip/reply histories or stored files.
+- [Kilometer-based driver expense](driver-expense-kilometer-tariffs.md) — missing km data keeps a tariff fixed; only configured km pricing applies to new trips, rounded to whole riyals.

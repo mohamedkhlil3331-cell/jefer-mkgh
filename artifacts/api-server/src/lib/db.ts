@@ -1450,6 +1450,9 @@ try { db.exec("ALTER TABLE tariffs ADD COLUMN loaded_meters REAL"); } catch {}
 try { db.exec("ALTER TABLE tariffs ADD COLUMN cargo_type TEXT"); } catch {}
 try { db.exec("ALTER TABLE tariffs ADD COLUMN km_per_route REAL"); } catch {}
 try { db.exec("ALTER TABLE tariffs ADD COLUMN image_url TEXT"); } catch {}
+try { db.exec("ALTER TABLE tariffs ADD COLUMN driver_expense_mode TEXT NOT NULL DEFAULT 'fixed'"); } catch {}
+try { db.exec("ALTER TABLE tariffs ADD COLUMN driver_expense_rate_per_km REAL"); } catch {}
+try { db.exec("ALTER TABLE tariffs ADD COLUMN driver_expense_segments_json TEXT"); } catch {}
 try { db.exec("ALTER TABLE workflow_orders ADD COLUMN tariff_id INTEGER"); } catch {}
 try { db.exec("ALTER TABLE workflow_orders ADD COLUMN loading_place TEXT"); } catch {}
 try { db.exec("ALTER TABLE workflow_orders ADD COLUMN rental_amount REAL DEFAULT 0"); } catch {}

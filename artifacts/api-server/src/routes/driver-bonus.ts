@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
+import { calculateTariffDriverExpense } from "../lib/tariff-driver-expense.js";
 
 const router = Router();
 
@@ -149,19 +150,29 @@ router.get("/driver-bonus-summary", async (req, res) => {
  */
 export async function lookupRouteBonus(from_region: string, to_region: string, vehicle_type: string): Promise<number> {
   if (!from_region || !to_region) return 0;
-  const exact = await queryOne<{ driver_expense: number }>(`
-    SELECT driver_expense FROM tariffs
+  const exact = await queryOne<{
+    driver_expense: number; km_per_route: number | null; driver_expense_mode: string;
+    driver_expense_rate_per_km: number | null; driver_expense_segments_json: string | null;
+  }>(`
+    SELECT driver_expense, km_per_route, driver_expense_mode,
+           driver_expense_rate_per_km, driver_expense_segments_json
+    FROM tariffs
     WHERE loading_place=? AND unloading_place=? AND vehicle_type=?
     LIMIT 1
   `, from_region, to_region, vehicle_type);
-  if (exact) return exact.driver_expense || 0;
+  if (exact) return calculateTariffDriverExpense(exact);
 
-  const fallback = await queryOne<{ driver_expense: number }>(`
-    SELECT driver_expense FROM tariffs
+  const fallback = await queryOne<{
+    driver_expense: number; km_per_route: number | null; driver_expense_mode: string;
+    driver_expense_rate_per_km: number | null; driver_expense_segments_json: string | null;
+  }>(`
+    SELECT driver_expense, km_per_route, driver_expense_mode,
+           driver_expense_rate_per_km, driver_expense_segments_json
+    FROM tariffs
     WHERE loading_place=? AND unloading_place=? AND (vehicle_type='الكل' OR vehicle_type IS NULL OR vehicle_type='')
     LIMIT 1
   `, from_region, to_region);
-  return fallback?.driver_expense || 0;
+  return fallback ? calculateTariffDriverExpense(fallback) : 0;
 }
 
 export default router;

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { execute, executeBatch, queryAll, queryOne } from "../lib/erp-sql.js";
 import { invalidateSlaCache } from "../lib/sla.js";
+import { calculateTariffDriverExpense } from "../lib/tariff-driver-expense.js";
 
 const router = Router();
 
@@ -122,28 +123,38 @@ router.delete("/tariffs/:id/locations/:locationId", async (req, res) => {
 router.get("/tariffs/routes", async (req, res) => {
   const { loading } = req.query as Record<string, string>;
   if (!loading) return void res.json([]);
-  const rows = await queryAll<{ unloading_place: string; driver_expense: number; rental: number; vehicle_type: string; cargo_type: string }>(`
-    SELECT unloading_place, driver_expense, rental,
+  const rows = await queryAll<{
+    unloading_place: string; driver_expense: number; rental: number; vehicle_type: string; cargo_type: string;
+    km_per_route: number | null; driver_expense_mode: string; driver_expense_rate_per_km: number | null;
+    driver_expense_segments_json: string | null;
+  }>(`
+    SELECT unloading_place, driver_expense, rental, km_per_route, driver_expense_mode,
+           driver_expense_rate_per_km, driver_expense_segments_json,
            COALESCE(vehicle_type,'') AS vehicle_type,
            COALESCE(cargo_type,'')   AS cargo_type
     FROM tariffs
     WHERE loading_place=? AND status='approved'
     ORDER BY unloading_place
   `, loading);
-  res.json(rows);
+  res.json(rows.map(row => ({ ...row, driver_expense: calculateTariffDriverExpense(row) })));
 });
 
 // GET /tariffs/route-bonus?loading=X&unloading=Y — lookup driver_expense for a route
 router.get("/tariffs/route-bonus", async (req, res) => {
   const { loading, unloading } = req.query as Record<string, string>;
   if (!loading || !unloading) return void res.json({ bonus: 0, found: false });
-  const row = await queryOne<{ driver_expense: number }>(`
-    SELECT driver_expense FROM tariffs
+  const row = await queryOne<{
+    driver_expense: number; km_per_route: number | null; driver_expense_mode: string;
+    driver_expense_rate_per_km: number | null; driver_expense_segments_json: string | null;
+  }>(`
+    SELECT driver_expense, km_per_route, driver_expense_mode,
+           driver_expense_rate_per_km, driver_expense_segments_json
+    FROM tariffs
     WHERE loading_place=? AND unloading_place=? AND status='approved'
     ORDER BY CASE WHEN (vehicle_type IS NULL OR vehicle_type='' OR vehicle_type='الكل') THEN 1 ELSE 0 END
     LIMIT 1
   `, loading, unloading);
-  res.json({ bonus: row?.driver_expense || 0, found: !!row });
+  res.json({ bonus: row ? calculateTariffDriverExpense(row) : 0, found: !!row });
 });
 
 // GET /tariffs/loading-places
@@ -173,13 +184,25 @@ router.post("/tariffs/import", async (req, res) => {
     if (!loading || !unloading) { skipped++; continue; }
     const rowId = parseInt(String(row["ID"] || row["id"] || "")) || null;
     statements.push({
-      sql: "INSERT INTO tariffs (row_id, loading_place, unloading_place, driver_expense, rental, synced_at) VALUES (?,?,?,?,?,datetime('now'))",
+      sql: `INSERT INTO tariffs
+        (row_id, loading_place, unloading_place, driver_expense, rental, km_per_route,
+         driver_expense_mode, driver_expense_rate_per_km, driver_expense_segments_json, synced_at)
+        VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))`,
       params: [
         rowId,
         loading,
         unloading,
         parseFloat(String(row["السعر"] || row["مصروف السائق"] || row["driver_expense"] || "0")) || 0,
         parseFloat(String(row["الايجار"] || row["الإيجار"] || row["rental"] || "0")) || 0,
+        parseFloat(String(row["كم لكل مسار"] || row["km_per_route"] || "")) || null,
+        ["per_km", "tiered"].includes(String(row["نمط مصروف السائق"] || row["driver_expense_mode"]))
+          ? String(row["نمط مصروف السائق"] || row["driver_expense_mode"])
+          : "fixed",
+        (() => {
+          const rawRate = String(row["سعر السائق لكل كم"] ?? row["driver_expense_rate_per_km"] ?? "").trim();
+          return rawRate && Number.isFinite(Number(rawRate)) ? Number(rawRate) : null;
+        })(),
+        String(row["شرائح مصروف السائق"] || row["driver_expense_segments_json"] || "") || null,
       ],
     });
     imported++;
@@ -191,11 +214,13 @@ router.post("/tariffs/import", async (req, res) => {
 // PUT /tariffs/:id
 router.put("/tariffs/:id", async (req, res) => {
   const { loading_place, unloading_place, driver_expense, rental, notes, vehicle_type,
-          supplier, customer_name, loaded_meters, cargo_type, km_per_route, image_url } = req.body;
+          supplier, customer_name, loaded_meters, cargo_type, km_per_route, image_url,
+          driver_expense_mode, driver_expense_rate_per_km, driver_expense_segments_json } = req.body;
   await mutateTariffs([{
     sql: `UPDATE tariffs SET
       loading_place=?, unloading_place=?, driver_expense=?, rental=?, notes=?, vehicle_type=?,
-      supplier=?, customer_name=?, loaded_meters=?, cargo_type=?, km_per_route=?, image_url=?
+      supplier=?, customer_name=?, loaded_meters=?, cargo_type=?, km_per_route=?, image_url=?,
+      driver_expense_mode=?, driver_expense_rate_per_km=?, driver_expense_segments_json=?
       WHERE id=?`,
     params: [loading_place, unloading_place,
            parseFloat(driver_expense)||0, parseFloat(rental)||0,
@@ -205,6 +230,9 @@ router.put("/tariffs/:id", async (req, res) => {
            cargo_type||null,
            km_per_route != null && km_per_route !== "" ? parseFloat(km_per_route)||null : null,
            image_url||null,
+            ["per_km", "tiered"].includes(driver_expense_mode) ? driver_expense_mode : "fixed",
+            driver_expense_rate_per_km != null && driver_expense_rate_per_km !== "" ? parseFloat(driver_expense_rate_per_km) : null,
+            driver_expense_segments_json || null,
            req.params.id],
   }]);
   res.json({ message: "تم التحديث" });
@@ -226,19 +254,24 @@ router.delete("/tariffs/:id", async (req, res) => {
 // POST /tariffs (manual add)
 router.post("/tariffs", async (req, res) => {
   const { loading_place, unloading_place, driver_expense, rental, notes, vehicle_type,
-          supplier, customer_name, loaded_meters, cargo_type, km_per_route } = req.body;
+          supplier, customer_name, loaded_meters, cargo_type, km_per_route,
+          driver_expense_mode, driver_expense_rate_per_km, driver_expense_segments_json } = req.body;
   const results = await mutateTariffs([{
     sql: `INSERT INTO tariffs
       (loading_place, unloading_place, driver_expense, rental, notes, vehicle_type,
-       supplier, customer_name, loaded_meters, cargo_type, km_per_route, status)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,'approved')`,
+       supplier, customer_name, loaded_meters, cargo_type, km_per_route, status,
+       driver_expense_mode, driver_expense_rate_per_km, driver_expense_segments_json)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,'approved',?,?,?)`,
     params: [loading_place, unloading_place,
          parseFloat(driver_expense)||0, parseFloat(rental)||0,
          notes||null, vehicle_type||null,
          supplier||null, customer_name||null,
          loaded_meters != null ? parseFloat(String(loaded_meters))||null : null,
          cargo_type||null,
-         km_per_route != null && km_per_route !== "" ? parseFloat(String(km_per_route))||null : null],
+          km_per_route != null && km_per_route !== "" ? parseFloat(String(km_per_route))||null : null,
+          ["per_km", "tiered"].includes(driver_expense_mode) ? driver_expense_mode : "fixed",
+          driver_expense_rate_per_km != null && driver_expense_rate_per_km !== "" ? parseFloat(String(driver_expense_rate_per_km)) : null,
+          driver_expense_segments_json || null],
   }]);
   res.status(201).json({ id: results[2]?.lastInsertRowid, message: "تم الإضافة" });
 });
