@@ -807,6 +807,7 @@ export default function WorkshopManagerPage() {
       if (oilBreakdownEntries.length > 0) {
         return oilBreakdownEntries.reduce((sum, [, amount]) => sum + (Number(amount) || 0), 0);
       }
+      if (Number(log.oil_change_amount) > 0) return Number(log.oil_change_amount);
 
       // Legacy oil-only rows did not always have amount_breakdown.
       const savedTypes = (log.maintenance_type || "")
@@ -825,40 +826,59 @@ export default function WorkshopManagerPage() {
         : "بدون فلاتر";
     const classifyAmount = (log: MaintenanceLog): CompanyRow[] => {
       const breakdown = parseBd(log);
-      const electrical = Object.entries(breakdown)
+      const allTypes = [
+        ...(log.maintenance_type || "").split(/[,،]/),
+        ...(log.amount_breakdown ? Object.keys(breakdown) : []),
+      ].map(normalizeMaintenanceType).filter(Boolean);
+      const hasOil = allTypes.some(isOilChangeType);
+      if (hasOil && allTypes.length > 0 && allTypes.every(isOilChangeType)) return [];
+      const oilAmount = hasOil ? oilChangeAmount(log) : 0;
+      const nonOilBreakdown = Object.entries(breakdown)
+        .filter(([type]) => !isOilChangeType(type));
+      const nonOilTypes = allTypes.filter(type => !isOilChangeType(type));
+      const electrical = nonOilBreakdown
         .filter(([type]) => /كهرب/i.test(type))
         .reduce((sum, [, amount]) => sum + (Number(amount) || 0), 0);
       // The company register has two rows per mixed card: electricity gets
-      // its own amount, while every non-electricity type is grouped together
-      // in the mechanical/other row.
-      const otherAmount = Object.entries(breakdown)
+      // its own amount, while every non-electricity, non-oil type is grouped
+      // together in the mechanical/other row.
+      const otherAmount = nonOilBreakdown
         .filter(([type]) => !/كهرب/i.test(type))
         .reduce((sum, [, amount]) => sum + (Number(amount) || 0), 0);
-      const rawType = log.maintenance_type || "";
-      const rawTypes = rawType.split(/[,،]/).map(normalizeMaintenanceType).filter(Boolean);
-      const hasElectrical = electrical > 0 || /كهرب/i.test(rawType);
-      const hasOther = otherAmount > 0 || rawTypes.some(type => !/كهرب/i.test(type));
+      const hasElectrical = electrical > 0 || nonOilTypes.some(type => /كهرب/i.test(type));
+      const hasOther = otherAmount > 0 || nonOilTypes.some(type => !/كهرب/i.test(type));
       const total = Number(log.amount) || 0;
+      const nonOilTotal = Math.max(total - oilAmount, 0);
+      if (hasOil && nonOilTotal === 0 && electrical === 0 && otherAmount === 0) return [];
       const groupedOtherAmount = otherAmount || (
         hasElectrical && electrical > 0
-          ? Math.max(total - electrical, 0)
-          : !hasElectrical ? total : 0
+          ? Math.max(nonOilTotal - electrical, 0)
+          : !hasElectrical ? nonOilTotal : 0
       );
       const rows: CompanyRow[] = [];
-      if (hasElectrical) rows.push({ ...log, company_type: "كهرباء", company_amount: electrical || (!hasOther ? total : 0) });
+      if (hasElectrical && (electrical > 0 || (!hasOil && !hasOther))) {
+        rows.push({
+          ...log,
+          company_type: "كهرباء",
+          company_amount: electrical || (!hasOther ? nonOilTotal : 0),
+        });
+      }
       if (hasOther) rows.push({ ...log, company_type: "ميكانيكا", company_amount: groupedOtherAmount });
       // Any legacy/unknown category is kept in the mechanical register rather
       // than creating a third category in the company's official report.
-      if (rows.length === 0) rows.push({ ...log, company_type: "ميكانيكا", company_amount: total });
-      return rows;
+      if (rows.length === 0 && nonOilTotal > 0) {
+        rows.push({ ...log, company_type: "ميكانيكا", company_amount: nonOilTotal });
+      }
+      return rows.filter(row => row.company_amount > 0);
     };
-    const companyStatement = (log: MaintenanceLog) => {
+    const companyStatement = (log: MaintenanceLog, includeOil = true) => {
       const mainType = /ميكاني|ميكانيك|ميكانيكا|كهرب/i;
       const detailTypes = [
         ...(log.maintenance_type || "").split(/[,،]/),
         ...Object.keys(parseBd(log)),
       ]
         .map(normalizeMaintenanceType)
+        .filter(type => includeOil || !isOilChangeType(type))
         .filter(type => type && !mainType.test(type))
         .filter((type, index, all) => all.indexOf(type) === index);
       const description = (log.description || "").trim();
@@ -883,7 +903,7 @@ export default function WorkshopManagerPage() {
         "اسم السائق": row.driver_name || "",
         "الفرع": row.branch || "",
         "نوع الصيانة": row.company_type,
-        "بيان الصيانة": companyStatement(row),
+        "بيان الصيانة": companyStatement(row, false),
         "رقم كرت الصيانة": row.card_number || "",
         "مبلغ الصيانة": row.company_amount,
       }));
