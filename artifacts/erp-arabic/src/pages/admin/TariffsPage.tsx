@@ -96,6 +96,26 @@ function parseExpenseTiers(value?: string | null): DriverExpenseTier[] {
   } catch { return []; }
 }
 
+function calculateDisplayedDriverExpense(tariff: Partial<Tariff>): number {
+  const fixed = Math.max(0, Number(tariff.driver_expense) || 0);
+  const km = Number(tariff.km_per_route) || 0;
+  const mode = tariff.driver_expense_mode || "fixed";
+  if (km <= 0 || mode === "fixed") return fixed;
+
+  if (mode === "per_km") {
+    const rate = Number(tariff.driver_expense_rate_per_km);
+    return Number.isFinite(rate) && rate >= 0 ? Math.round(km * rate) : fixed;
+  }
+
+  if (mode === "tiered") {
+    const tiers = parseExpenseTiers(tariff.driver_expense_segments_json);
+    if (!tiers.length || Math.abs(tiers.reduce((sum, tier) => sum + tier.km, 0) - km) > 0.01) return fixed;
+    return Math.round(tiers.reduce((sum, tier) => sum + tier.km * tier.rate, 0));
+  }
+
+  return fixed;
+}
+
 function parseExpenseTierColumn(value: unknown): DriverExpenseTier[] {
   if (typeof value !== "string" || !value.trim()) return [];
   try {
@@ -487,7 +507,7 @@ export default function TariffsPage() {
           return ({
           loading_place:  String(row["مكان التحميل"]  || row["loading_place"]  || "").trim(),
           unloading_place:String(row["مكان التنزيل"] || row["unloading_place"] || "").trim(),
-          driver_expense: parseFloat(String(row["مصروف السائق"] || row["السعر"] || row["driver_expense"] || "0")) || 0,
+          driver_expense: parseFloat(String(row["مصروف السائق"] || row["مصروف السائق الثابت / الاحتياطي"] || row["السعر"] || row["driver_expense"] || "0")) || 0,
           rental:         parseFloat(String(row["الإيجار"] || row["الايجار"]   || row["rental"]          || "0")) || 0,
           km_per_route: parseFloat(String(row["كم لكل مسار"] || row["km_per_route"] || "")) || null,
           driver_expense_mode: (["per_km", "tiered"].includes(mode) ? mode : "fixed") as "fixed" | "per_km" | "tiered",
@@ -535,7 +555,8 @@ export default function TariffsPage() {
       "مكان التحميل":  r.loading_place,
       "مكان التنزيل": r.unloading_place,
       "نوع السيارة":   r.vehicle_type || "",
-      "مصروف السائق": r.driver_expense,
+      "مصروف السائق الثابت / الاحتياطي": r.driver_expense,
+      "مبلغ البونص المحسوب": calculateDisplayedDriverExpense(r),
       "كم لكل مسار": r.km_per_route ?? "",
       "نمط مصروف السائق": r.driver_expense_mode || "fixed",
       "سعر السائق لكل كم": r.driver_expense_rate_per_km ?? "",
@@ -1068,7 +1089,13 @@ export default function TariffsPage() {
                   <th className="px-4 py-3 text-right text-xs font-semibold text-teal-600">اسم العميل</th>
                   <th className="px-4 py-3 text-right text-xs font-semibold text-amber-600">المورد</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-orange-600">
-                    مصروف السائق (ريال)
+                    البونص المحسوب (ريال)
+                  </th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-orange-700">
+                    طريقة حساب مصروف السائق
+                  </th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold text-orange-700">
+                    مصروف السائق لكل كم
                   </th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-purple-600">الإيجار (ريال)</th>
                   <th className="px-4 py-3 text-center text-xs font-semibold text-cyan-600">كم لكل مسار</th>
@@ -1196,18 +1223,43 @@ export default function TariffsPage() {
                         />
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {r.driver_expense_mode === "per_km" ? (
-                          <span className="text-xs text-orange-700 font-medium">
-                            {r.driver_expense_rate_per_km ?? "—"} ريال/كم
-                          </span>
-                        ) : r.driver_expense_mode === "tiered" ? (
-                          <span className="text-xs text-orange-700 font-medium">شرائح</span>
-                        ) : (
+                        {(get("driver_expense_mode") || "fixed") === "fixed" ? (
                           <input
                             type="number" min="0" step="1"
                             value={Number(get("driver_expense"))}
                             onChange={e => setInline(r.id, "driver_expense", parseFloat(e.target.value) || 0)}
                             className={`w-24 px-2 py-1 text-sm text-center border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 ${isDirty ? "border-orange-300 bg-orange-50" : "border-gray-200"}`}
+                          />
+                        ) : (
+                          <span className="inline-block rounded-lg bg-orange-50 px-2 py-1 text-xs font-semibold text-orange-700">
+                            {calculateDisplayedDriverExpense({ ...r, ...editInline[r.id] })} ريال
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <select
+                          value={String(get("driver_expense_mode") || "fixed")}
+                          onChange={e => setInline(r.id, "driver_expense_mode", e.target.value as NonNullable<Tariff["driver_expense_mode"]>)}
+                          className={`w-36 px-2 py-1.5 text-xs border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 ${editInline[r.id]?.driver_expense_mode !== undefined ? "border-orange-300 bg-orange-50" : "border-gray-200"}`}
+                        >
+                          <option value="fixed">مبلغ ثابت</option>
+                          <option value="per_km">سعر لكل كم</option>
+                          <option value="tiered">شرائح كيلومترات</option>
+                        </select>
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        {(get("driver_expense_mode") || "fixed") === "tiered" ? (
+                          <span className="text-xs text-gray-400">يُضبط بالشرائح</span>
+                        ) : (
+                          <input
+                            type="number" min="0" step="0.01"
+                            value={editInline[r.id]?.driver_expense_rate_per_km !== undefined
+                              ? (editInline[r.id].driver_expense_rate_per_km ?? "")
+                              : (r.driver_expense_rate_per_km ?? "")}
+                            onChange={e => setInline(r.id, "driver_expense_rate_per_km",
+                              e.target.value === "" ? (null as unknown as number) : parseFloat(e.target.value) || 0)}
+                            placeholder="مثال: 0.77"
+                            className={`w-24 px-2 py-1 text-sm text-center border rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-400 ${editInline[r.id]?.driver_expense_rate_per_km !== undefined ? "border-orange-300 bg-orange-50" : "border-gray-200"}`}
                           />
                         )}
                       </td>
