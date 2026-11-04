@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import * as XLSX from "xlsx";
+import type * as XLSXStyle from "xlsx-js-style";
 import { MonthShortcuts } from "@/components/MonthShortcuts";
 import { useAuth } from "@/context/AuthContext";
 import { useRememberedState } from "@/hooks/useRememberedState";
@@ -782,7 +783,9 @@ export default function WorkshopManagerPage() {
   };
 
   // ── Company maintenance register: filtered rows, one sheet per branch ──────
-  const exportCompanyMaintenanceRegister = () => {
+  const exportCompanyMaintenanceRegister = async () => {
+    const ExcelModule = await import("xlsx-js-style");
+    const Excel = (ExcelModule as unknown as { default?: typeof XLSXStyle }).default ?? ExcelModule;
     const exportLogs = displayedMaintenanceLogs;
     if (exportLogs.length === 0) return void alert("لا توجد بيانات لسجل الشركة");
 
@@ -818,12 +821,6 @@ export default function WorkshopManagerPage() {
         ? Number(log.amount) || 0
         : 0;
     };
-    const filterStatus = (log: MaintenanceLog) =>
-      (log.parts || []).some(part => /فلتر|فلاتر|filter/i.test(
-        `${part.item_name || ""} ${part.item_code || ""}`,
-      ))
-        ? "مع فلاتر"
-        : "بدون فلاتر";
     const classifyAmount = (log: MaintenanceLog): CompanyRow[] => {
       const breakdown = parseBd(log);
       const allTypes = [
@@ -892,6 +889,47 @@ export default function WorkshopManagerPage() {
       "رقم اللوحة", "اسم السائق", "الفرع", "نوع الصيانة",
       "بيان الصيانة", "رقم كرت الصيانة", "مبلغ الصيانة",
     ];
+    const applyTableStyle = (
+      ws: XLSXStyle.WorkSheet,
+      headers: string[],
+      dataRowCount: number,
+    ) => {
+      const border = {
+        top: { style: "thin", color: { rgb: "D6DCE5" } },
+        bottom: { style: "thin", color: { rgb: "D6DCE5" } },
+        left: { style: "thin", color: { rgb: "D6DCE5" } },
+        right: { style: "thin", color: { rgb: "D6DCE5" } },
+      };
+      headers.forEach((_, column) => {
+        const headerCell = ws[Excel.utils.encode_cell({ r: 0, c: column })];
+        if (headerCell) {
+          headerCell.s = {
+            fill: { patternType: "solid", fgColor: { rgb: "FFFF00" } },
+            font: { bold: true, color: { rgb: "000000" } },
+            alignment: { horizontal: "center", vertical: "center", wrapText: true },
+            border,
+          };
+        }
+        for (let row = 1; row <= dataRowCount; row++) {
+          const address = Excel.utils.encode_cell({ r: row, c: column });
+          const cell = ws[address] || (ws[address] = { t: "z" });
+          cell.s = {
+            fill: row % 2 === 0
+              ? { patternType: "solid", fgColor: { rgb: "F7F9FC" } }
+              : { patternType: "none" },
+            alignment: { horizontal: "right", vertical: "center", wrapText: true },
+            border,
+          };
+        }
+      });
+      ws["!rows"] = [{ hpt: 30 }];
+    };
+    const summaryBorder = {
+      top: { style: "thin", color: { rgb: "D6DCE5" } },
+      bottom: { style: "thin", color: { rgb: "D6DCE5" } },
+      left: { style: "thin", color: { rgb: "D6DCE5" } },
+      right: { style: "thin", color: { rgb: "D6DCE5" } },
+    };
     const toSheet = (logs: MaintenanceLog[]) => {
       const companyRows = logs.flatMap(classifyAmount);
       const data = companyRows.map(row => ({
@@ -907,10 +945,11 @@ export default function WorkshopManagerPage() {
         "رقم كرت الصيانة": row.card_number || "",
         "مبلغ الصيانة": row.company_amount,
       }));
-      const ws = XLSX.utils.json_to_sheet(data, { header: headers });
+      const ws = Excel.utils.json_to_sheet(data, { header: headers });
       const endRow = Math.max(1, companyRows.length + 1);
       ws["!autofilter"] = { ref: `A1:K${endRow}` };
       ws["!freeze"] = { xSplit: 0, ySplit: 1 };
+      ws["!rtl"] = true;
       ws["!cols"] = [
         { wch: 13 }, { wch: 11 }, { wch: 11 }, { wch: 13 },
         { wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 13 },
@@ -921,11 +960,22 @@ export default function WorkshopManagerPage() {
       const mechanicalRows = companyRows.filter(row => row.company_type === "ميكانيكا");
       const electricalRows = companyRows.filter(row => row.company_type === "كهرباء");
       const summaryStart = companyRows.length + 3;
-      XLSX.utils.sheet_add_aoa(ws, [
+      Excel.utils.sheet_add_aoa(ws, [
         ["إجمالي الميكانيكا", mechanicalRows.reduce((sum, row) => sum + row.company_amount, 0), "عدد الميكانيكا", mechanicalRows.length],
         ["إجمالي الكهرباء", electricalRows.reduce((sum, row) => sum + row.company_amount, 0), "عدد الكهرباء", electricalRows.length],
         ["الإجمالي العام", companyRows.reduce((sum, row) => sum + row.company_amount, 0), "عدد السجلات", companyRows.length],
       ], { origin: `A${summaryStart}` });
+      applyTableStyle(ws, headers, data.length);
+      for (let row = summaryStart - 1; row < summaryStart + 2; row++) {
+        for (let column = 0; column < 4; column++) {
+          const cell = ws[Excel.utils.encode_cell({ r: row, c: column })];
+          if (cell) cell.s = {
+            font: { bold: true },
+            alignment: { horizontal: "right", vertical: "center", wrapText: true },
+            border: summaryBorder,
+          };
+        }
+      }
       return ws;
     };
 
@@ -934,7 +984,7 @@ export default function WorkshopManagerPage() {
       const branch = log.branch?.trim() || "بدون فرع";
       byBranch.set(branch, [...(byBranch.get(branch) || []), log]);
     });
-    const wb = XLSX.utils.book_new();
+    const wb = Excel.utils.book_new();
     const usedNames = new Set<string>();
     const sheetName = (branch: string) => {
       const base = branch.replace(/[\\/:*?"<>\[\]]/g, " ").trim().slice(0, 31) || "بدون فرع";
@@ -949,16 +999,13 @@ export default function WorkshopManagerPage() {
     };
     [...byBranch.entries()]
       .sort(([a], [b]) => a.localeCompare(b, "ar"))
-      .forEach(([branch, logs]) => XLSX.utils.book_append_sheet(wb, toSheet(logs), sheetName(branch)));
+      .forEach(([branch, logs]) => Excel.utils.book_append_sheet(wb, toSheet(logs), sheetName(branch)));
 
-    // A dedicated company-wide sheet for oil changes. It keeps the complete
-    // register columns, but uses only the oil-change amount and marks whether
-    // a filter was issued from the workshop inventory for the same card.
+    // A dedicated company-wide oil sheet with branch-level totals below the data.
     const oilHeaders = [
       "التاريخ", "وقت الدخول", "وقت الخروج", "تاريخ الخروج",
-      "رقم اللوحة", "الشغل على", "اسم السائق", "الفرع",
-      "نوع الصيانة", "بيان الصيانة", "رقم كرت الصيانة",
-      "الأصناف المُصرفة", "الفلاتر", "مبلغ تبديل الزيت",
+      "رقم اللوحة", "اسم السائق", "الفرع", "نوع الصيانة",
+      "بيان الصيانة", "رقم كرت الصيانة", "مبلغ تبديل الزيت",
     ];
     const oilLogs = exportLogs.filter(hasOilChange);
     const oilRows = oilLogs.map(log => ({
@@ -967,33 +1014,68 @@ export default function WorkshopManagerPage() {
       "وقت الخروج": log.exit_time || "",
       "تاريخ الخروج": log.exit_date || "",
       "رقم اللوحة": log.vehicle_plate || log.trailer_number || "",
-      "الشغل على": log.vehicle_choice === "trailer" && log.trailer_number
-        ? `تيدر رقم ${log.trailer_number}`
-        : (log.vehicle_plate ? `راس رقم ${log.vehicle_plate}` : ""),
       "اسم السائق": log.driver_name || "",
       "الفرع": log.branch || "",
       "نوع الصيانة": "تبديل زيت",
       "بيان الصيانة": companyStatement(log),
       "رقم كرت الصيانة": log.card_number || "",
-      "الأصناف المُصرفة": log.parts?.map(part =>
-        `${part.item_name} ×${part.quantity} ${part.unit}`,
-      ).join("، ") || "",
-      "الفلاتر": filterStatus(log),
       "مبلغ تبديل الزيت": oilChangeAmount(log),
     }));
-    const oilSheet = XLSX.utils.json_to_sheet(oilRows, { header: oilHeaders });
+    const oilSheet = Excel.utils.json_to_sheet(oilRows, { header: oilHeaders });
     oilSheet["!autofilter"] = {
-      ref: `A1:N${Math.max(1, oilRows.length + 1)}`,
+      ref: `A1:K${Math.max(1, oilRows.length + 1)}`,
     };
     oilSheet["!freeze"] = { xSplit: 0, ySplit: 1 };
+    oilSheet["!rtl"] = true;
     oilSheet["!cols"] = [
       { wch: 13 }, { wch: 11 }, { wch: 11 }, { wch: 13 },
-      { wch: 14 }, { wch: 18 }, { wch: 20 }, { wch: 16 },
-      { wch: 14 }, { wch: 58 }, { wch: 16 }, { wch: 42 },
-      { wch: 14 }, { wch: 18 },
+      { wch: 14 }, { wch: 20 }, { wch: 16 }, { wch: 14 },
+      { wch: 58 }, { wch: 16 }, { wch: 18 },
     ];
-    XLSX.utils.book_append_sheet(wb, oilSheet, sheetName("تبديل الزيت"));
-    XLSX.writeFile(wb, `تصدير_سجل_للشركة_${new Date().toLocaleDateString("en-CA")}.xlsx`);
+    const oilByBranch = new Map<string, MaintenanceLog[]>();
+    oilLogs.forEach(log => {
+      const branch = log.branch?.trim() || "بدون فرع";
+      oilByBranch.set(branch, [...(oilByBranch.get(branch) || []), log]);
+    });
+    const oilSummaryRows = [...oilByBranch.entries()]
+      .sort(([a], [b]) => a.localeCompare(b, "ar"))
+      .map(([branch, logs]) => [
+        branch,
+        logs.length,
+        logs.reduce((sum, log) => sum + oilChangeAmount(log), 0),
+      ]);
+    const oilSummaryStart = oilRows.length + 3;
+    Excel.utils.sheet_add_aoa(oilSheet, [
+      ["إجمالي الزيت حسب الفرع"],
+      ["الفرع", "عدد السجلات", "إجمالي مبلغ الزيت"],
+      ...oilSummaryRows,
+      ["الإجمالي العام", oilLogs.length, oilLogs.reduce((sum, log) => sum + oilChangeAmount(log), 0)],
+    ], { origin: `A${oilSummaryStart}` });
+    applyTableStyle(oilSheet, oilHeaders, oilRows.length);
+    const oilSummaryHeaderRow = oilSummaryStart;
+    for (let column = 0; column < 3; column++) {
+      const cell = oilSheet[Excel.utils.encode_cell({ r: oilSummaryHeaderRow, c: column })];
+      if (cell) cell.s = {
+        fill: { patternType: "solid", fgColor: { rgb: "FFFF00" } },
+        font: { bold: true, color: { rgb: "000000" } },
+        alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        border: summaryBorder,
+      };
+    }
+    const summaryLastRow = oilSummaryHeaderRow + oilSummaryRows.length + 1;
+    for (let row = oilSummaryHeaderRow + 1; row <= summaryLastRow; row++) {
+      for (let column = 0; column < 3; column++) {
+        const address = Excel.utils.encode_cell({ r: row, c: column });
+        const cell = oilSheet[address] || (oilSheet[address] = { t: "z" });
+        cell.s = {
+          font: { bold: row === summaryLastRow },
+          alignment: { horizontal: "right", vertical: "center" },
+          border: summaryBorder,
+        };
+      }
+    }
+    Excel.utils.book_append_sheet(wb, oilSheet, sheetName("تبديل الزيت"));
+    Excel.writeFile(wb, `تصدير_سجل_للشركة_${new Date().toLocaleDateString("en-CA")}.xlsx`);
   };
 
   // ── Maintenance Log: add / edit ────────────────────────────────────────────
