@@ -15,7 +15,59 @@ async function syncUser(vehicle_plate: string, driver_name: string, driver_phone
 }
 
 router.get("/bulker-vehicles", async (_req, res) => {
-  const rows = await queryAll("SELECT * FROM bulker_vehicles ORDER BY id DESC");
+  const fleetBulkers = await queryAll<{
+    plate_number: string; driver_name: string | null; driver_phone: string | null; destination: string | null;
+  }>(`
+    SELECT fv.plate_number,
+           COALESCE(NULLIF(TRIM(fv.driver_name),''), dp.driver_name) AS driver_name,
+           COALESCE(fv.driver_phone, fv.linked_user_phone, dp.phone) AS driver_phone,
+           COALESCE(fv.entity, dp.branch) AS destination
+    FROM fleet_vehicles fv
+    LEFT JOIN driver_profiles dp
+      ON REPLACE(dp.vehicle_plate,' ','') = REPLACE(fv.plate_number,' ','')
+    WHERE fv.vehicle_type='بلكر'
+  `);
+
+  for (const vehicle of fleetBulkers) {
+    const existing = await queryOne<{ id: number }>(
+      "SELECT id FROM bulker_vehicles WHERE REPLACE(vehicle_plate,' ','')=REPLACE(?,' ','') LIMIT 1",
+      vehicle.plate_number,
+    );
+    if (existing) {
+      await execute(`
+        UPDATE bulker_vehicles SET
+          vehicle_plate=?, driver_name=COALESCE(?,driver_name),
+          driver_phone=COALESCE(?,driver_phone), destination=COALESCE(?,destination)
+        WHERE id=?
+      `, vehicle.plate_number, vehicle.driver_name?.trim() || null, vehicle.driver_phone || null,
+      vehicle.destination || null, existing.id);
+    } else {
+      await execute(`
+        INSERT INTO bulker_vehicles (vehicle_plate,driver_name,driver_phone,destination)
+        VALUES (?,?,?,?)
+      `, vehicle.plate_number, vehicle.driver_name || "—", vehicle.driver_phone || null,
+      vehicle.destination || null);
+    }
+  }
+
+  const rows = await queryAll(`
+    SELECT bv.*,
+           CASE WHEN EXISTS (
+             SELECT 1 FROM fleet_vehicles fv
+             WHERE REPLACE(fv.plate_number,' ','')=REPLACE(bv.vehicle_plate,' ','')
+           ) THEN 1 ELSE 0 END AS is_fleet_managed
+    FROM bulker_vehicles bv
+    WHERE EXISTS (
+      SELECT 1 FROM fleet_vehicles fv
+      WHERE fv.vehicle_type='بلكر'
+        AND REPLACE(fv.plate_number,' ','')=REPLACE(bv.vehicle_plate,' ','')
+    )
+    OR NOT EXISTS (
+      SELECT 1 FROM fleet_vehicles fv
+      WHERE REPLACE(fv.plate_number,' ','')=REPLACE(bv.vehicle_plate,' ','')
+    )
+    ORDER BY bv.id DESC
+  `);
   res.json(rows);
 });
 
@@ -103,55 +155,6 @@ router.post("/bulker-vehicles/bulk-import", async (req, res) => {
     if (row.driver_phone && name) await syncUser(plate, name, row.driver_phone);
   }
   res.json({ inserted, updated, skipped });
-});
-
-router.post("/bulker-vehicles/sync-from-fleet", async (req, res) => {
-  const supervisorPhone = (req.body?.supervisor_phone as string) || null;
-
-  const fleetBulkers = await queryAll<{ plate_number: string; driver_name: string | null; driver_phone: string | null; destination: string | null }>(`
-    SELECT fv.plate_number,
-           COALESCE(fv.driver_name, dp.driver_name)                         AS driver_name,
-           COALESCE(fv.driver_phone, fv.linked_user_phone, dp.phone)        AS driver_phone,
-           COALESCE(fv.entity, dp.branch)                                   AS destination
-    FROM fleet_vehicles fv
-    LEFT JOIN driver_profiles dp
-           ON REPLACE(dp.vehicle_plate,' ','') = REPLACE(fv.plate_number,' ','')
-    WHERE fv.vehicle_type='بلكر'
-  `);
-
-  let added = 0;
-  let updated = 0;
-
-  for (const fv of fleetBulkers) {
-    const plate       = fv.plate_number;
-    const driverName  = fv.driver_name  || "—";
-    const driverPhone = fv.driver_phone || null;
-    const destination = fv.destination  || null;
-
-    const existing = await queryOne("SELECT id FROM bulker_vehicles WHERE vehicle_plate=?", plate);
-    if (!existing) {
-      await execute(
-        "INSERT INTO bulker_vehicles (vehicle_plate, driver_name, driver_phone, destination, supervisor_phone) VALUES (?,?,?,?,?)"
-      , plate, driverName, driverPhone, destination, supervisorPhone);
-      added++;
-    } else {
-      await execute(
-        `UPDATE bulker_vehicles SET
-          driver_name=CASE WHEN driver_name='—' OR driver_name IS NULL THEN ? ELSE driver_name END,
-          driver_phone=COALESCE(driver_phone,?),
-          destination=COALESCE(destination,?),
-          supervisor_phone=COALESCE(supervisor_phone,?)
-        WHERE vehicle_plate=?`
-      , driverName, driverPhone, destination, supervisorPhone, plate);
-      updated++;
-    }
-
-    if (driverPhone && driverName !== "—") {
-      await syncUser(plate, driverName, driverPhone);
-    }
-  }
-
-  res.json({ added, updated, total: fleetBulkers.length });
 });
 
 export default router;

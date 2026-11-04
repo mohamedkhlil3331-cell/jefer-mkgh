@@ -28,6 +28,7 @@
 - [Routing bonus continuity](routing-bonus-continuity.md) — preserve the existing tariff bonus calculation; show its saved value on new trip logs without creating a second payout.
 - [Routing cargo quantities](routing-cargo-quantities.md) — a multi-car dispatch is a shortcut for individual trips; each vehicle's receipt, inventory posting, and release are independent.
 - [Bulker tariff accounting](bulker-tariff-accounting.md) — treat the selected tariff and completed trip as accounting snapshots; do not recalculate past trips from later order edits.
+- [Bulker book vs loading history](bulker-book-vs-history.md) — current fleet type controls roster visibility; changing it must not alter historical loading orders or unload access.
 - [Closed-month tariff snapshots](closed-month-tariff-snapshots.md) — preserve old trip tariff values outside locked trip rows before any tariff change; never backfill by updating closed-month trips.
 - [Production compute restart](production-compute-restart.md) — workspace “Restart compute” does not restart a published Autoscale backend; republishing is the documented production restart path.
 - [Stale artifact workflow listeners](stale-artifact-workflow-listeners.md) — workflow status may not reflect child processes still holding a port; inspect and stop the exact orphan before restarting.

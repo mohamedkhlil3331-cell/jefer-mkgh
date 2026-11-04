@@ -41,6 +41,15 @@ const tonsFromInvoice = (raw: string | null) => {
   const value = Number(normalized.match(/\d[\d,.]*/)?.[0].replace(/,/g, "") || 0);
   return /كجم|كيلو|kg/i.test(normalized) || (!/طن|ton/i.test(normalized) && value >= 1000) ? value / 1000 : value;
 };
+const normalizeBulkerPlate = (value: string) => value.normalize("NFKC")
+  .replace(/[٠-٩]/g, digit => String(digit.charCodeAt(0) - 1632))
+  .replace(/[۰-۹]/g, digit => String(digit.charCodeAt(0) - 1776))
+  .replace(/[^\p{L}\p{N}]/gu, "")
+  .toLocaleUpperCase();
+const bulkerPlateDigits = (value: string) => value.normalize("NFKC")
+  .replace(/[٠-٩]/g, digit => String(digit.charCodeAt(0) - 1632))
+  .replace(/[۰-۹]/g, digit => String(digit.charCodeAt(0) - 1776))
+  .replace(/\D/g, "");
 type SaibOrder = {
   id: number; order_number: string; customer_name: string | null; customer_phone: string;
   product_name: string; quantity: number; unit: string;
@@ -50,7 +59,7 @@ type SaibOrder = {
 type BulkerVehicle = {
   id: number; vehicle_plate: string; driver_name: string;
   destination: string | null; driver_phone: string | null;
-  supervisor_phone: string | null; notes: string | null;
+  supervisor_phone: string | null; notes: string | null; is_fleet_managed?: number;
   is_stopped: number; created_at: string;
 };
 const EMPTY_BV = { vehicle_plate: "", driver_name: "", destination: "", driver_phone: "", supervisor_phone: "", notes: "" };
@@ -94,7 +103,6 @@ export default function BulkerSupervisorPage() {
   const [editingBV, setEditingBV]     = useState<BulkerVehicle | null>(null);
   const [savingBV, setSavingBV]       = useState(false);
   const [bvSearch, setBvSearch]       = useRememberedState("bulker-supervisor-vehicle-search", "");
-  const [syncingFleet, setSyncingFleet] = useState(false);
 
   // ── أوامر التحميل ──────────────────────────────────────────
   const EMPTY_LO = { permit_number: "", cement_ref_number: "", vehicle_plate: "", driver_name: "", driver_phone: "", cargo_type: "", unload_location: "", unload_location_id: "", notes: "", net_weight: "", tariff_id: "" };
@@ -597,6 +605,16 @@ export default function BulkerSupervisorPage() {
     load();
   };
 
+  const findBulkerVehicleForPdfPlate = (plate: string) => {
+    const key = normalizeBulkerPlate(plate);
+    const exactMatch = bulkerVehiclesList.find(v => normalizeBulkerPlate(v.vehicle_plate) === key);
+    if (exactMatch) return exactMatch;
+    const digits = bulkerPlateDigits(plate);
+    if (!digits) return undefined;
+    const numericMatches = bulkerVehiclesList.filter(v => bulkerPlateDigits(v.vehicle_plate) === digits);
+    return numericMatches.length === 1 ? numericMatches[0] : undefined;
+  };
+
   const parsePdfDeliveryAdvice = async (file: File) => {
     setParsingPdf(true);
     try {
@@ -627,18 +645,19 @@ export default function BulkerSupervisorPage() {
       else if (/OPC|Type.I\b/i.test(text))      cargoType = "اسمنت عادي";
 
       const parsed: Partial<typeof EMPTY_LO> = {};
-      const truckNoDigits = truckNo.replace(/\D/g, ""); // أرقام فقط
+      const truckPlate = truckNo.trim();
       if (deliveryNo)    parsed.cement_ref_number = deliveryNo;
       if (custRef)       parsed.permit_number     = custRef;
-      if (truckNoDigits) parsed.vehicle_plate     = truckNoDigits;
+      if (truckPlate)    parsed.vehicle_plate     = truckPlate;
       if (cargoType)     parsed.cargo_type        = cargoType;
       if (driverRaw)     parsed.driver_name       = driverRaw.replace(/\s+/g, " ").trim();
 
       // Also try to auto-fill phone from bulkerVehiclesList by plate
-      if (truckNoDigits) {
-        const match = bulkerVehiclesList.find(v => v.vehicle_plate.replace(/\D/g,"") === truckNoDigits);
+      if (truckPlate) {
+        const match = findBulkerVehicleForPdfPlate(truckPlate);
         if (match) {
-          if (!parsed.driver_name && match.driver_name) parsed.driver_name = match.driver_name;
+          parsed.vehicle_plate = match.vehicle_plate;
+          if (match.driver_name && match.driver_name !== "—") parsed.driver_name = match.driver_name;
           if (match.driver_phone) (parsed as any).driver_phone = match.driver_phone;
         }
       }
@@ -676,16 +695,17 @@ export default function BulkerSupervisorPage() {
       if (/SRC|Type.V|sulfa/i.test(text))  cargoType = "اسمنت مقاوم";
       else if (/OPC|Type.I\b/i.test(text)) cargoType = "اسمنت عادي";
       const parsed: Partial<typeof EMPTY_LO> = {};
-      const truckNoDigits2 = truckNo.replace(/\D/g, ""); // أرقام فقط
+      const truckPlate = truckNo.trim();
       if (deliveryNo)     parsed.cement_ref_number = deliveryNo;
       if (custRef)        parsed.permit_number     = custRef;
-      if (truckNoDigits2) parsed.vehicle_plate     = truckNoDigits2;
+      if (truckPlate)     parsed.vehicle_plate     = truckPlate;
       if (cargoType)      parsed.cargo_type        = cargoType;
       if (driverRaw)      parsed.driver_name       = driverRaw.replace(/\s+/g, " ").trim();
-      if (truckNoDigits2) {
-        const match = bulkerVehiclesList.find(v => v.vehicle_plate.replace(/\D/g,"") === truckNoDigits2);
+      if (truckPlate) {
+        const match = findBulkerVehicleForPdfPlate(truckPlate);
         if (match) {
-          if (!parsed.driver_name && match.driver_name) parsed.driver_name = match.driver_name;
+          parsed.vehicle_plate = match.vehicle_plate;
+          if (match.driver_name && match.driver_name !== "—") parsed.driver_name = match.driver_name;
           if (match.driver_phone) (parsed as any).driver_phone = match.driver_phone;
         }
       }
@@ -721,22 +741,6 @@ export default function BulkerSupervisorPage() {
       load();
     } catch { alert("فشل الاتصال"); }
     finally { setSavingBV(false); }
-  };
-
-  const syncFromFleet = async () => {
-    setSyncingFleet(true);
-    try {
-      const r = await fetch("/api/bulker-vehicles/sync-from-fleet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ supervisor_phone: user?.phone || null }),
-      });
-      const d = await r.json() as { added: number; updated: number; total: number };
-      alert(`تم مزامنة الأسطول ✅\nمضاف جديد: ${d.added}\nمحدَّث: ${d.updated}\nإجمالي سيارات البلكر في الأسطول: ${d.total}`);
-      load();
-    } finally {
-      setSyncingFleet(false);
-    }
   };
 
   const deleteBulkerVehicle = async (id: number) => {
@@ -1896,11 +1900,6 @@ export default function BulkerSupervisorPage() {
               className="flex items-center gap-1.5 px-3 py-2 border border-gray-300 text-gray-600 text-xs font-bold rounded-lg hover:bg-gray-50 transition-colors">
               <FileSpreadsheet size={12} />نموذج Excel
             </button>
-            {/* Sync button */}
-            <button onClick={syncFromFleet} disabled={syncingFleet}
-              className="flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg disabled:opacity-50 transition-colors me-auto">
-              <Car size={12} />{syncingFleet ? "جاري المزامنة..." : "مزامنة من الأسطول"}
-            </button>
           </div>
 
           {/* Add / Edit Form */}
@@ -2072,23 +2071,27 @@ export default function BulkerSupervisorPage() {
                               title={v.is_stopped ? "تفعيل السيارة" : "تعطيل السيارة مؤقتاً"}>
                               {v.is_stopped ? "▶ تفعيل" : "⛔ إيقاف"}
                             </button>
-                            <button
-                              onClick={() => {
-                                setEditingBV(v);
-                                setBvForm({ vehicle_plate: v.vehicle_plate, driver_name: v.driver_name, destination: v.destination || "", driver_phone: v.driver_phone || "", supervisor_phone: v.supervisor_phone || "", notes: v.notes || "" });
-                                window.scrollTo({ top: 0, behavior: "smooth" });
-                              }}
-                              className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg border border-indigo-100" title="تعديل">
-                              <Pencil size={13} />
-                            </button>
+                            {!v.is_fleet_managed && (
+                              <button
+                                onClick={() => {
+                                  setEditingBV(v);
+                                  setBvForm({ vehicle_plate: v.vehicle_plate, driver_name: v.driver_name, destination: v.destination || "", driver_phone: v.driver_phone || "", supervisor_phone: v.supervisor_phone || "", notes: v.notes || "" });
+                                  window.scrollTo({ top: 0, behavior: "smooth" });
+                                }}
+                                className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-lg border border-indigo-100" title="تعديل">
+                                <Pencil size={13} />
+                              </button>
+                            )}
                             <button onClick={() => { setLoForm({ ...EMPTY_LO, permit_number: nextPermitNumber(), vehicle_plate: v.vehicle_plate, driver_name: v.driver_name }); setShowNewLO(true); setTab("loading-orders"); }}
                               className="p-1.5 bg-green-50 hover:bg-green-100 text-green-600 rounded-lg border border-green-100 text-xs font-bold px-2" title="إنشاء أمر تحميل لهذه السيارة">
                               + أمر
                             </button>
-                            <button onClick={() => deleteBulkerVehicle(v.id)}
-                              className="p-1.5 bg-red-50 hover:bg-red-100 text-red-500 rounded-lg border border-red-100" title="حذف">
-                              <Trash2 size={13} />
-                            </button>
+                            {!v.is_fleet_managed && (
+                              <button onClick={() => deleteBulkerVehicle(v.id)}
+                                className="p-1.5 bg-red-50 hover:bg-red-100 text-red-500 rounded-lg border border-red-100" title="حذف">
+                                <Trash2 size={13} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
