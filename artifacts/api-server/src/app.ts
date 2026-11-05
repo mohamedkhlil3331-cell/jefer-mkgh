@@ -45,6 +45,28 @@ function countResponseChunk(chunk: unknown, encoding?: BufferEncoding): number {
   return 0;
 }
 
+async function responseMetricsUserId(req: Request): Promise<number | null> {
+  const match = req.headers.authorization?.trim().match(/^Bearer\s+(.+)$/i);
+  const token = match?.[1]?.trim();
+  if (!token || token === "guest") return null;
+
+  const session = await queryOne<{ id: number }>(`
+    SELECT u.id
+    FROM sessions s
+    JOIN users u ON u.id=s.user_id
+    WHERE s.token=?
+      AND datetime(s.expires_at)>datetime('now')
+      AND u.active=1
+      AND s.rowid=(
+        SELECT MAX(current.rowid)
+        FROM sessions current
+        WHERE current.user_id=u.id
+          AND datetime(current.expires_at)>datetime('now')
+      )
+  `, token);
+  return session?.id ?? null;
+}
+
 if ((globalThis as typeof globalThis & { __ERP_WORKER_ENV?: unknown }).__ERP_WORKER_ENV) {
   app.use((req, res, next) => {
     const startedAt = Date.now();
@@ -112,12 +134,32 @@ app.use((req, res, next) => {
 
   res.once("finish", () => {
     if (responseBytes === 0) return;
-    logger.info({
+    const metrics = {
       method: req.method,
       path: responseMetricsPath(req),
       statusCode: res.statusCode,
       responseBytes,
-    }, "response size");
+    };
+    void (async () => {
+      if (req.path.startsWith("/api/")) {
+        try {
+          const userId = await responseMetricsUserId(req);
+          if (userId !== null) {
+            logger.info({ ...metrics, userId }, "response size");
+            return;
+          }
+        } catch (error) {
+          logger.warn({
+            method: metrics.method,
+            path: metrics.path,
+            err: error,
+          }, "response size user attribution failed");
+          logger.info({ ...metrics, userId: null, userAttribution: "lookup_failed" }, "response size");
+          return;
+        }
+      }
+      logger.info(metrics, "response size");
+    })();
   });
 
   next();
