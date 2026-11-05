@@ -27,6 +27,24 @@ const UPLOADS_PATH = isFilesystemStorageMode() || isFilesystemDatabaseMode()
 
 const app: Express = express();
 
+function responseMetricsPath(req: Request): string {
+  const routePath = req.route?.path;
+  if (typeof routePath === "string") {
+    if (req.baseUrl) return `${req.baseUrl}${routePath}`;
+    return routePath.startsWith("/api") ? routePath : `/api${routePath}`;
+  }
+
+  return req.path
+    .replace(/\/api\/uploads\/[^/]+/g, "/api/uploads/:file")
+    .replace(/\/(?:\d+|[0-9a-f-]{24,})(?=\/|$)/gi, "/:id");
+}
+
+function countResponseChunk(chunk: unknown, encoding?: BufferEncoding): number {
+  if (typeof chunk === "string") return Buffer.byteLength(chunk, encoding);
+  if (chunk instanceof Uint8Array) return chunk.byteLength;
+  return 0;
+}
+
 if ((globalThis as typeof globalThis & { __ERP_WORKER_ENV?: unknown }).__ERP_WORKER_ENV) {
   app.use((req, res, next) => {
     const startedAt = Date.now();
@@ -49,7 +67,7 @@ if ((globalThis as typeof globalThis & { __ERP_WORKER_ENV?: unknown }).__ERP_WOR
           return { id: req.id, method: req.method, url: req.url?.split("?")[0] };
         },
         res(res) {
-          return { statusCode: res.statusCode };
+        return { statusCode: res.statusCode };
         },
       },
     }),
@@ -59,6 +77,51 @@ if ((globalThis as typeof globalThis & { __ERP_WORKER_ENV?: unknown }).__ERP_WOR
 // Cloudflare's Worker response path applies its own content encoding. Compressing
 // in Express as well can leave JSON Brotli-compressed twice but labeled once.
 if (!isCloudflareWorker) app.use(compression({ threshold: 1024 }));
+app.use((req, res, next) => {
+  let responseBytes = 0;
+  const responseWithMetrics = res as Response & { responseBytes?: number };
+  responseWithMetrics.responseBytes = 0;
+  const originalWrite = res.write.bind(res);
+  const originalEnd = res.end.bind(res);
+
+  res.write = ((chunk: unknown, encodingOrCallback?: BufferEncoding | (() => void), callback?: () => void) => {
+    responseBytes += countResponseChunk(
+      chunk,
+      typeof encodingOrCallback === "string" ? encodingOrCallback : undefined,
+    );
+    responseWithMetrics.responseBytes = responseBytes;
+    return originalWrite(
+      chunk as never,
+      encodingOrCallback as never,
+      callback as never,
+    );
+  }) as typeof res.write;
+
+  res.end = ((chunk?: unknown, encodingOrCallback?: BufferEncoding | (() => void), callback?: () => void) => {
+    responseBytes += countResponseChunk(
+      chunk,
+      typeof encodingOrCallback === "string" ? encodingOrCallback : undefined,
+    );
+    responseWithMetrics.responseBytes = responseBytes;
+    return originalEnd(
+      chunk as never,
+      encodingOrCallback as never,
+      callback as never,
+    );
+  }) as typeof res.end;
+
+  res.once("finish", () => {
+    if (responseBytes === 0) return;
+    logger.info({
+      method: req.method,
+      path: responseMetricsPath(req),
+      statusCode: res.statusCode,
+      responseBytes,
+    }, "response size");
+  });
+
+  next();
+});
 app.use(cors());
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
