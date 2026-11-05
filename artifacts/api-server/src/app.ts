@@ -138,7 +138,7 @@ const AUDIT_SKIP_GET = [
 ];
 app.use((req: Request, res: Response, next: NextFunction) => {
   const p = req.path;
-  if (p === "/api/site-analytics/pageview") return next();
+  if (p === "/api/site-analytics/pageview" || p === "/api/site-analytics/assets") return next();
   // Skip dev-dashboard and credentials routes
   if (p.startsWith("/mkgh/") || p.startsWith("/auth/login") || p.startsWith("/auth/otp") || p.startsWith("/auth/register")) return next();
   // For GET: only log meaningful page-level reads, skip noisy polling

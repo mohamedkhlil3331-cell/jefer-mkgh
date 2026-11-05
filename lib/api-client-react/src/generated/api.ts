@@ -51,6 +51,7 @@ import type {
   SiteAnalyticsPageviewInput,
   SiteAnalyticsSummary,
   StartChatConversationRequest,
+  StaticAssetTransferReport,
   SupplierPurchaseInvoicePasteInput,
   SupplierPurchaseInvoicePasteResult,
   VehicleAttachmentDeleteResult,
@@ -2980,6 +2981,98 @@ export const useTrackSiteAnalyticsPageview = <
   TContext
 > => {
   return useMutation(getTrackSiteAnalyticsPageviewMutationOptions(options));
+};
+
+/**
+ * @summary Record anonymous static-asset transfer sizes
+ */
+export const getTrackSiteAnalyticsAssetTransferUrl = () => {
+  return `/api/site-analytics/assets`;
+};
+
+export const trackSiteAnalyticsAssetTransfer = async (
+  staticAssetTransferReport: StaticAssetTransferReport,
+  options?: RequestInit,
+): Promise<SiteAnalyticsAccepted> => {
+  return customFetch<SiteAnalyticsAccepted>(
+    getTrackSiteAnalyticsAssetTransferUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(staticAssetTransferReport),
+    },
+  );
+};
+
+export const getTrackSiteAnalyticsAssetTransferMutationOptions = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof trackSiteAnalyticsAssetTransfer>>,
+    TError,
+    { data: BodyType<StaticAssetTransferReport> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof trackSiteAnalyticsAssetTransfer>>,
+  TError,
+  { data: BodyType<StaticAssetTransferReport> },
+  TContext
+> => {
+  const mutationKey = ["trackSiteAnalyticsAssetTransfer"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof trackSiteAnalyticsAssetTransfer>>,
+    { data: BodyType<StaticAssetTransferReport> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return trackSiteAnalyticsAssetTransfer(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type TrackSiteAnalyticsAssetTransferMutationResult = NonNullable<
+  Awaited<ReturnType<typeof trackSiteAnalyticsAssetTransfer>>
+>;
+export type TrackSiteAnalyticsAssetTransferMutationBody =
+  BodyType<StaticAssetTransferReport>;
+export type TrackSiteAnalyticsAssetTransferMutationError = ErrorType<ApiError>;
+
+/**
+ * @summary Record anonymous static-asset transfer sizes
+ */
+export const useTrackSiteAnalyticsAssetTransfer = <
+  TError = ErrorType<ApiError>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof trackSiteAnalyticsAssetTransfer>>,
+    TError,
+    { data: BodyType<StaticAssetTransferReport> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof trackSiteAnalyticsAssetTransfer>>,
+  TError,
+  { data: BodyType<StaticAssetTransferReport> },
+  TContext
+> => {
+  return useMutation(
+    getTrackSiteAnalyticsAssetTransferMutationOptions(options),
+  );
 };
 
 /**

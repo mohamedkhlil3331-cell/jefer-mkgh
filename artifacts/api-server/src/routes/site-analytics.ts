@@ -1,9 +1,11 @@
 import { Router, type Request } from "express";
 import {
   GetSiteAnalyticsSummaryQueryParams,
+  TrackSiteAnalyticsAssetTransferBody,
   TrackSiteAnalyticsPageviewBody,
 } from "@workspace/api-zod";
 import { execute, queryAll, queryOne } from "../lib/erp-sql.js";
+import { logger } from "../lib/logger.js";
 import { isSysAdminToken } from "./auth.js";
 
 const router = Router();
@@ -65,6 +67,25 @@ router.post("/site-analytics/pageview", async (req, res) => {
     INSERT INTO site_analytics_events (visitor_id, page_path, source_host)
     VALUES (?, ?, ?)
   `, visitorId, pagePath, source);
+  return void res.status(202).json({ accepted: true });
+});
+
+router.post("/site-analytics/assets", (req, res) => {
+  const parsed = TrackSiteAnalyticsAssetTransferBody.safeParse(req.body);
+  if (!parsed.success) return void res.status(400).json({ error: "بيانات أحجام الملفات غير صالحة" });
+
+  const totalTransferredBytes = parsed.data.assets.reduce(
+    (total, asset) => total + asset.transferred_bytes,
+    0,
+  );
+  if (totalTransferredBytes > 500_000_000) {
+    return void res.status(400).json({ error: "حجم تقرير الملفات أكبر من المسموح" });
+  }
+
+  logger.info({
+    totalTransferredBytes,
+    assets: parsed.data.assets,
+  }, "static asset transfer report");
   return void res.status(202).json({ accepted: true });
 });
 

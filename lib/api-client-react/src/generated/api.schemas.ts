@@ -648,6 +648,33 @@ export interface SiteAnalyticsPageviewInput {
   referrer?: string;
 }
 
+export interface StaticAssetTransferItem {
+  /**
+   * @minLength 1
+   * @maxLength 200
+   * @pattern ^/(assets/|fonts/)?[A-Za-z0-9._/-]+\.(js|mjs|css|png|jpe?g|webp|svg|woff2?|ttf|ico)$
+   */
+  path: string;
+  /**
+   * @minimum 1
+   * @maximum 100000000
+   */
+  transferred_bytes: number;
+  /**
+   * @minimum 1
+   * @maximum 500
+   */
+  requests: number;
+}
+
+export interface StaticAssetTransferReport {
+  /**
+   * @minItems 1
+   * @maxItems 50
+   */
+  assets: StaticAssetTransferItem[];
+}
+
 export interface SiteAnalyticsAccepted {
   accepted: boolean;
 }

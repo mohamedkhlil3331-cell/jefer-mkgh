@@ -819,6 +819,46 @@ export const TrackSiteAnalyticsPageviewBody = zod.object({
 });
 
 /**
+ * @summary Record anonymous static-asset transfer sizes
+ */
+export const trackSiteAnalyticsAssetTransferBodyAssetsItemPathMax = 200;
+
+export const trackSiteAnalyticsAssetTransferBodyAssetsItemPathRegExp =
+  new RegExp(
+    "^\/(assets\/|fonts\/)?[A-Za-z0-9._\/-]+\\.(js|mjs|css|png|jpe?g|webp|svg|woff2?|ttf|ico)$",
+  );
+export const trackSiteAnalyticsAssetTransferBodyAssetsItemTransferredBytesMax = 100000000;
+
+export const trackSiteAnalyticsAssetTransferBodyAssetsItemRequestsMax = 500;
+
+export const trackSiteAnalyticsAssetTransferBodyAssetsMax = 50;
+
+export const TrackSiteAnalyticsAssetTransferBody = zod.object({
+  assets: zod
+    .array(
+      zod.object({
+        path: zod
+          .string()
+          .min(1)
+          .max(trackSiteAnalyticsAssetTransferBodyAssetsItemPathMax)
+          .regex(trackSiteAnalyticsAssetTransferBodyAssetsItemPathRegExp),
+        transferred_bytes: zod
+          .number()
+          .min(1)
+          .max(
+            trackSiteAnalyticsAssetTransferBodyAssetsItemTransferredBytesMax,
+          ),
+        requests: zod
+          .number()
+          .min(1)
+          .max(trackSiteAnalyticsAssetTransferBodyAssetsItemRequestsMax),
+      }),
+    )
+    .min(1)
+    .max(trackSiteAnalyticsAssetTransferBodyAssetsMax),
+});
+
+/**
  * @summary Get aggregate page-view and referral metrics
  */
 export const getSiteAnalyticsSummaryQueryDaysMin = 7;

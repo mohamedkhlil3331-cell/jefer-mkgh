@@ -66,6 +66,8 @@ export * from "./siteAnalyticsDailyItem";
 export * from "./siteAnalyticsPageviewInput";
 export * from "./siteAnalyticsSummary";
 export * from "./startChatConversationRequest";
+export * from "./staticAssetTransferItem";
+export * from "./staticAssetTransferReport";
 export * from "./supplierPurchaseInvoicePasteInput";
 export * from "./supplierPurchaseInvoicePasteResult";
 export * from "./supplierPurchaseInvoicePasteRowInput";

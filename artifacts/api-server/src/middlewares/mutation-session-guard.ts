@@ -15,6 +15,7 @@ const PUBLIC_MUTATION_PATHS = new Set([
   "/api/auth/forgot-password/reset",
   "/api/mkgh/auth",
   "/api/site-analytics/pageview",
+  "/api/site-analytics/assets",
 ]);
 
 type CurrentSession = { user_id: number };

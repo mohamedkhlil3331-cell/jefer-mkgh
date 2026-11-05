@@ -76,6 +76,7 @@ import { MutationSyncMonitor } from "@/components/MutationSyncStatus";
 import RememberedScroll from "@/components/RememberedScroll";
 import ChatPage from "@/pages/ChatPage";
 import SiteAnalyticsTracker from "@/components/SiteAnalyticsTracker";
+import StaticAssetTransferTracker from "@/components/StaticAssetTransferTracker";
 
 const queryClient = new QueryClient();
 
@@ -402,6 +403,7 @@ function App() {
               <CartProvider>
                 <Toaster />
                 <OfflineBanner />
+                <StaticAssetTransferTracker />
                 <WouterRouter base={base}>
                   <SiteAnalyticsTracker />
                   <AuthGate />
